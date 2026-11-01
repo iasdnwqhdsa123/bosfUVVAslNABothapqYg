@@ -1,5 +1,8 @@
 name: Collect
 on:
+  push:
+    branches: [main]
+    paths: ["calib/collect.request"]
   schedule:
     - cron: "17 0 * * *"
     - cron: "42 4 * * *"
@@ -110,6 +113,10 @@ jobs:
           mkdir -p /tmp/data/logs
           extra=""
           [ "$NEW" = off ] && extra="--no-new"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -f calib/collect.request ]; then
+            d="$(python3 -c 'import json; print(int(json.load(open("calib/collect.request")).get("days", 3)))' 2>/dev/null || echo 3)"
+            case "$d" in 1|3|5|8) DAYS="$d";; esac
+          fi
           python3 calib/run.py collect --data /tmp/data --seed /tmp/seed.json.gz --work /tmp/work --days "$DAYS" \
             --requests "$MAX_REQUESTS" --minutes "$MINUTES" $extra 2>> "/tmp/data/logs/stderr-$GITHUB_RUN_ID.log" \
             || { echo "::error::collect failed (details in the encrypted log)"; exit 1; }
