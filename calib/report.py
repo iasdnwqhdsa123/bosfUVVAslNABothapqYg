@@ -223,15 +223,72 @@ def bad_days(per) -> dict:
             out[p['date']] = '; '.join(why)
     return out
 
-def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
+def models_in(days: list[dict]) -> list[str]:
+    cnt, first = (Counter(), Counter())
+    for d in days:
+        ms = d.get('models') or ['hrrr']
+        first[d.get('model') or ms[0]] += 1
+        cnt.update(ms)
+    if not cnt:
+        return ['hrrr']
+    prim = first.most_common(1)[0][0]
+    return [prim] + [m for m, _ in cnt.most_common() if m != prim]
+
+def _log_ratio(r):
+    return None if r is None or r <= 0 else math.log(r)
+
+def compare_section(days: list[dict], models: list[str], pilots: dict) -> list[str]:
+    if len(models) < 2:
+        return []
+    per = {m: rows.tables(days, m, pilots=pilots) for m in models}
+    prim = models[0]
+    L0, C0 = (per[prim][0], per[prim][1])
+    lk = lambda r: (r['fid'], r['leg'])
+    ck = lambda r: (r['fid'], r['leg'], r['dur'], r['gain'])
+    legs_by = {m: {lk(r): r for r in per[m][0]} for m in models}
+    climbs_by = {m: {ck(r): r for r in per[m][1]} for m in models}
+    legs = [r for r in L0 if usable_leg(r) and all((leg_ratio(legs_by[m].get(lk(r)) or {'vair': None, 'm_xc': None}) for m in models))]
+    climbs = [r for r in C0 if r['paired'] and (not r['engon']) and ((r['rate'] or 0) > 0) and all((climb_ratio(climbs_by[m].get(ck(r)) or {'rate': None, 'm_ach': None}) for m in models))]
+    n_leg = {m: sum((usable_leg(r) for r in per[m][0])) for m in models}
+    n_cl = {m: sum((r['paired'] and (not r['engon']) for r in per[m][1])) for m in models}
+    out = [f"## {' vs '.join((m.upper() for m in models))}", '', f"Each box-day is built with every model of its area and evaluated with each; the report above is the primary's ({prim.upper()}). Here the legs and climbs all the models have values for ({len(legs)} usable legs, {len(climbs)} climbs; " + '; '.join((f'{m.upper()}: {n_leg[m]} legs, {n_cl[m]} climbs paired' for m in models)) + "): each model's flown / model ratio (median) and the share of rows where it is the nearest (|log ratio| smallest).", '']
+
+    def cols(kind):
+        by_m, fn = (legs_by, leg_ratio) if kind == 'legs' else (climbs_by, climb_ratio)
+        key = lk if kind == 'legs' else ck
+        c = [(kind, lambda rs: str(len(rs)))]
+        for m in models:
+            c.append((f'{m.upper()} flown / model', lambda rs, m=m: mmed([fn(by_m[m][key(r)]) for r in rs])))
+        for m in models:
+
+            def nearer(rs, m=m):
+                n = 0
+                for r in rs:
+                    e = {x: abs(_log_ratio(fn(by_m[x][key(r)])) or 0) for x in models}
+                    n += min(e, key=e.get) == m
+                return f'{n / len(rs):.0%}' if rs else '–'
+            c.append((f'{m.upper()} nearer', nearer))
+        return c
+    out += table('Legs, all and by terrain', [('all', legs)] + by(legs, lambda r: 'flat' if rows.flat(r) else 'hills/mountains'), cols('legs'))
+    out += table('Legs by region', by(legs, lambda r: r['region']), cols('legs'))
+    out += table(f'Legs by the {prim.upper()} W* (m/s)', by(legs, lambda r: band(r['m_ws'], WS_BANDS)), cols('legs'))
+    out += table('Legs by local solar hour', by(legs, lambda r: hour_bin(r['m_solar'])), cols('legs'))
+    out += table('Climbs, all and by terrain', [('all', climbs)] + by(climbs, lambda r: 'flat' if rows.flat(r) else 'hills/mountains'), cols('climbs'))
+    out += table('Climbs by region', by(climbs, lambda r: r['region']), cols('climbs'))
+    out += table(f'Climbs by the {prim.upper()} W* (m/s)', by(climbs, lambda r: band(r['m_ws'], WS_BANDS)), cols('climbs'))
+    return out
+
+def build(data: str, days_csv: str | None=None, model: str | None=None) -> str:
     state = common.read_json(f'{data}/state.json') if __import__('os').path.exists(f'{data}/state.json') else workq.new_state([])
     days = rows.load_days(data)
     pilots = state.get('pilots') or {}
+    models = models_in(days)
+    model = model or models[0]
     L, C, F = rows.tables(days, model, pilots=pilots)
     H, G = rows.survival(days, model, pilots=pilots)
-    out = [f'# Calibration data report ({model.upper()})', '', f'Built {date.today().isoformat()}. Review this before training (train runs only when started by hand).', '']
+    out = [f'# Calibration data report ({model.upper()})', '', f'Built {date.today().isoformat()}. Review this before training (train runs only when started by hand).', f"Models built: {', '.join((m.upper() for m in models))} (this report: {model.upper()}; the models side by side at the end). Code: physics {common.PHYSICS_VERSION}, scoring {common.SCORE_VERSION}" + (f", corrections {state['corr_v']}" if state.get('corr_v') else '') + '.', '']
     pr = workq.progress(state, date.today())
-    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}); seed days left: {pr['seed_left']} of {pr['seed_days']}; stored with an older file, to build again: {pr['redo_left']}; to choose from again (glider types mapped since): {pr.get('revisit_left', 0)}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F)} (seed {sum((f['src'] == 'seed' for f in F))}), legs {len(L)} (usable thermal legs: {sum((usable_leg(r) for r in L))}), circling climbs {len(C)}.", '']
+    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}); seed days left: {pr['seed_left']} of {pr['seed_days']}; to build again (an older file or physics): {pr['redo_left']}; to score again (other site code): {pr.get('rescore_left', 0)}; with their grids saved: {pr.get('grids', 0)}; to choose from again (glider types mapped since, or more flights to the cap of {weglide.MAX_PER_DAY}): {pr.get('revisit_left', 0)}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F)} (seed {sum((f['src'] == 'seed' for f in F))}), legs {len(L)} (usable thermal legs: {sum((usable_leg(r) for r in L))}), circling climbs {len(C)}.", '']
     cnt = lambda key: ', '.join((f'{k} {v}' for k, v in sorted(Counter((key(f) for f in F)).items(), key=lambda kv: -kv[1])))
     out += ['## Rows', '', f"- By region: {cnt(lambda f: f['region'])}.", f"- By glider class: {cnt(lambda f: f['cls'])}.", f"- By group: {cnt(lambda f: f['grp'])}.", f"- By month: {cnt(lambda f: (f['date'] or '')[5:7])}.", f"- By year: {cnt(lambda f: (f['date'] or '')[:4])}.", f"- Polars: {cnt(lambda f: f['key'] + ('' if f['key_exact'] else '~'))} (~: the nearest similar polar).", '']
     known = common.load_aircraft()
@@ -281,6 +338,7 @@ def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
     out += [f"- Auto route errors: {sum((r['r_error'] is not None for r in L))}.", '']
     pf = [ratio(f['pfd'], f['free_km']) for f in F if f['paired']]
     out += ['## Potential Flight Distance (Std, at the takeoff, storm cut 2 %) / km flown', '', dist(pf) + ' (typical flights: PFD reads above them by design).', '']
+    out += compare_section(days, models, pilots)
     per = day_checks(days, L, C)
     sus = [p for p in per if p['flags']]
     out += ['## Suspicious days', '', f'{len(sus)} of {len(per)} days flagged (all days: the CSV beside this report).', '']

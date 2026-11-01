@@ -12,7 +12,11 @@ function predict(m, x) {
   return s;
 }
 const factor = (m, x) => Math.exp(predict(m, x));
+const probability = (m, x) => 1 / (1 + Math.exp(-predict(m, x)));
+const value = (m, x) => m.kind === "logit" ? probability(m, x) : m.kind === "add" ? predict(m, x) : factor(m, x);
 export {
   factor,
-  predict
+  predict,
+  probability,
+  value
 };

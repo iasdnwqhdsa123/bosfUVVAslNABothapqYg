@@ -11,7 +11,9 @@ import weglide
 import workq
 KEEP_LOGS = 20
 PILOT_BACKFILL_DAYS = 20
-MODELS = tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr').split(',') if m))
+
+def models_of(items: list[dict]) -> tuple:
+    return common.models_for({f.get('region') for f in items if f.get('region')})
 QUIET_SHARE = 0.2
 QUIET_MIN_AFT = 2
 QUIET_KM = 150
@@ -140,7 +142,7 @@ def collect(a) -> int:
     client = weglide.Client(a.requests)
     obs_client = dayrun.Obs()
     os.makedirs(f'{data}/obs', exist_ok=True)
-    todo = workq.next_days(state, a.days, date.today(), new_ok=not a.no_new)
+    todo = [x for x in workq.next_days(state, a.days, date.today(), new_ok=not a.no_new) if x[1] not in ('rescore', 'revisit')]
     common.log(f"{len(todo)} days to do ({sum((s == 'seed' for _, s in todo))} from the seed, {sum((s == 'redo' for _, s in todo))} built again)")
     run = {'at': stamp, 'days': 0, 'ok': 0, 'empty': 0, 'failed': 0, 'skipped': 0}
     for i, (d, src) in enumerate(todo):
@@ -172,7 +174,7 @@ def collect(a) -> int:
             common.log(f'day {i + 1} ({src}): no flights to use')
         else:
             obs = _observations(obs_client, d, flights + shorts, data)
-            res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=MODELS, workers=a.workers, short=shorts, obs=obs)
+            res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=models_of(flights + shorts), workers=a.workers, short=shorts, obs=obs)
             okb = sum((b.get('ok', False) for b in res['boxes']))
             status = 'ok' if okb == len(res['boxes']) else 'partial' if okb else 'failed'
             if src == 'new' and status != 'failed':
@@ -184,7 +186,7 @@ def collect(a) -> int:
                 if src == 'new':
                     for f in flights:
                         state['counts'][f['grp']] = state['counts'].get(f['grp'], 0) + 1
-            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(flights), 'v': common.DAY_VERSION}
+            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(flights), **stamps(res), **({'cap': weglide.MAX_PER_DAY} if src == 'new' else {})}
             run[status if status != 'partial' else 'ok'] += 1
             common.log(f"day {i + 1} ({src}): {len(flights)} flights, {len(shorts)} short, {len(obs)} stations, {okb}/{len(res['boxes'])} boxes built")
         run['days'] += 1
@@ -203,6 +205,9 @@ def collect(a) -> int:
     common.log(f"done: {run['days']} days ({run['ok']} built, {run['empty']} empty, {run['failed']} failed, {run['skipped']} left for later), {client.used} WeGlide requests, {obs_client.used} for observations; {pr['days_done']} days in all, {pr['seed_left']} seed days left")
     return 0
 
+def stamps(res: dict) -> dict:
+    return {'v': res.get('version', common.DAY_VERSION), 'pv': res.get('physics_v'), 'sv': res.get('score_v'), 'cv': res.get('corr_v'), 'grids': bool(res.get('grids'))}
+
 def _redo_day(a, d: str, i: int, seed_by: dict, state: dict, run: dict, obs_client) -> None:
     fn = f'{a.data}/days/{d}.json.gz'
     x = state['done'][d]
@@ -219,11 +224,11 @@ def _redo_day(a, d: str, i: int, seed_by: dict, state: dict, run: dict, obs_clie
         return
     if not obs:
         obs = _observations(obs_client, d, flights + shorts, a.data)
-    res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=MODELS, workers=a.workers, short=shorts, obs=obs)
+    res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=models_of(flights + shorts), workers=a.workers, short=shorts, obs=obs)
     okb = sum((b.get('ok', False) for b in res['boxes']))
     if okb:
         common.write_json(fn, res)
-        x.update({'status': 'ok' if okb == len(res['boxes']) else 'partial', 'boxes': len(res['boxes']), 'flights': len(flights), 'v': common.DAY_VERSION})
+        x.update({'status': 'ok' if okb == len(res['boxes']) else 'partial', 'boxes': len(res['boxes']), 'flights': len(flights), **stamps(res)})
         run['ok'] += 1
     else:
         x['redo_tries'] = x.get('redo_tries', 0) + 1

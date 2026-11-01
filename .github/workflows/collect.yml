@@ -37,12 +37,16 @@ env:
   MINUTES: "20"
   BUILD_MINUTES: "40"
   SHARDS: "6"
+  CALIB_GRID_FIELDS: "eval"
+  CALIB_GRID_HOURS: "8-20"
+  KEEP_DAYS: "60"
 jobs:
   gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.g.outputs.run }}
+      stale: ${{ steps.stale.outputs.stale }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,6 +57,15 @@ jobs:
       - id: g
         run: |
           if [ -f calib/paused ]; then echo "paused"; echo "run=no" >> "$GITHUB_OUTPUT"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Grid bundles to keep
+        id: stale
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          stale="$(python3 calib/state.py list calib-grids- --older "$KEEP_DAYS" | python3 -c 'import json,sys; print(json.dumps(sorted(k[len("calib-grids-"):] for k in json.load(sys.stdin))))')" || stale="[]"
+          echo "bundles to upload again: $stale"
+          echo "stale=$stale" >> "$GITHUB_OUTPUT"
       - name: Keep the data while paused
         id: keep
         if: steps.g.outputs.run == 'no'
@@ -78,6 +91,35 @@ jobs:
         run: |
           self="${SELF#*/.github/workflows/}"; self="${self%%@*}"
           gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$self/enable" && echo "kept on"
+  keep_grids:
+    needs: gate
+    if: needs.gate.outputs.run == 'no' && needs.gate.outputs.stale != '' && needs.gate.outputs.stale != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        month: ${{ fromJSON(needs.gate.outputs.stale) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Fetch it as it is
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MONTH: ${{ matrix.month }}
+        run: python3 calib/state.py raw "calib-grids-$MONTH" /tmp/keep
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-grids-${{ matrix.month }}
+          path: /tmp/keep/calib-grids-${{ matrix.month }}.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
   plan:
     needs: gate
     if: needs.gate.outputs.run == 'yes'
@@ -94,7 +136,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: calib
+          sparse-checkout: |
+            /calib/
+            /pipeline/*.py
+            /pipeline/native/
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -135,15 +181,28 @@ jobs:
           elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::couldn't fetch the data (exit $rc)"; exit 1; fi
           echo "base=$(cat /tmp/base)" >> "$GITHUB_OUTPUT"
           python3 calib/state.py decrypt calib/seed.enc /tmp/seed.json.gz
+      - name: Corrections
+        id: corr
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if python3 calib/state.py fetch calib-model /tmp/model 2> /dev/null && [ -f /tmp/model/corrections.json ]; then
+            echo "corrections found"; echo "file=/tmp/model/corrections.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "no corrections yet"
+          fi
       - name: Plan
         id: plan
         env:
           DAYS: ${{ steps.opts.outputs.days }}
           NEW: ${{ steps.opts.outputs.new }}
+          CORR: ${{ steps.corr.outputs.file }}
         run: |
           mkdir -p /tmp/plan/logs
           extra=""
           [ "$NEW" = off ] && extra="--no-new"
+          [ -n "$CORR" ] && [ -f "$CORR" ] && extra="$extra --corrections $CORR"
           python3 calib/batch.py plan --data /tmp/data --seed /tmp/seed.json.gz --out /tmp/plan --days "$DAYS" --requests "$MAX_REQUESTS" \
             --daily "$DAILY_REQUESTS" --minutes "$MINUTES" --shards "$SHARDS" $extra 2>> "/tmp/plan/logs/stderr-$GITHUB_RUN_ID-plan.log" \
             || { echo "::error::plan failed (details in the encrypted log)"; exit 1; }
@@ -191,15 +250,18 @@ jobs:
         id: unpack
         run: python3 calib/state.py unpack /tmp/in/calib-plan.enc /tmp/plan
       - name: Build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/built/logs
-          python3 calib/batch.py build --plan /tmp/plan --shard "$SHARD" --out /tmp/built --work /tmp/work --minutes "$BUILD_MINUTES" \
+          python3 calib/batch.py build --plan /tmp/plan --shard "$SHARD" --out /tmp/built --work /tmp/work --grids /tmp/grids --minutes "$BUILD_MINUTES" \
             2>> "/tmp/built/logs/stderr-$GITHUB_RUN_ID-build$SHARD.log" || { echo "::error::build failed (details in the encrypted log)"; exit 1; }
       - name: Pack
         if: always() && steps.unpack.outcome == 'success'
         run: |
-          rm -rf /tmp/work
+          rm -rf /tmp/work /tmp/grids
           mkdir -p /tmp/out
+          du -sh /tmp/built/grids 2> /dev/null || true
           python3 calib/state.py pack /tmp/built /tmp/out/calib-built.enc
           ls -la /tmp/out
       - uses: actions/upload-artifact@v7
@@ -211,16 +273,22 @@ jobs:
           compression-level: 0
           if-no-files-found: error
   merge:
-    needs: [plan, build]
+    needs: [gate, plan, build]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+    outputs:
+      months: ${{ steps.merge.outputs.months }}
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: calib
+          sparse-checkout: |
+            /calib/
+            /pipeline/*.py
+            /pipeline/native/
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -260,8 +328,10 @@ jobs:
           echo "$(ls /tmp/built | wc -l) shards back"
       - name: Merge
         id: merge
+        env:
+          STALE: ${{ needs.gate.outputs.stale }}
         run: |
-          python3 calib/batch.py merge --data /tmp/data --plan /tmp/plan --built /tmp/built --daily "$DAILY_REQUESTS" \
+          python3 calib/batch.py merge --data /tmp/data --plan /tmp/plan --built /tmp/built --daily "$DAILY_REQUESTS" --keep-months "${STALE:-[]}" \
             2>> "/tmp/data/logs/stderr-$GITHUB_RUN_ID-merge.log" || { echo "::error::merge failed (details in the encrypted log)"; exit 1; }
       - name: Report
         run: |
@@ -296,3 +366,69 @@ jobs:
           if [ "$n" -gt 0 ]; then echo "a run is waiting already: it goes next"; exit 0; fi
           gh workflow run "$self" -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f days="$DAYS" -f new_days="$NEW" -f chain=on
           echo "next run asked for"
+  grids:
+    needs: [plan, build, merge]
+    if: ${{ !cancelled() && needs.merge.result == 'success' && needs.merge.outputs.months != '' && needs.merge.outputs.months != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        month: ${{ fromJSON(needs.merge.outputs.months) }}
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      MONTH: ${{ matrix.month }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Fetch the bundle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/grids
+          set +e
+          python3 calib/state.py fetch "calib-grids-$MONTH" /tmp/grids 2> /tmp/fetch.err
+          rc=$?
+          set -e
+          if [ "$rc" = 3 ]; then echo "a new bundle"
+          elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::couldn't fetch the bundle (exit $rc)"; exit 1; fi
+          echo "$(ls /tmp/grids | wc -l) box-days in it"
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: calib-built-*
+          path: /tmp/in/built
+      - name: Add this run's boxes
+        run: |
+          n=0
+          for f in /tmp/in/built/*/calib-built.enc; do
+            [ -f "$f" ] || continue
+            d="$(basename "$(dirname "$f")")"
+            python3 calib/state.py unpack "$f" "/tmp/built/$d" || { echo "::warning::a shard's grids couldn't be read"; continue; }
+            for day in "/tmp/built/$d/grids/$MONTH"-*; do
+              [ -d "$day" ] || continue
+              rm -rf "/tmp/grids/$(basename "$day")"
+              cp -r "$day" /tmp/grids/
+              n=$((n + 1))
+            done
+          done
+          rm -rf /tmp/built
+          echo "$n box-days added; $(ls /tmp/grids | wc -l) in the bundle"
+          [ "$(ls /tmp/grids | wc -l)" -gt 0 ] || { echo "::error::an empty bundle"; exit 1; }
+      - name: Pack
+        run: |
+          mkdir -p /tmp/out
+          python3 calib/state.py pack /tmp/grids "/tmp/out/calib-grids-$MONTH.enc"
+          ls -la /tmp/out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-grids-${{ matrix.month }}
+          path: /tmp/out/calib-grids-${{ matrix.month }}.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error

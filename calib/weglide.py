@@ -11,7 +11,7 @@ API = 'https://api.weglide.org/v1'
 UA = 'Mozilla/5.0 (X11; Linux x86_64) research-script/1.0'
 GAP = 2.5
 MAX_FAILS = 3
-MAX_PER_DAY = 6
+MAX_PER_DAY = 10
 MIN_KM = {'high': 100, 'low': 40, 'vlow': 15}
 MIN_H = {'high': 1.5, 'low': 1.0, 'vlow': 0.75}
 SHARE = {'low': 0.25, 'vlow': 0.065}
@@ -149,18 +149,24 @@ def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, 
         if it.get('id') in seen:
             continue
         c = candidate(it, aircraft, unmapped)
-        if c and c['date'] == day and ((c['region'], c['grp']) not in taken):
+        if c and c['date'] == day:
             buckets.setdefault((c['region'], c['grp']), []).append(c)
     rnd = random.Random(f'7:{day}')
-    keys = sorted(buckets)
+    keys = sorted((k for k in buckets if k not in taken))
     rnd.shuffle(keys)
     total = max(1, sum(counts.values()))
     under = lambda g: g in SHARE and counts.get(g, 0) / total < SHARE[g]
     keys.sort(key=lambda k: 0 if under(k[1]) else 1)
+    room = max(0, min(room, MAX_PER_DAY))
     out = []
-    for k in keys[:max(0, min(room, MAX_PER_DAY))]:
+    for k in keys[:room]:
         out.append(rnd.choice(buckets[k]))
-    return out
+    chosen = {c['id'] for c in out}
+    rest = [c for k in sorted(buckets) for c in buckets[k] if c['id'] not in chosen]
+    rnd2 = random.Random(f'10:{day}')
+    rnd2.shuffle(rest)
+    rest.sort(key=lambda c: 0 if under(c['grp']) else 1)
+    return out + rest[:room - len(out)]
 SLED_MIN = 25
 AFTERNOON_SOLAR = 12
 EARLY_SOLAR = 15

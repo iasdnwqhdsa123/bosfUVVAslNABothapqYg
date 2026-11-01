@@ -75,13 +75,42 @@ def age_days(name: str, repo: str | None=None) -> float | None:
     made = datetime.fromisoformat(a['created_at'].replace('Z', '+00:00'))
     return (datetime.now(timezone.utc) - made).total_seconds() / 86400
 
-def raw(name: str, dest: str, repo: str | None=None) -> bool:
+def listing(prefix: str, repo: str | None=None, older: float | None=None) -> dict:
+    from datetime import datetime, timezone
     repo = repo or os.environ['GITHUB_REPOSITORY']
     tok = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
-    a = newest(name, repo, tok)
-    if not a:
-        return False
-    with zipfile.ZipFile(io.BytesIO(_get(a['archive_download_url'], tok))) as z:
+    out, page = ({}, 1)
+    while True:
+        js = json.loads(_get(f'{API}/repos/{repo}/actions/artifacts?per_page=100&page={page}', tok))
+        arts = js.get('artifacts') or []
+        for a in arts:
+            n = a.get('name') or ''
+            if n.startswith(prefix) and (not a.get('expired')) and a.get('created_at'):
+                made = datetime.fromisoformat(a['created_at'].replace('Z', '+00:00'))
+                age = (datetime.now(timezone.utc) - made).total_seconds() / 86400
+                out[n] = min(out.get(n, age), age)
+        if len(arts) < 100 or page >= 20:
+            break
+        page += 1
+    if older is not None:
+        out = {n: d for n, d in out.items() if d >= older}
+    return {n: round(d, 1) for n, d in sorted(out.items())}
+
+def raw(name: str, dest: str, repo: str | None=None) -> bool:
+    repo = repo or os.environ['GITHUB_REPOSITORY']
+    tokens = [t for t in (os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN'), os.environ.get('CALIB_ALT_TOKEN')) if t]
+    a = blob = None
+    for tok in tokens or [None]:
+        try:
+            a = newest(name, repo, tok)
+            if not a:
+                return False
+            blob = _get(a['archive_download_url'], tok)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code not in (401, 403, 404) or tok is (tokens or [None])[-1]:
+                raise
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
         enc = [n for n in z.namelist() if n.endswith('.enc')]
         if len(enc) != 1:
             raise RuntimeError('artifact without one .enc file')
@@ -123,8 +152,11 @@ if __name__ == '__main__':
     elif a[:1] == ['age'] and len(a) == 2:
         d = age_days(a[1])
         print('none' if d is None else f'{d:.1f}')
-    elif a[:1] == ['raw'] and len(a) == 3:
-        sys.exit(0 if raw(a[1], a[2]) else 3)
+    elif a[:1] == ['list'] and len(a) in (2, 4):
+        older = float(a[3]) if len(a) == 4 and a[2] == '--older' else None
+        print(json.dumps(listing(a[1], older=older)))
+    elif a[:1] == ['raw'] and len(a) in (3, 4):
+        sys.exit(0 if raw(a[1], a[2], a[3] if len(a) == 4 else None) else 3)
     elif a[:1] == ['pack'] and len(a) == 3:
         pack(a[1], a[2])
     elif a[:1] == ['unpack'] and len(a) == 3:

@@ -19,14 +19,18 @@ concurrency:
 jobs:
   train:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      CALIB_TERRAIN_CACHE: /tmp/terrain
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
       - run: pip install -q -r calib/requirements.txt
       - name: Restore the data
         env:
@@ -35,16 +39,46 @@ jobs:
           [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
           mkdir -p /tmp/data
           python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/fetch.err || { echo "::error::no data to train on"; exit 1; }
-      - name: Train
+      - name: Restore the grids
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/grids
+          months="$(ls /tmp/data/days 2> /dev/null | sed -n 's/^\([0-9]\{4\}-[0-9]\{2\}\).*/\1/p' | sort -u)"
+          got=0; none=0
+          for m in $months; do
+            if python3 calib/state.py fetch "calib-grids-$m" /tmp/grids 2>> /tmp/fetch.err; then got=$((got + 1)); else none=$((none + 1)); fi
+          done
+          echo "grid bundles: $got fetched, $none months without one"
+      - name: Which flights
         env:
           INPUT: ${{ inputs.dataset }}
         run: |
           ds="$INPUT"
           if [ -z "$ds" ]; then ds="$(python3 -c 'import json; print(json.load(open("calib/train.request")).get("dataset", "all"))')"; fi
           case "$ds" in all|seed) ;; *) echo "::error::dataset must be all or seed"; exit 1;; esac
+          echo "DATASET=$ds" >> "$GITHUB_ENV"
           mkdir -p /tmp/model
-          python3 calib/run.py train --data /tmp/data --out /tmp/model --dataset "$ds" 2> /tmp/model/stderr.log \
-            || { echo "::error::train failed (details in the encrypted log)"; }
+      - name: Layer 1, the air
+        run: |
+          python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage air 2>> /tmp/model/stderr.log \
+            || echo "::error::layer 1 failed (details in the encrypted log)"
+      - name: Rescore on the corrected air
+        run: |
+          if [ ! -f /tmp/model/corrections.json ]; then echo "no corrections: nothing to rescore"; exit 0; fi
+          if ! python3 calib/batch.py rescore --help > /dev/null 2>&1; then echo "no rescore command yet: the raw values"; exit 0; fi
+          if [ -z "$(ls -A /tmp/grids 2> /dev/null)" ]; then echo "no grids: the raw values"; exit 0; fi
+          python3 calib/batch.py rescore --data /tmp/data --grids /tmp/grids --corrections /tmp/model/corrections.json 2>> /tmp/model/stderr.log \
+            || echo "::warning::the rescore failed (details in the encrypted log): the raw values"
+      - name: Layer 2, the place
+        run: |
+          python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage place --grids /tmp/grids 2>> /tmp/model/stderr.log \
+            || echo "::error::layer 2 failed (details in the encrypted log)"
+      - name: Layer 3, the pilot, and the model
+        run: |
+          python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage pilot 2>> /tmp/model/stderr.log \
+            || echo "::error::layer 3 failed (details in the encrypted log)"
+          rm -rf /tmp/model/terrain
           mkdir -p /tmp/out
           python3 calib/state.py pack /tmp/model /tmp/out/calib-model.enc
       - uses: actions/upload-artifact@v7

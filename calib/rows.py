@@ -21,30 +21,42 @@ def load_pilots(data: str) -> dict:
     p = os.path.join(data, 'state.json')
     return common.read_json(p).get('pilots') or {} if os.path.exists(p) else {}
 
+def model_of(d: dict, model: str | None) -> str:
+    return model or d.get('model') or (d.get('models') or ['hrrr'])[0]
+
+def mk(f: dict, model: str, corrected: bool=False) -> tuple[dict, dict]:
+    if corrected:
+        return (f.get(f'model_c_{model}') or {}, (f.get('probe_mc') or {}).get(model) or {})
+    return (f.get(f'model_{model}') or {}, (f.get('probe_m') or {}).get(model) or {})
+
+def mleg(x: dict, model: str, corrected: bool=False) -> dict:
+    return (x.get('models_c' if corrected else 'models') or {}).get(model) or {}
+
 def _base(f: dict, pilots: dict | None) -> dict:
     base = {k: f.get(k) for k in FLIGHT_KEYS}
     base['fid'] = f['id']
     base['pilot'] = f.get('pilot') or (pilots or {}).get(str(f['id']))
     return base
 
-def tables(days: list[dict], model: str='hrrr', srcs: set | None=None, pilots: dict | None=None) -> tuple[list, list, list]:
+def tables(days: list[dict], model: str | None=None, srcs: set | None=None, pilots: dict | None=None, corrected: bool=False) -> tuple[list, list, list]:
     legs, climbs, flights = ([], [], [])
     for d in days:
+        m_ = model_of(d, model)
         for f in d['flights']:
             if srcs and f.get('src') not in srcs:
                 continue
-            base = _base(f, pilots)
-            T = (f.get('model_' + model) or {}).get('takeoffNode')
+            base = {**_base(f, pilots), 'model': m_}
+            T = mk(f, m_, corrected)[0].get('takeoffNode')
             flights.append({**base, 'free_km': f.get('free_km'), 'list_km': f.get('list_km'), 'dur_h': f.get('dur_h'), 'pfd': (T or {}).get('pfdCut'), 'paired': T is not None, 'nlegs': len(f['legs']), 'nclimbs': len(f['climbs'])})
             for L in f['legs']:
-                m = (L.get('models') or {}).get(model) or {}
+                m = mleg(L, m_, corrected)
                 own, rt = (m.get('own') or {}, m.get('route') or {})
                 row = {**base, 'leg': L.get('leg'), 'ok': L.get('ok'), 'cat': L.get('cat'), 'dist': L.get('dist'), 't': L.get('t'), 'ca': L.get('ca'), 'dh': L.get('dh'), 'therm': L.get('therm'), 'vg': L.get('vg'), 'vair': L.get('vair'), 'agl': L.get('agl'), 'alt': L.get('alt'), 'speed': L.get('speed'), 'wind_wg': L.get('wind'), 'tcount': L.get('tcount'), 'line_src': L.get('line_src'), 'paired': bool(own), 'last': L is f['legs'][-1]}
                 row.update({'m_' + k: own.get(k) for k in MODEL_KEYS})
                 row.update({'r_' + k: rt.get(k) for k in ROUTE_KEYS})
                 legs.append(row)
             for c in f['climbs']:
-                own = (c.get('models') or {}).get(model) or {}
+                own = mleg(c, m_, corrected)
                 row = {**base, 'rate': c.get('rate'), 'gain': c.get('gain'), 'dur': c.get('dur'), 'agl1': c.get('agl1'), 'z1': c.get('z1'), 'r100': c.get('r100'), 'engon': c.get('engon'), 'leg': c.get('leg'), 'paired': bool(own)}
                 row.update({'m_' + k: own.get(k) for k in MODEL_KEYS})
                 climbs.append(row)
@@ -53,15 +65,16 @@ def tables(days: list[dict], model: str='hrrr', srcs: set | None=None, pilots: d
 def flat(row: dict) -> bool:
     return (row.get('m_relief') or 0) < common.RELIEF_FLAT
 
-def survival(days: list[dict], model: str='hrrr', srcs: set | None=None, pilots: dict | None=None) -> tuple[list, list]:
+def survival(days: list[dict], model: str | None=None, srcs: set | None=None, pilots: dict | None=None, corrected: bool=False) -> tuple[list, list]:
     hours, glides = ([], [])
     for d in days:
         old = (d.get('version') or 1) < 2
+        m_ = model_of(d, model)
         for f in d['flights']:
             if srcs and f.get('src') not in srcs:
                 continue
-            base = _base(f, pilots)
-            pm = (f.get('probe_m') or {}).get(model) or {}
+            base = {**_base(f, pilots), 'model': m_}
+            pm = mk(f, m_, corrected)[1]
             try:
                 hs, gs = (track.hour_samples(f), track.glides(f))
             except Exception:
@@ -114,28 +127,31 @@ def best(T: dict | None, key: str, a: int=BEST_FROM, b: int=BEST_TO):
 def _at(pm: dict, t) -> dict:
     return (pm or {}).get(str(int(t))) or {} if t is not None else {}
 
-def shorts(days: list[dict], model: str='hrrr', pilots: dict | None=None) -> list[dict]:
+def shorts(days: list[dict], model: str | None=None, pilots: dict | None=None, corrected: bool=False) -> list[dict]:
     out = []
     for d in days:
+        m_ = model_of(d, model)
         for f in d.get('short') or []:
-            T = (f.get('model_' + model) or {}).get('takeoffNode')
+            rec, pm = mk(f, m_, corrected)
+            T = rec.get('takeoffNode')
             a, _ = track.times_of(f)
-            m = _at((f.get('probe_m') or {}).get(model), a)
+            m = _at(pm, a)
             row = {k: f.get(k) for k in ('date', 'region', 'state', 'grp', 'cls', 'dur_h', 'list_km', 'afternoon', 'sled', 'solar0', 'solar1', 'tracked', 'climbed', 'best2', 'gain_max', 'rel_agl', 'home', 'engine')}
             row.update({'fid': f['id'], 'pilot': f.get('pilot') or (pilots or {}).get(str(f['id'])), 'day_type': common.day_type(f['date']), 'paired': bool(m), 'best_ws0': best(T, 'ws0'), 'best_ws': best(T, 'ws'), 'best_xc': best(T, 'xc')})
             row.update({'m_' + k: m.get(k) for k in track.PROBE_KEYS})
             out.append(row)
     return out
 
-def regiondays(days: list[dict], daylists: dict, model: str='hrrr') -> list[dict]:
+def regiondays(days: list[dict], daylists: dict, model: str | None=None, corrected: bool=False) -> list[dict]:
     norm = {}
     for d, x in daylists.items():
         for r, c in (x.get('regions') or {}).items():
             norm.setdefault((r, common.day_type(d), half(d)), []).append(c)
     built = {}
     for d in days:
+        m_ = model_of(d, model)
         for f in (d.get('flights') or []) + (d.get('short') or []):
-            T = (f.get('model_' + model) or {}).get('takeoffNode')
+            T = mk(f, m_, corrected)[0].get('takeoffNode')
             b = built.setdefault((d['date'], f['region']), {'ws0': [], 'xc': [], 'tracked': 0, 'never': 0, 'long': 0})
             if f.get('kind') != 'short':
                 b['long'] += 1
@@ -177,11 +193,12 @@ def regiondays(days: list[dict], daylists: dict, model: str='hrrr') -> list[dict
         out.append(row)
     return out
 
-def observations(days: list[dict], model: str='hrrr') -> tuple[list, list]:
+def observations(days: list[dict], model: str | None=None, corrected: bool=False) -> tuple[list, list]:
     sfc, snd = ([], [])
     for d in days:
+        m_ = model_of(d, model)
         for o in d.get('obs') or []:
-            pm = (o.get('probe_m') or {}).get(model) or {}
+            pm = mk(o, m_, corrected)[1]
             ob = o.get('obs') or {}
             base = {'date': d['date'], 'region': o['region'], 'sid': o['sid'], 'paired': bool(pm)}
             if o['kind'] == 'asos':

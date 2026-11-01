@@ -1,4 +1,8 @@
 from __future__ import annotations
+import argparse
+import csv
+import glob
+import gzip
 import json
 import math
 import os
@@ -9,13 +13,18 @@ import report
 import rows
 CLS = {'twoseat': 0, 'club': 1, 'standard': 2, '15m': 3, '18m': 4, 'open': 5}
 GRP = {'vlow': 0, 'low': 1, 'high': 2}
-FEATURES = ['m_xc', 'm_climb', 'm_ach', 'm_ws', 'm_zi', 'm_top', 'm_band', 'm_shade', 'm_sun', 'm_sunElev', 'm_relief', 'm_elev', 'm_cb', 'm_cu', 'm_wind', 'm_cloud', 'm_cloudlow', 'm_blapse', 'm_twidth', 'm_sink', 'm_ridgev', 'm_densAlt', 'm_solar', 'doy_s', 'doy_c', 'cls', 'grp']
+STR = {'low': 0, 'mid': 1, 'high': 2}
+FEATURES = ['m_xc', 'm_climb', 'm_ach', 'm_ws', 'm_zi', 'm_top', 'm_band', 'm_shade', 'm_sun', 'm_sunElev', 'm_relief', 'm_elev', 'm_cb', 'm_cu', 'm_wind', 'm_cloud', 'm_cloudlow', 'm_blapse', 'm_twidth', 'm_sink', 'm_ridgev', 'm_densAlt', 'm_solar', 'doy_s', 'doy_c', 'cls', 'grp', 'strength']
 PARAMS = dict(loss='absolute_error', max_iter=120, learning_rate=0.06, max_leaf_nodes=8, min_samples_leaf=25, l2_regularization=1.0, random_state=7)
 FOLDS = 5
 PILOT_MAX_SHARE = 0.05
+MODEL_VERSION = 2
+
+def doy_of(day: str) -> int:
+    return date.fromisoformat(day).timetuple().tm_yday
 
 def feats(r: dict) -> list[float]:
-    d = date.fromisoformat(r['date']).timetuple().tm_yday
+    d = doy_of(r['date'])
     v = []
     for k in FEATURES:
         if k == 'doy_s':
@@ -26,6 +35,8 @@ def feats(r: dict) -> list[float]:
             x = CLS.get(r['cls'])
         elif k == 'grp':
             x = GRP.get(r['grp'])
+        elif k == 'strength':
+            x = STR.get(r.get('strength'))
         else:
             x = r.get(k)
             if isinstance(x, bool):
@@ -40,6 +51,9 @@ def dataset(L, C, target, skip=()):
     elif target == 'climb':
         rs = [r for r in C if r['paired'] and (not r['engon']) and ((r['rate'] or 0) > 0) and ((r['m_ach'] or 0) > 0)]
         y = [math.log(r['rate'] / r['m_ach']) for r in rs]
+    elif target == 'exit':
+        rs = [r for r in C if r['paired'] and (not r['engon']) and ((r.get('agl1') or 0) > 100) and ((r['m_top'] or 0) > 200)]
+        y = [math.log(r['agl1'] / r['m_top']) for r in rs]
     else:
         rs = [r for r in L if report.usable_leg(r) and (r['therm'] or 0) > 0 and ((r['m_circ'] or 0) > 0)]
         y = [math.log(r['therm'] / r['m_circ']) for r in rs]
@@ -49,9 +63,14 @@ def dataset(L, C, target, skip=()):
     X = np.array([feats(r) for r in rs], dtype=float).reshape(-1, len(FEATURES))
     return (rs, X, np.array(y), np.array([r['date'] for r in rs]))
 
-def model():
+def model(params: dict | None=None):
     from sklearn.ensemble import HistGradientBoostingRegressor
-    return HistGradientBoostingRegressor(**PARAMS)
+    return HistGradientBoostingRegressor(**params or PARAMS)
+
+def classifier(params: dict | None=None):
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    p = {k: v for k, v in (params or PARAMS).items() if k != 'loss'}
+    return HistGradientBoostingClassifier(**p)
 
 def pilot_group(r) -> str:
     return f"p:{r['pilot']}" if r.get('pilot') else f"f:{r['fid']}"
@@ -94,19 +113,22 @@ def folds(pg, wg, k):
         bad = set(wg[te])
         yield (np.array([i for i in tr if wg[i] not in bad], dtype=int), te)
 
-def crossval(X, y, pg, wg=None, w=None):
+def crossval(X, y, pg, wg=None, w=None, params: dict | None=None, make=None):
     wg = np.asarray(pg if wg is None else wg)
     pg = np.asarray(pg)
-    w = np.ones_like(y) if w is None else w
-    p_ml, p_const = (np.zeros_like(y), np.zeros_like(y))
+    w = np.ones_like(y, dtype=float) if w is None else w
+    p_ml, p_const = (np.zeros_like(y, dtype=float), np.zeros_like(y, dtype=float))
     dropped = []
     for tr, te in folds(pg, wg, FOLDS):
         dropped.append(1 - len(tr) / max(1, len(y) - len(te)))
-        m = model().fit(X[tr], y[tr], sample_weight=w[tr])
-        p_ml[te] = m.predict(X[te])
+        m = (make or model)(params).fit(X[tr], y[tr], sample_weight=w[tr])
+        p_ml[te] = raw_predict(m, X[te])
         p_const[te] = wmedian(y[tr], w[tr])
     crossval.dropped = float(np.mean(dropped)) if dropped else 0.0
     return (p_ml, p_const)
+
+def raw_predict(m, X):
+    return m.decision_function(X) if hasattr(m, 'decision_function') else m.predict(X)
 
 def export(m, names) -> dict:
     trees = []
@@ -117,10 +139,13 @@ def export(m, names) -> dict:
             if n['is_leaf']:
                 t.append([float(f"{n['value']:.5g}")])
             else:
-                t.append([int(n['feature_idx']), float(n['num_threshold']), int(n['missing_go_to_left']), int(n['left']), int(n['right'])])
+                thr = float(n['num_threshold'])
+                if not math.isfinite(thr):
+                    thr = 1e+300 if thr > 0 else -1e+300
+                t.append([int(n['feature_idx']), thr, int(n['missing_go_to_left']), int(n['left']), int(n['right'])])
         trees.append(t)
     base = float(np.ravel(m._baseline_prediction)[0])
-    return {'features': names, 'base': float(f'{base:.7g}'), 'trees': trees}
+    return {'features': list(names), 'base': float(f'{base:.7g}'), 'trees': trees}
 
 def predict_export(e: dict, x) -> float:
     s = e['base']
@@ -133,79 +158,151 @@ def predict_export(e: dict, x) -> float:
         s += t[i][0]
     return s
 
+def export_check(e: dict, m, X, n: int=200) -> float:
+    return float(max((abs(predict_export(e, list(X[i])) - raw_predict(m, X[i:i + 1])[0]) for i in range(min(n, len(X))))))
+
 def metrics(y, p, rs, label) -> dict:
     e = y - p
     return {'label': label, 'n': int(len(y)), 'median_ratio': float(np.exp(np.median(e))), 'mae_log': float(np.mean(np.abs(e))), 'iqr_ratio': [float(np.exp(np.percentile(e, 25))), float(np.exp(np.percentile(e, 75)))]}
 
-def groups_of(rs):
+def groups_of(rs, ws_key='m_ws', solar_key='m_solar'):
     gs = {'all': lambda r: True, 'flat': rows.flat, 'hills/mountains': lambda r: not rows.flat(r)}
     for a, b in report.HOURS:
-        gs[f'solar {a}–{b}'] = (lambda a, b: lambda r: r['m_solar'] is not None and a <= r['m_solar'] < b)(a, b)
+        gs[f'solar {a}–{b}'] = (lambda a, b: lambda r: r.get(solar_key) is not None and a <= r[solar_key] < b)(a, b)
     for a, b in report.WS_BANDS:
-        gs[f"W* {a}–{(b if b < 99 else '+')}"] = (lambda a, b: lambda r: r['m_ws'] is not None and a <= r['m_ws'] < b)(a, b)
+        gs[f"W* {a}–{(b if b < 99 else '+')}"] = (lambda a, b: lambda r: r.get(ws_key) is not None and a <= r[ws_key] < b)(a, b)
     return gs
 
-def run(data: str, out: str, which: str='all') -> dict:
-    os.makedirs(out, exist_ok=True)
-    days = rows.load_days(data)
-    L, C, F = rows.tables(days, srcs={'seed'} if which == 'seed' else None, pilots=rows.load_pilots(data))
-    bad = report.bad_days(report.day_checks(days, *(rows.tables(days)[:2] if which == 'seed' else (L, C))))
-    per = {}
-    for f in F:
-        if f['pilot']:
-            per[f['pilot']] = per.get(f['pilot'], 0) + 1
-    n = sorted(per.values())
-    res, models, md = ({}, {}, [f'# Calibration model ({which}, {date.today().isoformat()})', '', f"Cross-validated by pilot (5 folds; a pilot never in both training and test, a flight without a pilot key its own group) with the weather kept apart (each fold's training without the test rows' days in their regions). Rows weighted 1/√(the pilot's flights), no pilot over {PILOT_MAX_SHARE:.0%} of the weight. Ratio: flown / the model (1 = right on); MAE: mean |log(flown / model)| (0.10 ≈ 10 %). Physics: the site's model as it is; constant: one correction factor; ML: the trees.", '', f"Pilots: {len(per)} distinct, {sum(n)} of {len(F)} flights with a key; flights per pilot: max {(n[-1] if n else '–')}, median {(np.median(n) if n else '–')}.", '', f"Suspicious days left out (the data report's, but for usable legs where the model had no lift alone): {len(bad)}" + (': ' + '; '.join((f'{d} ({w})' for d, w in sorted(bad.items()))) if bad else '') + '.', ''])
-    for target in ('xc', 'climb', 'circ'):
-        rs, X, y, g = dataset(L, C, target, bad)
-        skipped = dataset.dropped
-        if len(y) < 60 or len(set(g)) < 10:
-            md += [f'## {target}: too few rows ({len(y)} on {len(set(g))} days)', '']
+def metric_table(rs, y, preds: dict, groups: dict, min_n: int=15) -> list[dict]:
+    tab = []
+    for name, sel in groups.items():
+        idx = np.array([bool(sel(r)) for r in rs])
+        if idx.sum() < min_n:
             continue
-        keep = [j for j in range(X.shape[1]) if np.isfinite(X[:, j]).mean() >= 0.02]
-        names = [FEATURES[j] for j in keep]
-        X = X[:, keep]
-        pg = np.array([pilot_group(r) for r in rs])
-        wg = np.array([weather_group(r) for r in rs])
-        w = weights(rs, per)
-        p_ml, p_c = crossval(X, y, pg, wg, w)
-        dropped = crossval.dropped
-        zero = np.zeros_like(y)
-        tab = []
-        for name, sel in groups_of(rs).items():
-            idx = np.array([sel(r) for r in rs])
-            if idx.sum() < 15:
-                continue
-            row = {'group': name, 'n': int(idx.sum())}
-            for lab, p in (('physics', zero), ('constant', p_c), ('ml', p_ml)):
-                row[lab] = metrics(y[idx], p[idx], None, lab)
-            tab.append(row)
-        m = model().fit(X, y, sample_weight=w)
-        e = export(m, names)
-        chk = max((abs(predict_export(e, list(X[i])) - m.predict(X[i:i + 1])[0]) for i in range(min(200, len(y)))))
-        models[target] = e
-        res[target] = {'rows': int(len(y)), 'days': int(len(set(g))), 'groups': int(len(set(pg))), 'train_dropped': dropped, 'table': tab, 'export_check': float(chk), 'suspicious_dropped': skipped}
-        md += [f"## {target} ({len(y)} rows, {len(set(g))} days, {len(set(pg))} pilot groups; {skipped} rows of suspicious days left out; each fold's training {dropped:.0%} smaller for the test rows' weather)", '', '| Group | n | Physics: median ratio, MAE | Constant | ML |', '|---|---|---|---|---|']
-        for row in tab:
-            c = lambda k: f"{row[k]['median_ratio']:.2f}, {row[k]['mae_log']:.3f}"
-            md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |")
-        imp = {}
-        for t in e['trees']:
-            for n in t:
-                if len(n) > 1:
-                    imp[names[n[0]]] = imp.get(names[n[0]], 0) + 1
-        md += ['', 'Splits per feature: ' + ', '.join((f'{k} {v}' for k, v in sorted(imp.items(), key=lambda kv: -kv[1]))) + '.', f'Export check (max |trees − sklearn|): {chk:.2e}.', '']
-    blob = {'version': 1, 'built': date.today().isoformat(), 'dataset': which, 'params': PARAMS, 'models': models}
+        row = {'group': name, 'n': int(idx.sum())}
+        for lab, p in preds.items():
+            row[lab] = metrics(y[idx], p[idx], None, lab)
+        tab.append(row)
+    return tab
+
+def md_table(tab: list[dict], labels: list[str], head: str='Physics: median ratio, MAE | Constant | ML') -> list[str]:
+    out = ['| Group | n | ' + head + ' |', '|---|---|' + '---|' * len(labels)]
+    for row in tab:
+        c = lambda k: f"{row[k]['median_ratio']:.2f}, {row[k]['mae_log']:.3f}"
+        out.append(f"| {row['group']} | {row['n']} | " + ' | '.join((c(k) for k in labels)) + ' |')
+    return out
+
+def splits_md(e: dict) -> str:
+    imp = {}
+    for t in e['trees']:
+        for n in t:
+            if len(n) > 1:
+                imp[e['features'][n[0]]] = imp.get(e['features'][n[0]], 0) + 1
+    return 'Splits per feature: ' + ', '.join((f'{k} {v}' for k, v in sorted(imp.items(), key=lambda kv: -kv[1]))) + '.'
+
+def _typed(v: str):
+    if v == '':
+        return None
+    if v == 'True':
+        return True
+    if v == 'False':
+        return False
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+def csv_rows(path: str) -> list[dict]:
+    with gzip.open(path, 'rt', encoding='utf-8') as f:
+        return [{k: _typed(v) for k, v in r.items()} for r in csv.DictReader(f)]
+
+def load(data: str, which: str='all', model: str='hrrr') -> dict:
+    days = rows.load_days(data)
+    srcs = {'seed'} if which == 'seed' else None
+    if days:
+        pilots = rows.load_pilots(data)
+        L, C, F = rows.tables(days, model=model, srcs=srcs, pilots=pilots)
+        H, G = rows.survival(days, model=model, srcs=srcs, pilots=pilots)
+        bad = report.bad_days(report.day_checks(days, *(rows.tables(days, model=model)[:2] if which == 'seed' else (L, C))))
+        return {'days': days, 'L': L, 'C': C, 'F': F, 'H': H, 'G': G, 'bad': bad, 'csv': False, 'model': model}
+    tabs = {}
+    for name in ('legs', 'climbs', 'flights', 'hours', 'glides'):
+        p = os.path.join(data, f'{name}.csv.gz')
+        tabs[name] = csv_rows(p) if os.path.exists(p) else []
+        if srcs:
+            tabs[name] = [r for r in tabs[name] if r.get('src') in srcs]
+    if not tabs['legs'] and (not tabs['climbs']):
+        raise SystemExit(f'train: no days or exported rows in {data}')
+    for t in tabs.values():
+        for r in t:
+            r.setdefault('pilot', None)
+            r.setdefault('last', False)
+    fake = [{'date': d, 'flights': [], 'boxes': []} for d in sorted({r['date'] for r in tabs['legs'] + tabs['climbs']})]
+    for d in fake:
+        d['flights'] = [{'region': r['region']} for r in tabs['flights'] if r['date'] == d['date']]
+    bad = report.bad_days(report.day_checks(fake, tabs['legs'], tabs['climbs']))
+    return {'days': None, 'L': tabs['legs'], 'C': tabs['climbs'], 'F': tabs['flights'], 'H': tabs['hours'], 'G': tabs['glides'], 'bad': bad, 'csv': True, 'model': model}
+STAGES = ('air', 'place', 'pilot')
+
+def run(data: str, out: str, which: str='all', stage: str='all', grids: str | None=None) -> dict:
+    import layer1
+    import layer2
+    import layer3
+    os.makedirs(out, exist_ok=True)
+    D = load(data, which)
+    res = {}
+    if stage in ('air', 'all'):
+        res['layer1'] = layer1.run(D, out)
+    if stage in ('place', 'all'):
+        res['layer2'] = layer2.run(D, out, grids=grids)
+    if stage in ('pilot', 'all'):
+        l3 = layer3.run(D, out, which)
+        models, note = (l3.pop('models'), l3.pop('note'))
+        res.update(l3)
+        res['layer3'] = {'rows': sum((r['rows'] for r in l3.values())), 'note': note, 'models': models}
+        assemble(out, which)
+    return res
+
+def _read(out: str, name: str):
+    p = os.path.join(out, name)
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding='utf-8') as f:
+        return json.load(f) if name.endswith('.json') else f.read()
+
+def assemble(out: str, which: str) -> None:
+    l1, l2, l3 = (_read(out, 'layer1.json'), _read(out, 'layer2.json'), _read(out, 'layer3.json'))
+    corr, trig = (_read(out, 'corrections.json'), _read(out, 'triggers.json'))
+    md = [f'# Calibration model ({which}, {date.today().isoformat()})', '', "Three layers trained in sequence, each on the residual after the layers before it (nothing counted twice): **1 the air** (the forecast fields corrected from the stations, the soundings and the flights read as observations of the air; the next layers see the planner rescored on that air), **2 the place** (where the thermals are, given that air), **3 the pilot** (how a pilot flies that air and those thermals; pilot features here only). Layers 1 and 2 are cross-validated by day, layer 3 by pilot with the test rows' days kept out per region. Ratio: observed / the forecast (1 = right on); MAE: mean |log(observed / forecast)| (0.10 ≈ 10 %). Physics: the site's model as it is; constant: one correction factor; ML: the trees.", '']
+    for name, part in (('Layer 1: the air', 'report-air.md'), ('Layer 2: the place', 'report-place.md'), ('Layer 3: the pilot', 'report-pilot.md')):
+        text = _read(out, part)
+        md += [f'# {name}', ''] + ([text.rstrip(), ''] if text else ['Not run.', ''])
+    blob = {'version': MODEL_VERSION, 'built': date.today().isoformat(), 'dataset': which, 'params': PARAMS, 'models': (l3 or {}).get('models') or {}, 'layer1': {'corrections': corr, 'tables': (l1 or {}).get('tables'), 'models_compared': (l1 or {}).get('models_compared')}, 'layer2': {'triggers': trig, 'scores': (l2 or {}).get('scores')}, 'layer3': {'tables': (l3 or {}).get('tables'), 'note': (l3 or {}).get('note')}}
     with open(os.path.join(out, 'model.json'), 'w') as f:
         json.dump(blob, f, separators=(',', ':'))
     size = os.path.getsize(os.path.join(out, 'model.json'))
-    md += [f'model.json: {size / 1024:.0f} KB.']
+    md += [f'model.json: {size / 1024:.0f} KB' + (f"; corrections.json: {os.path.getsize(os.path.join(out, 'corrections.json')) / 1024:.0f} KB" if corr else '') + (f"; triggers.json: {os.path.getsize(os.path.join(out, 'triggers.json')) / 1024:.0f} KB" if trig else '') + '.']
     with open(os.path.join(out, 'train-report.md'), 'w') as f:
         f.write('\n'.join(md) + '\n')
+    cv = {k: v for k, v in ((l3 or {}).get('cv') or {}).items()}
+    cv['layer1'] = (l1 or {}).get('cv')
+    cv['layer2'] = (l2 or {}).get('cv')
     with open(os.path.join(out, 'cv.json'), 'w') as f:
-        json.dump(res, f, indent=1)
-    return res
+        json.dump(cv, f, indent=1)
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('data')
+    ap.add_argument('out')
+    ap.add_argument('dataset', nargs='?', default='all', choices=['all', 'seed'])
+    ap.add_argument('--stage', default='all', choices=list(STAGES) + ['all'])
+    ap.add_argument('--grids', default=None, help='the saved grids (calib-grids-<month> bundles unpacked), for layer 2')
+    a = ap.parse_args(argv)
+    run(a.data, a.out, a.dataset, a.stage, a.grids)
+    return 0
 if __name__ == '__main__':
-    if len(sys.argv) not in (3, 4):
-        sys.exit(__doc__)
-    run(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else 'all')
+    sys.exit(main())

@@ -19,6 +19,8 @@ import track
 FIELDS = ['wstar', 'depth', 'cubase', 'cudepth', 'twidth', 'blapse', 'zi', 'densalt', 'rain', 'overdev', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'u_blavg', 'v_blavg', 'ridge', 'u_g300', 'v_g300', 'nlow', 'elevation', 'sink', 't2']
 PAD_LON, PAD_LAT = (1.5, 1.2)
 BUILD_TIMEOUT, EVAL_TIMEOUT = (25 * 60, 15 * 60)
+GRID_FIELDS = os.environ.get('CALIB_GRID_FIELDS', 'all')
+GRID_HOURS = os.environ.get('CALIB_GRID_HOURS', 'all')
 
 def boxes(flights: list[dict]) -> list[dict]:
     q = lambda v, up: (math.ceil if up else math.floor)(v / 0.03) * 0.03
@@ -59,12 +61,13 @@ def dump(base: str) -> dict:
             for k in FIELDS:
                 ok = k in z.files and k in m['fields']
                 out.write((dec(k, z[k]) if ok else np.full((ny, nx), np.nan, np.float32)).tobytes())
-    info = {'grid': m['grid'], 'heights': m.get('heights'), 'highAgl': m.get('highAgl'), 'stamps': stamps, 'fields': FIELDS}
+    info = {'grid': m['grid'], 'heights': m.get('heights'), 'highAgl': m.get('highAgl'), 'stamps': stamps, 'fields': FIELDS, 'model': m.get('model') or os.path.basename(os.path.normpath(base))}
     with open(f'{base}/fields.json', 'w') as f:
         json.dump(info, f)
     return info
 
 def _run(cmd, cwd, timeout, logf, env=None) -> bool:
+    os.makedirs(os.path.dirname(os.path.abspath(logf)), exist_ok=True)
     with open(logf, 'a') as lf:
         try:
             r = subprocess.run(cmd, cwd=cwd, stdout=lf, stderr=subprocess.STDOUT, timeout=timeout, env=env)
@@ -99,11 +102,11 @@ def eval_input(f: dict, ref: int) -> dict:
     return {'ref': ref, 'date': f['date'], 'tz': f['tz'], 'key': f.get('key') or 'std', 'tp': f['tp'], 'legs': [{'n': L['leg'], 'a': L['a'], 'b': L['b'], 't0': L['tstart'], 't1': L['tend'], 'line': L.get('line')} for L in f.get('legs') or []], 'points': [{'t0': c['t0'], 'dur': c['dur'], 'lon': c['lon'], 'lat': c['lat']} for c in f.get('climbs') or []], 'probes': probe_times(f)}
 
 def clean(f: dict) -> dict:
-    g = {k: v for k, v in f.items() if not k.startswith('model_') and k != 'probe_m'}
+    g = {k: v for k, v in f.items() if not k.startswith(('model_', 'probe_m'))}
     if 'legs' in f:
-        g['legs'] = [{k: v for k, v in L.items() if k != 'models'} for L in f.get('legs') or []]
+        g['legs'] = [{k: v for k, v in L.items() if k not in ('models', 'models_c')} for L in f.get('legs') or []]
     if 'climbs' in f:
-        g['climbs'] = [{k: v for k, v in c.items() if k != 'models'} for c in f.get('climbs') or []]
+        g['climbs'] = [{k: v for k, v in c.items() if k not in ('models', 'models_c')} for c in f.get('climbs') or []]
     return g
 IEM = 'https://mesonet.agron.iastate.edu'
 OBS_GAP, OBS_MAX = (2.0, 40)
@@ -260,19 +263,116 @@ def categorize(L: dict) -> str:
         return 'wave'
     return 'thermal'
 
-def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None) -> dict:
-    res = {'version': common.DAY_VERSION, 'date': day, 'models': list(models), 'boxes': [], 'flights': flights, 'short': short or [], 'obs': obs or []}
+def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None, grids: str | None=None, corrections: str | None=None) -> dict:
+    models = tuple(models)
+    res = {'version': common.DAY_VERSION, 'date': day, 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short or [], 'obs': obs or [], 'physics_v': common.PHYSICS_VERSION, 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': False}
     os.makedirs(work, exist_ok=True)
     items = flights + res['short'] + res['obs']
     for model in models:
-        _run_model(res, day, items, work, model, workers)
-    for f in flights:
-        for L in f['legs']:
-            if f.get('src') != 'seed' or 'cat' not in L:
-                L['cat'] = categorize({**L, 'model': ((L.get('models') or {}).get(models[0]) or {}).get('own')})
+        _run_model(res, day, items, work, model, workers, grids, corrections)
+    res['grids'] = bool(grids) and any((b.get('saved') for b in res['boxes']))
+    _categorize(res)
     return res
 
-def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int) -> None:
+def _categorize(res: dict) -> None:
+    for f in res['flights']:
+        for L in f['legs']:
+            if f.get('src') != 'seed' or 'cat' not in L:
+                L['cat'] = categorize({**L, 'model': ((L.get('models') or {}).get(res['model']) or {}).get('own')})
+
+def corr_version(corrections: str | None) -> str | None:
+    if not corrections or not os.path.exists(corrections):
+        return None
+    try:
+        return str(common.read_json(corrections).get('version'))
+    except (ValueError, AttributeError, OSError):
+        return None
+
+def local_hour_of(stamp: str, tz: str) -> int:
+    t = datetime.strptime(stamp[:10], '%Y%m%d%H').replace(tzinfo=timezone.utc)
+    return t.astimezone(ZoneInfo(tz)).hour
+
+def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours: str=GRID_HOURS) -> dict:
+    os.makedirs(os.path.join(dest, '_hours'), exist_ok=True)
+    lo, hi = (int(x) for x in hours.split('-')) if hours != 'all' else (0, 23)
+    keep_names = None if fields == 'all' else sorted(set(FIELDS) | {'elevation'})
+    names = set()
+    for fn in sorted(glob.glob(f'{base}/_hours/*.npz')):
+        stamp = os.path.basename(fn)[:-4]
+        if hours != 'all' and (not lo <= local_hour_of(stamp, meta['tz']) <= hi):
+            continue
+        if keep_names is None:
+            shutil.copyfile(fn, os.path.join(dest, '_hours', f'{stamp}.npz'))
+            with np.load(fn) as z:
+                names.update(z.files)
+        else:
+            with np.load(fn) as z:
+                arrays = {k: z[k] for k in keep_names if k in z.files}
+            names.update(arrays)
+            np.savez_compressed(os.path.join(dest, '_hours', f'{stamp}.npz'), **arrays)
+    shutil.copyfile(f'{base}/latest.json', os.path.join(dest, 'latest.json'))
+    out = {**meta, 'physics_v': common.PHYSICS_VERSION, 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
+    common.write_json(os.path.join(dest, 'meta.json'), out, indent=1)
+    return out
+
+def grids_usable(gdir: str, bbox: list, model: str) -> str | None:
+    mp = os.path.join(gdir, 'meta.json')
+    if not os.path.exists(mp) or not os.path.exists(os.path.join(gdir, 'latest.json')) or (not glob.glob(os.path.join(gdir, '_hours', '*.npz'))):
+        return 'missing'
+    m = common.read_json(mp)
+    if m.get('physics_v') != common.PHYSICS_VERSION:
+        return 'physics'
+    if m.get('model') != model or [round(float(v), 2) for v in m.get('bbox') or []] != [round(float(v), 2) for v in bbox]:
+        return 'box'
+    if not set(FIELDS) <= set(m.get('fields') or []):
+        return 'fields'
+    return None
+
+def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, logf: str, corrections: str | None) -> bool:
+    try:
+        fi = dump(base)
+        info['hours'] = len(fi['stamps'])
+    except Exception as e:
+        common.note(f'dump failed: {e!r}')
+        info['error'] = 'dump'
+        return False
+    for p in os.listdir(base):
+        if not p.startswith('fields.'):
+            q = os.path.join(base, p)
+            shutil.rmtree(q) if os.path.isdir(q) else os.remove(q)
+    refs = {id(f): k for k, f in enumerate(B['flights'])}
+    fin, fout = (os.path.join(out, 'in.json'), os.path.join(out, 'out.json'))
+    inputs = [eval_input(f, refs[id(f)]) for f in B['flights']]
+    with open(fin, 'w') as fh:
+        json.dump(inputs, fh)
+    env = {**os.environ, 'CALIB_PUB': common.PUB, 'CALIB_MODEL': model}
+    if corrections and os.path.exists(corrections):
+        env['CALIB_CORRECTIONS'] = corrections
+    else:
+        env.pop('CALIB_CORRECTIONS', None)
+    ok = _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, EVAL_TIMEOUT, logf, env)
+    if not ok or not os.path.exists(fout):
+        info['error'] = 'evaluate'
+        return False
+    ev = common.read_json(fout)
+    _merge_eval(ev['flights'], B, inputs, model, bi, '')
+    if ev.get('flights_c'):
+        _merge_eval(ev['flights_c'], B, inputs, model, bi, '_c')
+        info['corrected'] = True
+    return True
+
+def _merge_eval(results: list, B: dict, inputs: list, model: str, bi: int, suffix: str) -> None:
+    for r in results:
+        f = B['flights'][r['ref']]
+        f[f'model{suffix}_{model}'] = {'box': bi, 'takeoffNode': r['takeoffNode']}
+        for L, e in zip(f.get('legs') or [], r['legs']):
+            if e:
+                L.setdefault('models' + suffix, {})[model] = {'own': e.get('own'), 'route': e.get('route')}
+        for c, e in zip(f.get('climbs') or [], r['points']):
+            c.setdefault('models' + suffix, {})[model] = e.get('own')
+        f.setdefault('probe_m' + ('c' if suffix else ''), {})[model] = {str(p['t']): None if e is None else {k: e.get(k) for k in track.PROBE_KEYS} for p, e in zip(inputs[r['ref']]['probes'], r.get('probes') or [])}
+
+def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int, grids: str | None=None, corrections: str | None=None) -> None:
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
     for bi, B in enumerate(boxes(flights)):
         out = os.path.join(work, f'{model}-box{bi}')
@@ -287,41 +387,46 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             res['boxes'].append(info)
             shutil.rmtree(out, ignore_errors=True)
             continue
-        try:
-            fi = dump(base)
-            info['hours'] = len(fi['stamps'])
-        except Exception as e:
-            common.note(f'dump failed: {e!r}')
-            info['error'] = 'dump'
-            res['boxes'].append(info)
-            shutil.rmtree(out, ignore_errors=True)
-            continue
-        for p in os.listdir(base):
-            if not p.startswith('fields.'):
-                q = os.path.join(base, p)
-                shutil.rmtree(q) if os.path.isdir(q) else os.remove(q)
-        refs = {id(f): k for k, f in enumerate(B['flights'])}
-        fin, fout = (os.path.join(out, 'in.json'), os.path.join(out, 'out.json'))
-        inputs = [eval_input(f, refs[id(f)]) for f in B['flights']]
-        with open(fin, 'w') as fh:
-            json.dump(inputs, fh)
-        env = {**os.environ, 'CALIB_PUB': common.PUB}
-        ok = _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, EVAL_TIMEOUT, logf, env)
-        if not ok or not os.path.exists(fout):
-            info['error'] = 'evaluate'
-            res['boxes'].append(info)
-            shutil.rmtree(out, ignore_errors=True)
-            continue
-        ev = common.read_json(fout)
-        for r in ev['flights']:
-            f = B['flights'][r['ref']]
-            f['model_' + model] = {'box': bi, 'takeoffNode': r['takeoffNode']}
-            for L, e in zip(f.get('legs') or [], r['legs']):
-                if e:
-                    L.setdefault('models', {})[model] = {'own': e.get('own'), 'route': e.get('route')}
-            for c, e in zip(f.get('climbs') or [], r['points']):
-                c.setdefault('models', {})[model] = e.get('own')
-            f.setdefault('probe_m', {})[model] = {str(p['t']): None if e is None else {k: e.get(k) for k in track.PROBE_KEYS} for p, e in zip(inputs[r['ref']]['probes'], r.get('probes') or [])}
-        info['ok'] = True
+        if grids:
+            try:
+                gdir = os.path.join(grids, day, f'{model}-box{bi}')
+                shutil.rmtree(gdir, ignore_errors=True)
+                save_grids(base, gdir, {'day': day, 'model': model, 'region': B['region'], 'bbox': B['bbox'], 'tz': B['tz'], 'box': bi})
+                info['saved'] = True
+            except Exception as e:
+                common.note(f'{day} {model} box {bi}: grids not saved: {e!r}')
+                shutil.rmtree(os.path.join(grids, day, f'{model}-box{bi}'), ignore_errors=True)
+        if _eval_box(base, B, out, model, bi, info, logf, corrections):
+            info['ok'] = True
         res['boxes'].append(info)
         shutil.rmtree(out, ignore_errors=True)
+
+def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) -> dict:
+    day = rec['date']
+    flights = [clean(f) for f in rec.get('flights') or []]
+    short = [clean(f) for f in rec.get('short') or []]
+    obs = [clean(f) for f in rec.get('obs') or []]
+    models = tuple(rec.get('models') or common.models_for({f.get('region') for f in flights + short}))
+    res = {**rec, 'version': common.DAY_VERSION, 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short, 'obs': obs, 'physics_v': common.PHYSICS_VERSION, 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': True, 'rescored_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    os.makedirs(work, exist_ok=True)
+    logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
+    items = flights + short + obs
+    for model in models:
+        for bi, B in enumerate(boxes(items)):
+            info = {'model': model, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False, 'saved': True}
+            gdir = os.path.join(grids, day, f'{model}-box{bi}')
+            why = grids_usable(gdir, B['bbox'], model)
+            if why:
+                info['error'] = f'grids:{why}'
+                res['boxes'].append(info)
+                continue
+            out = os.path.join(work, f'{model}-box{bi}')
+            shutil.rmtree(out, ignore_errors=True)
+            base = os.path.join(out, model)
+            shutil.copytree(gdir, base)
+            if _eval_box(base, B, out, model, bi, info, logf, corrections):
+                info['ok'] = True
+            res['boxes'].append(info)
+            shutil.rmtree(out, ignore_errors=True)
+    _categorize(res)
+    return res

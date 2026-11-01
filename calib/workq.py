@@ -30,21 +30,34 @@ def _retry(state: dict, d: str) -> bool:
 
 def _redo(state: dict, d: str) -> bool:
     x = state['done'].get(d)
-    return x is not None and x.get('status') in ('ok', 'partial') and (x.get('v', 1) < common.DAY_VERSION) and (x.get('redo_tries', 0) < MAX_TRIES)
+    if x is None or x.get('status') not in ('ok', 'partial') or x.get('redo_tries', 0) >= MAX_TRIES:
+        return False
+    return x.get('v', 1) < common.DAY_VERSION or (bool(x.get('grids')) and x.get('pv') != common.PHYSICS_VERSION)
+
+def _rescore(state: dict, d: str, cv: str | None=None) -> bool:
+    x = state['done'].get(d)
+    if x is None or x.get('status') not in ('ok', 'partial') or (not x.get('grids')) or (x.get('rs_tries', 0) >= MAX_TRIES):
+        return False
+    if x.get('v', 1) < common.DAY_VERSION or x.get('pv') != common.PHYSICS_VERSION:
+        return False
+    return x.get('sv') != common.SCORE_VERSION or x.get('cv') != cv
 
 def _revisit(state: dict, d: str, ac: str) -> bool:
     x = state['done'].get(d)
-    if x is None or x.get('src') != 'new' or x.get('ac') == ac or (x.get('rv_tries', 0) >= MAX_TRIES):
+    if x is None or x.get('src') != 'new' or x.get('rv_tries', 0) >= MAX_TRIES:
         return False
     if x.get('status') == 'empty':
-        return True
-    return x.get('status') in ('ok', 'partial') and x.get('v', 1) >= common.DAY_VERSION and (x.get('flights', 0) < weglide.MAX_PER_DAY)
+        return x.get('ac') != ac
+    if x.get('status') not in ('ok', 'partial') or x.get('v', 1) < common.DAY_VERSION or x.get('flights', 0) >= weglide.MAX_PER_DAY:
+        return False
+    return x.get('ac') != ac or x.get('cap', OLD_CAP) < weglide.MAX_PER_DAY
+OLD_CAP = 6
 
 def _rv_pending(state: dict, d: str) -> bool:
     x = state['done'].get(d)
     return x is not None and x.get('src') == 'new' and (x.get('status') in ('ok', 'partial', 'empty')) and (x.get('rv_tries', 0) < MAX_TRIES)
 
-def next_days(state: dict, n: int, today: date, new_ok: bool=True, pending=(), ac: str | None=None) -> list[tuple[str, str]]:
+def free_days(state: dict, n: int, pending=(), cv: str | None=None) -> list[tuple[str, str]]:
     out = []
     seed = set(state['seed_days'])
     for d in sorted(pending):
@@ -54,49 +67,75 @@ def next_days(state: dict, n: int, today: date, new_ok: bool=True, pending=(), a
             out.append((d, 'seed' if d in seed else 'new'))
         elif _rv_pending(state, d):
             out.append((d, 'revisit'))
-    for d in sorted(state['done']):
-        if len(out) >= n:
-            return out
-        if _redo(state, d):
-            out.append((d, 'redo'))
     for d in state['seed_days']:
         if len(out) >= n:
             return out
         if _open(state, d):
             out.append((d, 'seed'))
-    if new_ok:
-        ac = ac or common.aircraft_version()
-        cap = max(1, int(n * REVISIT_SHARE))
-        k = 0
-        for d in sorted(state['done']):
-            if len(out) >= n or k >= cap:
-                break
-            if d not in pending and _revisit(state, d, ac):
-                out.append((d, 'revisit'))
-                k += 1
-        last = today - timedelta(days=RECENT_LAG)
-        recent = [last - timedelta(days=k) for k in range(RECENT_DAYS)]
-        for d in recent:
-            s = d.isoformat()
-            if len(out) >= n:
-                return out
-            if flying(d) and s not in seed and _open(state, s):
-                out.append((s, 'new'))
-        k = 0
-        span = (last - START).days
-        rest = spread([(START + timedelta(days=i)).isoformat() for i in range(span + 1)])
-        for s in rest:
-            if len(out) >= n:
-                return out
-            if flying(date.fromisoformat(s)) and s not in seed and _open(state, s):
-                out.append((s, 'new'))
-                k += 1
-    for d in list(state['seed_days']) + sorted(state['done']):
+    for d in sorted(state['done']):
+        if len(out) >= n:
+            return out
+        if _redo(state, d):
+            out.append((d, 'redo'))
+    for d in sorted(state['done']):
+        if len(out) >= n:
+            return out
+        if _rescore(state, d, cv):
+            out.append((d, 'rescore'))
+    for d in state['seed_days']:
         if len(out) >= n:
             break
-        if _retry(state, d) and all((d != x for x, _ in out)):
-            out.append((d, 'seed' if d in seed else 'new'))
+        if _retry(state, d) and d not in pending:
+            out.append((d, 'seed'))
     return out
+
+def weglide_days(state: dict, n: int, today: date, pending=(), ac: str | None=None, listed=()) -> list[tuple[str, str]]:
+    out = []
+    seed = set(state['seed_days'])
+    for d in sorted(pending):
+        if len(out) >= n:
+            return out
+        if _retry(state, d):
+            out.append((d, 'seed' if d in seed else 'new'))
+        elif _rv_pending(state, d):
+            out.append((d, 'revisit'))
+    ac = ac or common.aircraft_version()
+    listed = set(listed)
+    rv = [d for d in sorted(state['done']) if d not in pending and _revisit(state, d, ac)]
+    rv.sort(key=lambda d: (d not in listed, d))
+    rv = iter(rv)
+    last = today - timedelta(days=RECENT_LAG)
+    recent = [(last - timedelta(days=k)).isoformat() for k in range(RECENT_DAYS)]
+    span = (last - START).days
+    rest = spread([(START + timedelta(days=i)).isoformat() for i in range(span + 1)])
+    new = iter(dict.fromkeys((s for s in recent + rest if flying(date.fromisoformat(s)) and s not in seed and _open(state, s))))
+    every = max(2, round(1 / REVISIT_SHARE))
+    k = 0
+    while len(out) < n:
+        k += 1
+        d = next(rv, None) if k % every == 0 else None
+        if d is not None:
+            out.append((d, 'revisit'))
+            continue
+        s = next(new, None)
+        if s is None:
+            d = next(rv, None)
+            if d is None:
+                break
+            out.append((d, 'revisit'))
+            continue
+        out.append((s, 'new'))
+    for d in sorted(state['done']):
+        if len(out) >= n:
+            break
+        if d not in seed and d not in pending and _retry(state, d) and all((d != x for x, _ in out)):
+            out.append((d, 'new'))
+    return out
+
+def next_days(state: dict, n: int, today: date, new_ok: bool=True, pending=(), ac: str | None=None, listed=(), cv: str | None=None) -> list[tuple[str, str]]:
+    out = weglide_days(state, n, today, pending, ac, listed) if new_ok else []
+    done = {d for d, _ in out}
+    return out + [x for x in free_days(state, n - len(out) + len(done & set(pending)), pending, cv) if x[0] not in done][:max(0, n - len(out))]
 
 def progress(state: dict, today: date) -> dict:
     done = state['done']
@@ -105,6 +144,7 @@ def progress(state: dict, today: date) -> dict:
     for x in done.values():
         by[x.get('status')] = by.get(x.get('status'), 0) + 1
     redo = sum((1 for d in done if _redo(state, d)))
+    rescore = sum((1 for d in done if _rescore(state, d, state.get('corr_v'))))
     ac = common.aircraft_version()
     revisit = sum((1 for d in done if _revisit(state, d, ac)))
-    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo, 'revisit_left': revisit}
+    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo, 'rescore_left': rescore, 'revisit_left': revisit, 'grids': sum((1 for x in done.values() if x.get('grids')))}
