@@ -11,7 +11,7 @@ import report
 import train
 FEATURES = ['wstar', 'zi', 'cubase', 'twidth', 'blapse', 'densalt', 'rain', 'overdev', 'sun', 'cloud', 'cloudlow', 'ridge', 'elevation', 'sink', 't2', 'wind', 'solar', 'doy_s', 'doy_c', 'relief', 'model', 'lat']
 ROW_OF = {'wstar': 'm_ws0', 'zi': 'm_zi', 'cubase': 'm_cb', 'twidth': 'm_twidth', 'blapse': 'm_blapse', 'densalt': 'm_densAlt', 'rain': 'm_rain', 'overdev': 'm_od', 'sun': 'm_sun', 'cloud': 'm_cloud', 'cloudlow': 'm_cloudlow', 'ridge': 'm_ridgev', 'elevation': 'm_elev', 'sink': 'm_sink', 't2': 'm_t2', 'wind': 'm_wind', 'solar': 'm_solar', 'relief': 'm_relief'}
-MODEL_ID = {'hrrr': 0, 'gfs': 1, 'ecmwf': 2, 'icon': 3}
+MODEL_ID = dict(common.MODEL_INDEX)
 TARGETS = ('ws', 'top', 'zi', 'cb', 'cu')
 KIND = {'ws': 'log', 'top': 'log', 'zi': 'log', 'cb': 'add', 'cu': 'logit'}
 CLAMPS = {'ws': [0.5, 2.0], 'top': [0.5, 2.0], 'zi': [0.5, 2.0], 'cb': 600.0, 'cu': [0.3, 0.7]}
@@ -59,7 +59,7 @@ def _med(xs):
 def _row_lat(r: dict, pos) -> float | None:
     if pos is not None:
         return pos[1]
-    c = common.CENTROID.get(r.get('state') or '')
+    c = common.centroid_of(r.get('state'))
     return c[1] if c else None
 
 def climb_positions(days, srcs=None) -> dict:
@@ -109,9 +109,9 @@ def observations(D: dict, model: str | None=None) -> dict:
         med = st.median([st.median(v) for v in by_pilot.values()])
         ach = _med([r['m_ach'] for r, _ in items])
         ref = {k: _med([r.get(k) for r, _ in items]) if not isinstance(items[0][0].get(k), (str, bool)) else items[0][0].get(k) for k in items[0][0] if k.startswith('m_')}
-        ref.update({'date': d, 'region': reg, 'state': items[0][0].get('state'), 'n': len(items), 'pilots': len(by_pilot)})
+        ref.update({'date': d, 'region': reg, 'state': items[0][0].get('state'), 'n': len(items), 'pilots': len(by_pilot), 'model': model or items[0][0].get('model')})
         lat = _med([_row_lat(r, p) for r, p in items])
-        x = feature_vector(ref, d, lat, model)
+        x = feature_vector(ref, d, lat, ref['model'])
         w = min(2.0, math.sqrt(len(by_pilot)))
         if ach and ach > 0:
             out['ws'].append({'x': x, 'y': math.log(med / ach), 'w': w, 'date': d, 'region': reg, 'kind': 'climbs', 'ref': ref})
@@ -122,19 +122,21 @@ def observations(D: dict, model: str | None=None) -> dict:
     for r in G:
         if r.get('failed') and r.get('paired') and ((r.get('m_ach') or 0) > 0) and ((r.get('m_ws0') or 0) >= NOLIFT_WS) and (r['date'] not in bad):
             ref = {**r, 'n': 1, 'pilots': 1}
-            out['ws'].append({'x': feature_vector(ref, r['date'], _row_lat(r, None), model), 'y': math.log(WEAK_RATE / r['m_ach']), 'w': 0.5, 'date': r['date'], 'region': r['region'], 'kind': 'failed search', 'ref': ref})
+            out['ws'].append({'x': feature_vector(ref, r['date'], _row_lat(r, None), model or r.get('model')), 'y': math.log(WEAK_RATE / r['m_ach']), 'w': 0.5, 'date': r['date'], 'region': r['region'], 'kind': 'failed search', 'ref': ref})
+    import rows as rowsmod
     for d in days or []:
         if d['date'] in bad:
             continue
+        m_ = rowsmod.model_of(d, model)
         for o in d.get('obs') or []:
-            pm = (o.get('probe_m') or {}).get(model) or {}
+            pm = (o.get('probe_m') or {}).get(m_) or {}
             ob = o.get('obs') or {}
             lat = (o.get('tp') or [None, None])[1]
             if o['kind'] == 'raob':
                 s = pm.get(str(int(o['t']))) if o.get('t') is not None else None
                 if s and (s.get('zi') or 0) > 50 and ((ob.get('mix') or 0) > 50):
                     ref = {**sample_row(s), 'date': d['date'], 'region': o['region'], 'sid': o['sid']}
-                    out['zi'].append({'x': feature_vector(ref, d['date'], lat, model), 'y': math.log(ob['mix'] / s['zi']), 'w': 1.0, 'date': d['date'], 'region': o['region'], 'kind': 'sounding', 'ref': ref})
+                    out['zi'].append({'x': feature_vector(ref, d['date'], lat, m_), 'y': math.log(ob['mix'] / s['zi']), 'w': 1.0, 'date': d['date'], 'region': o['region'], 'kind': 'sounding', 'ref': ref})
             elif o['kind'] == 'asos':
                 from zoneinfo import ZoneInfo
                 z = ZoneInfo(o['tz'])
@@ -144,7 +146,7 @@ def observations(D: dict, model: str | None=None) -> dict:
                     if not s or s.get('ws0' if 'ws0' in s else 'ws') is None:
                         continue
                     ref = {**sample_row(s), 'date': d['date'], 'region': o['region'], 'sid': o['sid'], 'hour': int(hh)}
-                    x = feature_vector(ref, d['date'], lat, model)
+                    x = feature_vector(ref, d['date'], lat, m_)
                     cu = rep.get('cu')
                     out['cu'].append({'x': x, 'y': 1.0 if cu is not None else 0.0, 'w': 1.0, 'date': d['date'], 'region': o['region'], 'kind': 'station hour', 'ref': ref})
                     if cu is not None and s.get('cb') is not None:
@@ -262,6 +264,16 @@ def compare_models(D: dict, models: list[str]) -> dict:
                     res.setdefault(t, {}).setdefault(m, {})[grp] = {'n': int(len(a)), 'median': float(np.exp(np.median(a)) if KIND[t] == 'log' else np.median(a)), 'mae': float(np.mean(np.abs(a)))}
     return res
 
+def compare_by_macro(D: dict, models: list[str]) -> dict:
+    out = {}
+    for macro in sorted({common.MODEL_MACRO.get(m, 'US') for m in models}):
+        ms = [m for m in models if common.MODEL_MACRO.get(m, 'US') == macro]
+        if len(ms) > 1:
+            cmp_ = compare_models(D, ms)
+            if cmp_:
+                out[macro] = cmp_
+    return out
+
 def corrections_blob(fits: dict) -> dict:
     fields = {t: f['export'] for t, f in fits.items() if f}
     body = {'features': FEATURES, 'model_ids': MODEL_ID, 'clamps': CLAMPS, 'cu_depth': CU_DEPTH, 'fields': fields}
@@ -269,14 +281,15 @@ def corrections_blob(fits: dict) -> dict:
     return {'version': h, 'built': date.today().isoformat(), **body}
 
 def run(D: dict, out: str) -> dict:
-    models = (D['days'][0].get('models') if D['days'] else None) or [D['model']]
-    models = sorted({m for d in D['days'] or [] for m in d.get('models') or []} or set(models))
+    models = sorted({m for d in D['days'] or [] for m in d.get('models') or [d.get('model') or 'hrrr']} or {D['model'] or 'hrrr'})
     obs = observations(D)
     fits = {t: fit_target(t, obs[t]) for t in TARGETS}
     corr = corrections_blob(fits)
     with open(os.path.join(out, 'corrections.json'), 'w') as f:
         json.dump(corr, f, separators=(',', ':'))
-    cmp_ = compare_models(D, models) if len(models) > 1 else {}
+    by_macro = compare_by_macro(D, models) if len(models) > 1 else {}
+    cmp_ = next(iter(by_macro.values())) if len(by_macro) == 1 else {m: t for c in by_macro.values() for m, t in c.items()} if by_macro else {}
+    cmp_ = {t: {m: g for c in by_macro.values() for m, g in (c.get(t) or {}).items()} for t in TARGETS if any((t in c for c in by_macro.values()))}
     md = [f"Corrections to the forecast fields from every observation of the air: the stations' reports (cumulus and its base, every built day, flown or not), the evening soundings (the layer's depth) and the flights read as observations of the air, not of a pilot (a day-hour-cell's median climb across pilots against the model's achieved climb; the highest exit top as a lower bound on the usable top, fitted at the {TOP_QUANTILE:.0%} quantile; a failed search where the forecast's own W* was ≥ {NOLIFT_WS} m/s as a climb of at most {WEAK_RATE} m/s). Features: only what a grid cell has per hour ({', '.join(FEATURES)}). Cross-validated by day. What this layer explains is taken out before layers 2 and 3 learn: they see the planner rescored on the corrected air (models_c), not these residuals.", '']
     if D['csv']:
         md += ["Exported rows only (no day files): the flights' targets alone, no stations or soundings, cells by state.", '']
@@ -302,26 +315,29 @@ def run(D: dict, out: str) -> dict:
         else:
             md += train.md_table(f['table'], ['physics', 'constant', 'ml'])
         md += ['', train.splits_md(f['export']), f"Export check (max |trees − sklearn|): {f['check']:.2e}.", '']
-    if cmp_:
-        md += ['## Which model is nearer where and when', '', "The observations' median ratio (cb: shift in m) and MAE per model, the forecast as it is; the nearest (lowest MAE) in bold.", '']
-        for t, by_m in cmp_.items():
-            ms = sorted(by_m)
-            md += [f'### {t}', '', '| Group | ' + ' | '.join((f'{m}: n, median, MAE' for m in ms)) + ' |', '|---|' + '---|' * len(ms)]
-            groups = sorted({g for m in ms for g in by_m[m]}, key=lambda g: (g != 'all', g))
-            for g in groups:
-                cells, best = ([], min(((by_m[m][g]['mae'], m) for m in ms if g in by_m[m]))[1])
-                for m in ms:
-                    v = by_m[m].get(g)
-                    s = f"{v['n']}, {v['median']:.2f}, {v['mae']:.3f}" if v else '–'
-                    cells.append(f'**{s}**' if v and m == best else s)
-                md.append(f'| {g} | ' + ' | '.join(cells) + ' |')
-            md.append('')
+    if by_macro:
+        md += ['## Which model is nearer where and when', '', "The observations' median ratio (cb: shift in m) and MAE per model, the forecast as it is; the nearest (lowest MAE) in bold. Each area's models against each other (the US's HRRR and GFS, Europe's ECMWF and ICON, ICON-D2 where its domain covers the box, on the sampled days).", '']
+        for macro, cmp_m in by_macro.items():
+            if len(by_macro) > 1:
+                md += [f'### {common.MACRO_LABEL.get(macro, macro)}', '']
+            for t, by_m in cmp_m.items():
+                ms = sorted(by_m)
+                md += [f'### {t}' + (f' ({macro})' if len(by_macro) > 1 else ''), '', '| Group | ' + ' | '.join((f'{common.model_label(m)}: n, median, MAE' for m in ms)) + ' |', '|---|' + '---|' * len(ms)]
+                groups = sorted({g for m in ms for g in by_m[m]}, key=lambda g: (g != 'all', g))
+                for g in groups:
+                    cells, best = ([], min(((by_m[m][g]['mae'], m) for m in ms if g in by_m[m]))[1])
+                    for m in ms:
+                        v = by_m[m].get(g)
+                        s = f"{v['n']}, {v['median']:.2f}, {v['mae']:.3f}" if v else '–'
+                        cells.append(f'**{s}**' if v and m == best else s)
+                    md.append(f'| {g} | ' + ' | '.join(cells) + ' |')
+                md.append('')
     else:
         md += [f'## Which model is nearer where and when', '', f"One model in the data ({', '.join(models)}): the comparison needs the data job to store a second one (models[<model>] per leg and climb).", '']
     md += [f"corrections.json: version {corr['version']}, fields {', '.join(corr['fields']) or 'none'}; clamps {json.dumps(CLAMPS)}.", '']
     with open(os.path.join(out, 'report-air.md'), 'w') as f:
         f.write('\n'.join(md) + '\n')
-    res = {'rows': sum((f['rows'] for f in fits.values() if f)), 'targets': {t: {k: v for k, v in f.items() if k != 'export'} if f else None for t, f in fits.items()}, 'tables': {t: f['table'] for t, f in fits.items() if f}, 'models_compared': cmp_, 'version': corr['version'], 'models': models, 'cv': {t: {'rows': f['rows'], 'days': f['days'], 'table': f['table']} for t, f in fits.items() if f}}
+    res = {'rows': sum((f['rows'] for f in fits.values() if f)), 'targets': {t: {k: v for k, v in f.items() if k != 'export'} if f else None for t, f in fits.items()}, 'tables': {t: f['table'] for t, f in fits.items() if f}, 'models_compared': cmp_, 'models_compared_by_area': by_macro, 'version': corr['version'], 'models': models, 'cv': {t: {'rows': f['rows'], 'days': f['days'], 'table': f['table']} for t, f in fits.items() if f}}
     with open(os.path.join(out, 'layer1.json'), 'w') as f:
         json.dump(res, f, indent=1)
     return res

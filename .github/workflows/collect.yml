@@ -40,6 +40,8 @@ env:
   CALIB_GRID_FIELDS: "eval"
   CALIB_GRID_HOURS: "8-20"
   KEEP_DAYS: "60"
+  CALIB_EU_SHARE: "0.4"
+  CALIB_EU_ICON_SHARE: "0.25"
 jobs:
   gate:
     runs-on: ubuntu-24.04

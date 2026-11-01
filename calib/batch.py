@@ -96,7 +96,7 @@ def plan(a) -> int:
     run = {'at': stamp, 'days': 0, 'ok': 0, 'empty': 0, 'failed': 0, 'skipped': 0, 'left': 0, 'lost': 0, 'planned': 0, 'revisited': 0, 'added': 0, 'rescored': 0}
     P = {'a': a, 'state': state, 'client': client, 'aircraft': aircraft, 'ac': ac, 'pend': pend, 'seed_by': seed_by, 'run': run, 't0': t0, 'costs': {}, 'srcs': {}, 'corr': corr, 'seen': set()}
     wg = workq.weglide_days(state, a.days, today, pend, ac, listed_days(data)) if new_ok else []
-    common.log(f"{len(wg)} WeGlide days to plan ({sum((s == 'revisit' for _, s in wg))} chosen from again); WeGlide: {used} requests today, {budget} this run")
+    common.log(f"{len(wg)} WeGlide days to plan ({sum((s == 'revisit' for _, s in wg))} chosen from again, {sum((common.macro_of_key(d) == 'EU' for d, _ in wg))} Europe's); WeGlide: {used} requests today, {budget} this run")
     for d, src in wg:
         _plan_day(P, d, src)
     free = [x for x in doable(workq.free_days(state, a.days, pend, corr_v), pend, new_ok) if x[0] not in P['seen']][:max(0, a.days - len(P['costs']))]
@@ -150,7 +150,7 @@ def _plan_day(P: dict, d: str, src: str) -> None:
         rec = common.read_json(fn)
         common.write_json(f'{out}/in/{d}.json.gz', {'day': d, 'src': src, 'flights': rec.get('flights') or [], 'short': rec.get('short') or [], 'obs': rec.get('obs') or [], 'rec': rec})
         items = (rec.get('flights') or []) + (rec.get('short') or [])
-        P['costs'][d] = RESCORE_COST * max(1, len({f.get('region') for f in items})) * len(rec.get('models') or runmod.models_of(items))
+        P['costs'][d] = RESCORE_COST * max(1, len({f.get('region') for f in items})) * len(rec.get('models') or runmod.models_of(items, d))
         P['srcs'][d] = src
         run['rescored'] += 1
         return
@@ -197,7 +197,7 @@ def _plan_day(P: dict, d: str, src: str) -> None:
         for f in flights:
             state['counts'][f['grp']] = state['counts'].get(f['grp'], 0) + 1
     common.write_json(f'{out}/in/{d}.json.gz', {'day': d, 'src': src, 'flights': flights, 'short': shorts, 'obs': obs, **extra})
-    P['costs'][d] = max(1, len({f.get('region') for f in flights + shorts})) * len(runmod.models_of(flights + shorts))
+    P['costs'][d] = max(1, len({f.get('region') for f in flights + shorts})) * len(runmod.models_of(flights + shorts, d))
     P['srcs'][d] = src
 
 def _plan_revisit(a, d: str, state: dict, client, aircraft: dict, ac: str, from_pending: bool, run: dict, t0: float):
@@ -288,7 +288,7 @@ def build(a) -> int:
                     flights = [dayrun.clean(f) for f in inp['flights']]
                     short = [dayrun.clean(f) for f in short]
                     obs = [dayrun.clean(f) for f in inp.get('obs') or []] or runmod._observations(obs_client, d, flights + short, a.out)
-                    res = dayrun.run_day(d, flights, work, models=runmod.models_of(flights + short), workers=a.workers, short=short, obs=obs, grids=grids_out, corrections=corr)
+                    res = dayrun.run_day(common.day_of(d), flights, work, models=runmod.models_of(flights + short, d), workers=a.workers, short=short, obs=obs, grids=grids_out, corrections=corr)
                     status['rebuilt'].append(d)
                     kind = 'built again'
                 else:
@@ -301,7 +301,7 @@ def build(a) -> int:
                 obs = inp.get('obs') or runmod._observations(obs_client, d, inp['flights'] + short, a.out)
                 if inp.get('obs') and inp.get('obs_for'):
                     obs = obs + runmod._observations(obs_client, d, [f for f in inp['flights'] if f.get('region') in inp['obs_for']], a.out)
-                res = dayrun.run_day(d, inp['flights'], work, models=runmod.models_of(inp['flights'] + short), workers=a.workers, short=short, obs=obs, grids=grids_out, corrections=corr)
+                res = dayrun.run_day(common.day_of(d), inp['flights'], work, models=runmod.models_of(inp['flights'] + short, d), workers=a.workers, short=short, obs=obs, grids=grids_out, corrections=corr)
                 common.write_json(f'{a.out}/days/{d}.json.gz', res)
                 status['built'].append(d)
                 okb = sum((b.get('ok', False) for b in res['boxes']))

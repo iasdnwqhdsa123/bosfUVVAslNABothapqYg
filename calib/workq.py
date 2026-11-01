@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import common
 import weglide
 START = date(2021, 1, 1)
+EU_START = date.fromisoformat(common.EU_START)
 RECENT_DAYS, RECENT_LAG = (30, 3)
 MAX_TRIES = 3
 REVISIT_SHARE = 1 / 3
@@ -12,7 +13,7 @@ def bitrev(i: int, bits: int=BITS) -> int:
     return int(f'{i:0{bits}b}'[::-1], 2)
 
 def spread(days: list[str]) -> list[str]:
-    return sorted(days, key=lambda d: (bitrev((date.fromisoformat(d) - START).days % (1 << BITS)), d))
+    return sorted(days, key=lambda d: (bitrev((date.fromisoformat(common.day_of(d)) - START).days % (1 << BITS)), d))
 
 def flying(d: date) -> bool:
     return d.month not in (11, 12, 1, 2) or d.weekday() == 5
@@ -32,13 +33,13 @@ def _redo(state: dict, d: str) -> bool:
     x = state['done'].get(d)
     if x is None or x.get('status') not in ('ok', 'partial') or x.get('redo_tries', 0) >= MAX_TRIES:
         return False
-    return x.get('v', 1) < common.DAY_VERSION or (bool(x.get('grids')) and x.get('pv') != common.PHYSICS_VERSION)
+    return x.get('v', 1) < common.DAY_VERSION or (bool(x.get('grids')) and x.get('pv') != common.physics_version(common.macro_of_key(d)))
 
 def _rescore(state: dict, d: str, cv: str | None=None) -> bool:
     x = state['done'].get(d)
     if x is None or x.get('status') not in ('ok', 'partial') or (not x.get('grids')) or (x.get('rs_tries', 0) >= MAX_TRIES):
         return False
-    if x.get('v', 1) < common.DAY_VERSION or x.get('pv') != common.PHYSICS_VERSION:
+    if x.get('v', 1) < common.DAY_VERSION or x.get('pv') != common.physics_version(common.macro_of_key(d)):
         return False
     return x.get('sv') != common.SCORE_VERSION or x.get('cv') != cv
 
@@ -89,7 +90,34 @@ def free_days(state: dict, n: int, pending=(), cv: str | None=None) -> list[tupl
             out.append((d, 'seed'))
     return out
 
-def weglide_days(state: dict, n: int, today: date, pending=(), ac: str | None=None, listed=()) -> list[tuple[str, str]]:
+def _new_days(state: dict, today: date, seed: set, macro: str):
+    start = START if macro == 'US' else EU_START
+    last = today - timedelta(days=RECENT_LAG)
+    recent = [(last - timedelta(days=k)).isoformat() for k in range(RECENT_DAYS) if last - timedelta(days=k) >= start]
+    span = (last - start).days
+    rest = spread([(start + timedelta(days=i)).isoformat() for i in range(span + 1)])
+    for s in dict.fromkeys(recent + rest):
+        k = common.day_key(s, macro)
+        if flying(date.fromisoformat(s)) and k not in seed and _open(state, k):
+            yield k
+
+def _new_keys(state: dict, today: date, seed: set, eu_share: float | None=None):
+    share = common.EU_SHARE if eu_share is None else eu_share
+    us, eu = (_new_days(state, today, seed, 'US'), _new_days(state, today, seed, 'EU'))
+    n_eu = k = 0
+    while True:
+        k += 1
+        want_eu = share > 0 and n_eu + 1 <= share * k + 1e-09
+        first, second = (eu, us) if want_eu else (us, eu)
+        d = next(first, None)
+        if d is None:
+            d = next(second, None)
+            if d is None:
+                return
+        n_eu += common.macro_of_key(d) == 'EU'
+        yield d
+
+def weglide_days(state: dict, n: int, today: date, pending=(), ac: str | None=None, listed=(), eu_share: float | None=None) -> list[tuple[str, str]]:
     out = []
     seed = set(state['seed_days'])
     for d in sorted(pending):
@@ -104,11 +132,7 @@ def weglide_days(state: dict, n: int, today: date, pending=(), ac: str | None=No
     rv = [d for d in sorted(state['done']) if d not in pending and _revisit(state, d, ac)]
     rv.sort(key=lambda d: (d not in listed, d))
     rv = iter(rv)
-    last = today - timedelta(days=RECENT_LAG)
-    recent = [(last - timedelta(days=k)).isoformat() for k in range(RECENT_DAYS)]
-    span = (last - START).days
-    rest = spread([(START + timedelta(days=i)).isoformat() for i in range(span + 1)])
-    new = iter(dict.fromkeys((s for s in recent + rest if flying(date.fromisoformat(s)) and s not in seed and _open(state, s))))
+    new = _new_keys(state, today, seed, eu_share)
     every = max(2, round(1 / REVISIT_SHARE))
     k = 0
     while len(out) < n:
@@ -147,4 +171,8 @@ def progress(state: dict, today: date) -> dict:
     rescore = sum((1 for d in done if _rescore(state, d, state.get('corr_v'))))
     ac = common.aircraft_version()
     revisit = sum((1 for d in done if _revisit(state, d, ac)))
-    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo, 'rescore_left': rescore, 'revisit_left': revisit, 'grids': sum((1 for x in done.values() if x.get('grids')))}
+    by_macro = {}
+    for d in done:
+        m = common.macro_of_key(d)
+        by_macro[m] = by_macro.get(m, 0) + 1
+    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo, 'rescore_left': rescore, 'revisit_left': revisit, 'grids': sum((1 for x in done.values() if x.get('grids'))), 'by_macro': by_macro}

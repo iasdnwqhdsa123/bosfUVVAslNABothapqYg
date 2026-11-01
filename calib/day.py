@@ -115,6 +115,7 @@ ASOS_PER_BOX = 3
 CU_MAX_M = 4000
 RAOB_PAD = 0.5
 MIX_DTHETA = 1.0
+_NO_RAOB_NOTED = False
 
 class Obs:
 
@@ -220,16 +221,20 @@ def raob_summary(text: str) -> dict | None:
     t2k = next((lv[i - 1][2] + (lv[i][2] - lv[i - 1][2]) * (z0 + 2000 - lv[i - 1][1]) / (lv[i][1] - lv[i - 1][1]) for i in range(1, len(lv)) if lv[i][1] >= z0 + 2000 > lv[i - 1][1]), None)
     return {'mix': None if mix is None else round(mix), 'lapse2': None if t2k is None else round((lv[0][2] - t2k) / 2, 2), 't_sfc': lv[0][2], 'levels': [[round(p, 1), round(z), round(t, 1), None if d is None else round(d, 1)] for p, z, t, d in lv]}
 
+def asos_network(code: str, macro: str='US') -> str:
+    return f'{code}_ASOS' if macro == 'US' else f'{code}__ASOS'
+
 def observations(client: Obs, day: str, boxes_: list[dict], cache: str) -> list[dict]:
     out = []
-    raobs = obs_stations(client, cache, 'RAOB')
+    raobs = obs_stations(client, cache, 'RAOB') if any((common.macro_of(B['region']) == 'US' for B in boxes_)) else []
     for B in boxes_:
         pts = [f['tp'] for f in B['flights'] if f.get('tp')]
         if not pts:
             continue
+        macro = common.macro_of(B['region'])
         sts = []
         for st_ in sorted({f['state'] for f in B['flights'] if f.get('state')}):
-            sts += obs_stations(client, cache, f'{st_}_ASOS')
+            sts += obs_stations(client, cache, asos_network(st_, macro))
         chosen = pick_stations(sts, pts, day, ASOS_PER_BOX, B['bbox'])
         if chosen:
             d0 = datetime.fromisoformat(day)
@@ -240,6 +245,12 @@ def observations(client: Obs, day: str, boxes_: list[dict], cache: str) -> list[
                 if got.get(s['id']):
                     out.append({'kind': 'asos', 'sid': s['id'], 'date': day, 'region': B['region'], 'tz': B['tz'], 'tp': [s['lon'], s['lat']], 'bbox': None, 'elev': s.get('elev'), 'obs': asos_summary(got[s['id']], day, B['tz'])})
         bb = B['bbox']
+        if macro != 'US':
+            global _NO_RAOB_NOTED
+            if not _NO_RAOB_NOTED:
+                common.note("obs: no soundings for Europe's boxes (IEM's RAOB archive has no European station)")
+                _NO_RAOB_NOTED = True
+            continue
         rs = pick_stations([r for r in raobs if r['id'] and r['id'].startswith('_')], pts, day, 1, [bb[0] - RAOB_PAD, bb[1] - RAOB_PAD, bb[2] + RAOB_PAD, bb[3] + RAOB_PAD])
         if rs:
             t = int((datetime.fromisoformat(day) + timedelta(days=1)).replace(tzinfo=timezone.utc).timestamp())
@@ -265,7 +276,8 @@ def categorize(L: dict) -> str:
 
 def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None, grids: str | None=None, corrections: str | None=None) -> dict:
     models = tuple(models)
-    res = {'version': common.DAY_VERSION, 'date': day, 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short or [], 'obs': obs or [], 'physics_v': common.PHYSICS_VERSION, 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': False}
+    macro = common.macro_of_items(flights + list(short or []))
+    res = {'version': common.DAY_VERSION, 'date': day, 'macro': macro, 'key': common.day_key(day, macro), 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short or [], 'obs': obs or [], 'physics_v': common.physics_version(macro), 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': False}
     os.makedirs(work, exist_ok=True)
     items = flights + res['short'] + res['obs']
     for model in models:
@@ -311,7 +323,7 @@ def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours:
             names.update(arrays)
             np.savez_compressed(os.path.join(dest, '_hours', f'{stamp}.npz'), **arrays)
     shutil.copyfile(f'{base}/latest.json', os.path.join(dest, 'latest.json'))
-    out = {**meta, 'physics_v': common.PHYSICS_VERSION, 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
+    out = {**meta, 'physics_v': common.physics_version(common.MODEL_MACRO.get(meta.get('model'), 'US')), 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
     common.write_json(os.path.join(dest, 'meta.json'), out, indent=1)
     return out
 
@@ -320,7 +332,7 @@ def grids_usable(gdir: str, bbox: list, model: str) -> str | None:
     if not os.path.exists(mp) or not os.path.exists(os.path.join(gdir, 'latest.json')) or (not glob.glob(os.path.join(gdir, '_hours', '*.npz'))):
         return 'missing'
     m = common.read_json(mp)
-    if m.get('physics_v') != common.PHYSICS_VERSION:
+    if m.get('physics_v') != common.physics_version(common.MODEL_MACRO.get(model, 'US')):
         return 'physics'
     if m.get('model') != model or [round(float(v), 2) for v in m.get('bbox') or []] != [round(float(v), 2) for v in bbox]:
         return 'box'
@@ -371,16 +383,32 @@ def _merge_eval(results: list, B: dict, inputs: list, model: str, bi: int, suffi
         for c, e in zip(f.get('climbs') or [], r['points']):
             c.setdefault('models' + suffix, {})[model] = e.get('own')
         f.setdefault('probe_m' + ('c' if suffix else ''), {})[model] = {str(p['t']): None if e is None else {k: e.get(k) for k in track.PROBE_KEYS} for p, e in zip(inputs[r['ref']]['probes'], r.get('probes') or [])}
+BUILDER = {'hrrr': 'build_day.py', 'gfs': 'build_day.py', 'ecmwf': 'build_eu.py', 'icon': 'build_eu.py', 'icond2': 'build_eu.py'}
+
+def build_command(day: str, B: dict, out: str, model: str, workers: int, work: str) -> list[str] | None:
+    bbox = ','.join((f'{v:.2f}' for v in B['bbox']))
+    script = BUILDER.get(model, 'build_day.py')
+    cmd = ['python3', os.path.join(common.HERE, script), '--day', day, '--tz', B['tz'], f'--bbox={bbox}', '--out', out, '--model', model, '--workers', str(workers)]
+    if script == 'build_eu.py':
+        import build_eu
+        if not build_eu.covers(model, B['bbox']):
+            return None
+        cmd += ['--cache', os.path.join(work, 'eu-cache')]
+    return cmd
 
 def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int, grids: str | None=None, corrections: str | None=None) -> None:
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
+    key = res.get('key') or day
     for bi, B in enumerate(boxes(flights)):
         out = os.path.join(work, f'{model}-box{bi}')
         shutil.rmtree(out, ignore_errors=True)
-        info = {'model': model, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False}
-        bbox = ','.join((f'{v:.2f}' for v in B['bbox']))
-        common.note(f"{day} {model} box {B['region']} {bbox} flights {len(B['flights'])}")
-        built = _run(['python3', os.path.join(common.HERE, 'build_day.py'), '--day', day, '--tz', B['tz'], f'--bbox={bbox}', '--out', out, '--model', model, '--workers', str(workers)], common.PIPELINE, BUILD_TIMEOUT, logf)
+        info = {'model': model, 'box': bi, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False}
+        cmd = build_command(day, B, out, model, workers, work)
+        if cmd is None:
+            common.note(f"{day} {model} box {B['region']}: outside the model's domain, not built")
+            continue
+        common.note(f"{day} {model} box {B['region']} {cmd[6]} flights {len(B['flights'])}")
+        built = _run(cmd, common.PIPELINE, BUILD_TIMEOUT, logf)
         base = os.path.join(out, model)
         if not built or not os.path.exists(f'{base}/latest.json'):
             info['error'] = 'build'
@@ -389,33 +417,41 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             continue
         if grids:
             try:
-                gdir = os.path.join(grids, day, f'{model}-box{bi}')
+                gdir = os.path.join(grids, key, f'{model}-box{bi}')
                 shutil.rmtree(gdir, ignore_errors=True)
-                save_grids(base, gdir, {'day': day, 'model': model, 'region': B['region'], 'bbox': B['bbox'], 'tz': B['tz'], 'box': bi})
+                save_grids(base, gdir, {'day': day, 'key': key, 'model': model, 'region': B['region'], 'bbox': B['bbox'], 'tz': B['tz'], 'box': bi})
                 info['saved'] = True
             except Exception as e:
                 common.note(f'{day} {model} box {bi}: grids not saved: {e!r}')
-                shutil.rmtree(os.path.join(grids, day, f'{model}-box{bi}'), ignore_errors=True)
+                shutil.rmtree(os.path.join(grids, key, f'{model}-box{bi}'), ignore_errors=True)
         if _eval_box(base, B, out, model, bi, info, logf, corrections):
             info['ok'] = True
         res['boxes'].append(info)
         shutil.rmtree(out, ignore_errors=True)
+
+def _was_built(rec: dict, model: str, bi: int) -> bool:
+    bs = [b for b in rec.get('boxes') or [] if b.get('model') == model]
+    return any((b.get('box', bi) == bi for b in bs))
 
 def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) -> dict:
     day = rec['date']
     flights = [clean(f) for f in rec.get('flights') or []]
     short = [clean(f) for f in rec.get('short') or []]
     obs = [clean(f) for f in rec.get('obs') or []]
-    models = tuple(rec.get('models') or common.models_for({f.get('region') for f in flights + short}))
-    res = {**rec, 'version': common.DAY_VERSION, 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short, 'obs': obs, 'physics_v': common.PHYSICS_VERSION, 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': True, 'rescored_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    macro = rec.get('macro') or common.macro_of_items(flights + short)
+    key = rec.get('key') or common.day_key(day, macro)
+    models = tuple(rec.get('models') or common.models_for({f.get('region') for f in flights + short}, day))
+    res = {**rec, 'version': common.DAY_VERSION, 'macro': macro, 'key': key, 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short, 'obs': obs, 'physics_v': common.physics_version(macro), 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': True, 'rescored_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
     os.makedirs(work, exist_ok=True)
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
     items = flights + short + obs
     for model in models:
         for bi, B in enumerate(boxes(items)):
-            info = {'model': model, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False, 'saved': True}
-            gdir = os.path.join(grids, day, f'{model}-box{bi}')
+            info = {'model': model, 'box': bi, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False, 'saved': True}
+            gdir = os.path.join(grids, key, f'{model}-box{bi}')
             why = grids_usable(gdir, B['bbox'], model)
+            if why == 'missing' and model in common.SAMPLED and (not _was_built(rec, model, bi)):
+                continue
             if why:
                 info['error'] = f'grids:{why}'
                 res['boxes'].append(info)

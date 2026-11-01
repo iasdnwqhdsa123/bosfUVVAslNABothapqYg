@@ -220,7 +220,7 @@ def csv_rows(path: str) -> list[dict]:
     with gzip.open(path, 'rt', encoding='utf-8') as f:
         return [{k: _typed(v) for k, v in r.items()} for r in csv.DictReader(f)]
 
-def load(data: str, which: str='all', model: str='hrrr') -> dict:
+def load(data: str, which: str='all', model: str | None=None) -> dict:
     days = rows.load_days(data)
     srcs = {'seed'} if which == 'seed' else None
     if days:

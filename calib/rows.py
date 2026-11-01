@@ -35,6 +35,7 @@ def mleg(x: dict, model: str, corrected: bool=False) -> dict:
 def _base(f: dict, pilots: dict | None) -> dict:
     base = {k: f.get(k) for k in FLIGHT_KEYS}
     base['fid'] = f['id']
+    base['macro'] = common.macro_of(f.get('region'))
     base['pilot'] = f.get('pilot') or (pilots or {}).get(str(f['id']))
     return base
 

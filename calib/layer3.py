@@ -9,9 +9,10 @@ import rows
 import train
 TARGETS = ('xc', 'climb', 'circ', 'exit')
 
-def corrected_days(days: list[dict], model: str) -> tuple[list[dict], int, int]:
+def corrected_days(days: list[dict], model: str | None) -> tuple[list[dict], int, int]:
     out, done, total = ([], 0, 0)
     for d in days:
+        m_ = rows.model_of(d, model)
         d2 = copy.copy(d)
         d2['flights'] = []
         for f in d['flights']:
@@ -19,17 +20,17 @@ def corrected_days(days: list[dict], model: str) -> tuple[list[dict], int, int]:
             f2['legs'], f2['climbs'] = ([], [])
             for L in f.get('legs') or []:
                 total += 1
-                c = (L.get('models_c') or {}).get(model)
+                c = (L.get('models_c') or {}).get(m_)
                 if c:
                     done += 1
-                    L = {**L, 'models': {**(L.get('models') or {}), model: c}}
+                    L = {**L, 'models': {**(L.get('models') or {}), m_: c}}
                 f2['legs'].append(L)
             for C in f.get('climbs') or []:
                 total += 1
-                c = (C.get('models_c') or {}).get(model)
+                c = (C.get('models_c') or {}).get(m_)
                 if c:
                     done += 1
-                    C = {**C, 'models': {**(C.get('models') or {}), model: c}}
+                    C = {**C, 'models': {**(C.get('models') or {}), m_: c}}
                 f2['climbs'].append(C)
             d2['flights'].append(f2)
         out.append(d2)

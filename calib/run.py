@@ -12,8 +12,9 @@ import workq
 KEEP_LOGS = 20
 PILOT_BACKFILL_DAYS = 20
 
-def models_of(items: list[dict]) -> tuple:
-    return common.models_for({f.get('region') for f in items if f.get('region')})
+def models_of(items: list[dict], day: str | None=None) -> tuple:
+    day = day or next((f.get('date') for f in items if f.get('date')), None)
+    return common.models_for({f.get('region') for f in items if f.get('region')}, common.day_of(day) if day else None)
 QUIET_SHARE = 0.2
 QUIET_MIN_AFT = 2
 QUIET_KM = 150
@@ -22,9 +23,9 @@ SHORT_PER_REGION = 15
 def _inside(p, bbox) -> bool:
     return bbox[0] <= p[0] <= bbox[2] and bbox[1] <= p[1] <= bbox[3]
 
-def short_flights(d: str, items: list, aircraft: dict, long: list[dict], summary: dict, state: dict) -> list[dict]:
+def short_flights(d: str, items: list, aircraft: dict, long: list[dict], summary: dict, state: dict, macro: str='US') -> list[dict]:
     taken = {f['id'] for f in long}
-    cands = [c for c in (weglide.short_candidate(it, aircraft) for it in items if it.get('id') not in taken) if c and c['date'] == d]
+    cands = [c for c in (weglide.short_candidate(it, aircraft, macro) for it in items if it.get('id') not in taken) if c and c['date'] == d]
     boxes = {B['region']: B['bbox'] for B in dayrun.boxes(long)} if long else {}
     keep = [c for c in cands if c['region'] in boxes and _inside(c['tp'], boxes[c['region']])]
     q = state.setdefault('quiet', {'days': 0, 'built': 0})
@@ -58,16 +59,17 @@ def _short_tracks(client, d: str, shorts: list[dict], long: list[dict]) -> None:
             c.update({k: v for k, v in sm.items() if k != 'tp'}, tp=sm['tp'], tp_src='track', tracked=True)
 
 def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> tuple[list[dict], list[dict]]:
-    items = client.day_list(d)
-    summary = weglide.day_summary(d, items, aircraft)
+    day, macro = common.split_key(d)
+    items = client.day_list(day, macro)
+    summary = weglide.day_summary(day, items, aircraft, macro, getattr(client, 'last_full', None))
     state.setdefault('daylists', {})[d] = summary
     seen = set(state['seen'])
-    chosen = weglide.choose(d, items, aircraft, state['counts'], state['unmapped'], seen)
+    chosen = weglide.choose(day, items, aircraft, state['counts'], state['unmapped'], seen, macro=macro)
     common.note(f'{d}: list {len(items)} flights, chosen {len(chosen)}')
     out, stopped = _fetch_chosen(client, d, chosen, state)
     if stopped:
         raise weglide.Stop(client.stopped or 'stopped')
-    shorts = short_flights(d, items, aircraft, out, summary, state)
+    shorts = short_flights(day, items, aircraft, out, summary, state, macro)
     if shorts:
         try:
             _short_tracks(client, d, shorts, out)
@@ -77,12 +79,13 @@ def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> tuple[
     return (out, shorts)
 
 def _revisit_from_weglide(client, d: str, state: dict, aircraft: dict, stored: list[dict], items: list | None=None) -> tuple[list[dict], bool]:
+    day, macro = common.split_key(d)
     if items is None:
-        items = client.day_list(d)
-    state.setdefault('daylists', {})[d] = weglide.day_summary(d, items, aircraft)
+        items = client.day_list(day, macro)
+    state.setdefault('daylists', {})[d] = weglide.day_summary(day, items, aircraft, macro)
     seen = set(state['seen']) | {f['id'] for f in stored}
     taken = {(f.get('region'), f.get('grp')) for f in stored}
-    chosen = weglide.choose(d, items, aircraft, state['counts'], {}, seen, taken=taken, room=weglide.MAX_PER_DAY - len(stored))
+    chosen = weglide.choose(day, items, aircraft, state['counts'], {}, seen, taken=taken, room=weglide.MAX_PER_DAY - len(stored), macro=macro)
     common.note(f'{d}: chosen again from {len(items)} listed: {len(chosen)} more')
     return _fetch_chosen(client, d, chosen, state)
 
@@ -116,7 +119,7 @@ def _observations(obs_client, d: str, items: list[dict], data: str) -> list[dict
     if not items or obs_client.used >= obs_client.budget:
         return []
     try:
-        return dayrun.observations(obs_client, d, dayrun.boxes(items), os.path.join(data, 'obs'))
+        return dayrun.observations(obs_client, common.day_of(d), dayrun.boxes(items), os.path.join(data, 'obs'))
     except Exception as e:
         common.note(f'{d}: observations failed: {e!r}')
         return []
@@ -174,7 +177,7 @@ def collect(a) -> int:
             common.log(f'day {i + 1} ({src}): no flights to use')
         else:
             obs = _observations(obs_client, d, flights + shorts, data)
-            res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=models_of(flights + shorts), workers=a.workers, short=shorts, obs=obs)
+            res = dayrun.run_day(common.day_of(d), flights, os.path.join(a.work, f'd{i}'), models=models_of(flights + shorts, d), workers=a.workers, short=shorts, obs=obs)
             okb = sum((b.get('ok', False) for b in res['boxes']))
             status = 'ok' if okb == len(res['boxes']) else 'partial' if okb else 'failed'
             if src == 'new' and status != 'failed':
@@ -224,7 +227,7 @@ def _redo_day(a, d: str, i: int, seed_by: dict, state: dict, run: dict, obs_clie
         return
     if not obs:
         obs = _observations(obs_client, d, flights + shorts, a.data)
-    res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=models_of(flights + shorts), workers=a.workers, short=shorts, obs=obs)
+    res = dayrun.run_day(common.day_of(d), flights, os.path.join(a.work, f'd{i}'), models=models_of(flights + shorts, d), workers=a.workers, short=shorts, obs=obs)
     okb = sum((b.get('ok', False) for b in res['boxes']))
     if okb:
         common.write_json(fn, res)
@@ -241,7 +244,7 @@ def _backfill_pilots(client, state: dict, seed_by: dict, data: str, t0: float, m
         return 0
     pil = state.setdefault('pilots', {})
     tried = state.setdefault('pilot_days', {})
-    days = list(state['seed_days']) + sorted((d for d, x in state['done'].items() if x.get('src') == 'new'))
+    days = list(state['seed_days']) + sorted((d for d, x in state['done'].items() if x.get('src') == 'new' and common.macro_of_key(d) == 'US'))
     n, aircraft = (0, common.load_aircraft())
     for d in days:
         if n >= PILOT_BACKFILL_DAYS or (time.time() - t0) / 60 > minutes or tried.get(d, 0) >= 2:

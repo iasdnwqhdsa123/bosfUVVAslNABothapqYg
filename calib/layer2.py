@@ -308,23 +308,26 @@ def foot_of(lon: float, lat: float, agl: float, e: dict) -> tuple[float, float, 
     return (lon - dx / kx, lat - dy / 110540, zr)
 
 def points(days: list[dict], model: str, grids: Grids | None=None, bad: dict | None=None) -> list[dict]:
+    import rows as rowsmod
     out = []
     for d in days:
         if bad and d['date'] in bad:
             continue
+        m_ = rowsmod.model_of(d, model)
+        gkey = d.get('key') or d['date']
         for f in d['flights']:
             tr = f.get('track') or []
-            bi = (f.get('model_' + model) or {}).get('box')
+            bi = (f.get('model_' + m_) or {}).get('box')
             cs = [c for c in track._climbs_sorted(f) if not c.get('engon')]
             for i, c in enumerate(cs):
-                own = (c.get('models') or {}).get(model) or {}
+                own = (c.get('models') or {}).get(m_) or {}
                 p = track.pos_at(f, c['_t0']) if tr else {'lon': c.get('lon'), 'lat': c.get('lat'), 'agl': c.get('agl0')}
                 if p['lon'] is None or own is None:
                     continue
                 agl = p.get('agl') if p.get('agl') is not None else c.get('agl0')
                 if agl is None:
                     continue
-                e = _env(own, grids, d['date'], model, bi, p['lon'], p['lat'], c['_t0'])
+                e = _env(own, grids, gkey, m_, bi, p['lon'], p['lat'], c['_t0'])
                 if not e or (e['cb'] or e['zi']) < MIN_DEPTH:
                     continue
                 flon, flat, zr = foot_of(p['lon'], p['lat'], max(50.0, agl), e)

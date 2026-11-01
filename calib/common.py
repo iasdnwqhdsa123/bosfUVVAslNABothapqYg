@@ -16,28 +16,92 @@ PIPELINE = os.path.join(ROOT, 'pipeline')
 PUB = os.environ.get('CALIB_PUB') or next((p for p in (os.path.join(ROOT, d) for d in ('public', 'pipeline')) if os.path.isdir(os.path.join(p, 'geo', 'ridge'))), ROOT)
 REGION = {**{s: 'PNW' for s in ('WA', 'OR', 'ID')}, **{s: 'CA-NV' for s in ('CA', 'NV')}, **{s: 'Rockies' for s in ('CO', 'UT', 'WY', 'MT')}, **{s: 'Southwest' for s in ('AZ', 'NM')}, **{s: 'TX-Plains' for s in ('TX', 'OK', 'KS', 'NE')}, **{s: 'Midwest' for s in ('OH', 'IL', 'MN', 'IN', 'IA', 'WI', 'MO', 'MI', 'ND', 'SD')}, **{s: 'Southeast' for s in ('FL', 'NC', 'SC', 'GA', 'TN', 'AL', 'MS', 'LA', 'AR', 'KY')}, **{s: 'MidAtlantic' for s in ('VA', 'PA', 'WV', 'NJ', 'DE', 'MD', 'DC')}, **{s: 'Northeast' for s in ('NY', 'VT', 'MA', 'NH', 'ME', 'CT', 'RI')}}
 FLAT_REGIONS = {'Midwest', 'TX-Plains', 'Southeast', 'Northeast', 'MidAtlantic'}
-MACRO = {'US': {'models': tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr,gfs').split(',') if m)) or ('hrrr',), 'tz': 'America/Chicago'}}
-REGION_MACRO = {r: 'US' for r in set(REGION.values())}
-MODEL_INDEX = {'hrrr': 0, 'gfs': 1, 'ecmwf': 2, 'icon': 3}
+EU_REGION = {**{c: 'Germany-Benelux' for c in ('DE', 'NL', 'BE', 'LU')}, **{c: 'Alps' for c in ('AT', 'CH', 'LI')}, 'FR': 'France', 'MC': 'France', **{c: 'Iberia' for c in ('ES', 'PT', 'AD')}, **{c: 'UK-Ireland' for c in ('GB', 'IE', 'IM', 'JE', 'GG')}, **{c: 'Poland-Czech' for c in ('PL', 'CZ', 'SK', 'HU', 'LT', 'LV', 'EE')}, **{c: 'Scandinavia' for c in ('SE', 'NO', 'FI', 'DK', 'IS')}, **{c: 'Italy-Apennines' for c in ('IT', 'SM', 'MT')}, **{c: 'Balkans' for c in ('SI', 'HR', 'BA', 'RS', 'ME', 'MK', 'AL', 'GR', 'BG', 'RO', 'XK', 'MD')}}
+EU_FLAT_REGIONS = {'Germany-Benelux', 'Poland-Czech'}
+FLAT_REGIONS |= EU_FLAT_REGIONS
+ALPS_BOXES = ((5.0, 45.3, 16.8, 48.1), (5.0, 43.7, 7.8, 45.3), (9.5, 44.9, 13.5, 45.3))
+EU_BOX = (-25.0, 34.0, 44.75, 71.5)
+MACRO = {'US': {'models': tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr,gfs').split(',') if m)) or ('hrrr',), 'tz': 'America/Chicago'}, 'EU': {'models': tuple((m for m in os.environ.get('CALIB_EU_MODELS', 'ecmwf,icon,icond2').split(',') if m)) or ('ecmwf',), 'tz': 'Europe/Berlin'}}
+REGION_MACRO = {**{r: 'US' for r in set(REGION.values())}, **{r: 'EU' for r in set(EU_REGION.values())}}
+MODEL_INDEX = {'hrrr': 0, 'gfs': 1, 'ecmwf': 2, 'icon': 3, 'icond2': 4}
+MODEL_MACRO = {'hrrr': 'US', 'gfs': 'US', 'ecmwf': 'EU', 'icon': 'EU', 'icond2': 'EU'}
+MODEL_LABEL = {'hrrr': 'HRRR', 'gfs': 'GFS', 'ecmwf': 'ECMWF', 'icon': 'ICON', 'icond2': 'ICON-D2'}
+MACRO_LABEL = {'US': 'United States', 'EU': 'Europe'}
+EU_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_SHARE', '0.4') or 0.4)))
+EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '0.25') or 0.25)))
+SAMPLED = {'icon', 'icond2'}
+ICON_FIRST = '2025-01-17'
+EU_START = '2024-03-01'
 
 def macro_of(region: str | None) -> str:
     return REGION_MACRO.get(region, 'US')
 
-def models_for(regions) -> tuple:
+def model_label(model: str) -> str:
+    return MODEL_LABEL.get(model, (model or '').upper())
+
+def icon_sampled(day: str) -> bool:
+    if not day or day < ICON_FIRST or EU_ICON_SHARE <= 0:
+        return False
+    h = int(hashlib.sha256(f'icon-sample:{day}'.encode()).hexdigest()[:8], 16) / 2 ** 32
+    return h < EU_ICON_SHARE
+
+def models_for(regions, day: str | None=None) -> tuple:
     out = []
     for a in sorted({macro_of(r) for r in regions} or {'US'}):
-        out += [m for m in MACRO[a]['models'] if m not in out]
+        for m in MACRO[a]['models']:
+            if m in out or (m in SAMPLED and (not (day and icon_sampled(day)))):
+                continue
+            out.append(m)
     return tuple(out)
 
 def primary_model(regions=()) -> str:
     return models_for(regions)[0]
+
+def day_key(day: str, macro: str='US') -> str:
+    return day if macro == 'US' else f'{day}_{macro}'
+
+def split_key(key: str) -> tuple[str, str]:
+    if '_' in key:
+        d, m = key.split('_', 1)
+        return (d, m)
+    return (key, 'US')
+
+def day_of(key: str) -> str:
+    return split_key(key)[0]
+
+def macro_of_key(key: str) -> str:
+    return split_key(key)[1]
+
+def macro_of_items(items) -> str:
+    ms = {macro_of(f.get('region')) for f in items if f.get('region')}
+    return sorted(ms)[0] if len(ms) == 1 else 'US' if not ms else sorted(ms, key=lambda m: m != 'US')[0]
 RELIEF_FLAT = 300
 TZ = {**{s: 'America/New_York' for s in 'CT DE FL GA MA MD ME NC NH NJ NY OH PA RI SC VA VT WV DC MI IN KY'.split()}, **{s: 'America/Chicago' for s in 'AL AR IA IL KS LA MN MO MS ND NE OK SD TN TX WI'.split()}, **{s: 'America/Denver' for s in 'CO MT NM UT WY ID'.split()}, 'AZ': 'America/Phoenix', **{s: 'America/Los_Angeles' for s in 'CA NV OR WA'.split()}}
+EU_TZ = {**{c: 'Europe/Berlin' for c in 'DE NL BE LU AT CH LI DK SE NO PL CZ SK HU SI HR BA RS ME MK AL IT SM MT ES AD MC'.split()}, 'FR': 'Europe/Paris', 'PT': 'Europe/Lisbon', 'GB': 'Europe/London', 'IE': 'Europe/Dublin', 'IM': 'Europe/London', 'JE': 'Europe/London', 'GG': 'Europe/London', 'IS': 'Atlantic/Reykjavik', 'FI': 'Europe/Helsinki', 'LT': 'Europe/Vilnius', 'LV': 'Europe/Riga', 'EE': 'Europe/Tallinn', 'GR': 'Europe/Athens', 'BG': 'Europe/Sofia', 'RO': 'Europe/Bucharest', 'MD': 'Europe/Chisinau', 'XK': 'Europe/Belgrade'}
 CENTROID = {'AL': (-86.8, 32.8), 'AZ': (-111.7, 34.3), 'AR': (-92.4, 34.9), 'CA': (-119.4, 37.2), 'CO': (-105.5, 39.0), 'CT': (-72.7, 41.6), 'DE': (-75.5, 39.0), 'FL': (-81.7, 28.6), 'GA': (-83.4, 32.7), 'ID': (-114.6, 44.4), 'IL': (-89.2, 40.0), 'IN': (-86.3, 39.9), 'IA': (-93.5, 42.1), 'KS': (-98.4, 38.5), 'KY': (-85.3, 37.5), 'LA': (-92.0, 31.1), 'ME': (-69.2, 45.4), 'MD': (-76.8, 39.0), 'MA': (-71.8, 42.3), 'MI': (-85.4, 44.3), 'MN': (-94.3, 46.3), 'MS': (-89.7, 32.7), 'MO': (-92.5, 38.4), 'MT': (-109.6, 47.0), 'NE': (-99.8, 41.5), 'NV': (-116.6, 39.3), 'NH': (-71.6, 43.7), 'NJ': (-74.7, 40.2), 'NM': (-106.1, 34.4), 'NY': (-75.5, 42.9), 'NC': (-79.4, 35.6), 'ND': (-100.5, 47.5), 'OH': (-82.8, 40.3), 'OK': (-97.5, 35.6), 'OR': (-120.6, 43.9), 'PA': (-77.8, 40.9), 'RI': (-71.5, 41.7), 'SC': (-80.9, 33.9), 'SD': (-100.2, 44.4), 'TN': (-86.4, 35.9), 'TX': (-99.3, 31.5), 'UT': (-111.7, 39.3), 'VT': (-72.7, 44.1), 'VA': (-78.8, 37.5), 'WA': (-120.5, 47.4), 'WV': (-80.6, 38.6), 'WI': (-89.9, 44.6), 'WY': (-107.6, 43.0)}
+EU_CENTROID = {'DE': (10.4, 51.1), 'NL': (5.3, 52.2), 'BE': (4.6, 50.6), 'LU': (6.1, 49.8), 'AT': (14.1, 47.6), 'CH': (8.2, 46.8), 'LI': (9.5, 47.2), 'FR': (2.5, 46.6), 'MC': (7.4, 43.7), 'ES': (-3.7, 40.3), 'PT': (-8.0, 39.6), 'AD': (1.6, 42.5), 'GB': (-2.0, 53.0), 'IE': (-8.0, 53.2), 'IM': (-4.5, 54.2), 'JE': (-2.1, 49.2), 'GG': (-2.6, 49.5), 'PL': (19.4, 52.1), 'CZ': (15.5, 49.8), 'SK': (19.7, 48.7), 'HU': (19.4, 47.2), 'LT': (23.9, 55.3), 'LV': (24.6, 56.9), 'EE': (25.0, 58.7), 'SE': (16.0, 62.0), 'NO': (9.5, 61.5), 'FI': (26.0, 64.0), 'DK': (9.9, 56.0), 'IS': (-18.6, 64.9), 'IT': (12.5, 42.8), 'SM': (12.5, 43.9), 'MT': (14.4, 35.9), 'SI': (14.8, 46.1), 'HR': (16.5, 45.3), 'BA': (17.8, 44.2), 'RS': (20.9, 44.2), 'ME': (19.3, 42.7), 'MK': (21.7, 41.6), 'AL': (20.0, 41.1), 'GR': (22.0, 39.1), 'BG': (25.2, 42.7), 'RO': (25.0, 45.9), 'XK': (20.9, 42.6), 'MD': (28.5, 47.2)}
+
+def centroid_of(code: str | None):
+    return CENTROID.get(code or '') or EU_CENTROID.get(code or '')
 
 def nearest_state(lon: float, lat: float) -> str:
     k = math.cos(math.radians(lat))
     return min(CENTROID, key=lambda s: ((CENTROID[s][0] - lon) * k) ** 2 + (CENTROID[s][1] - lat) ** 2)
+_SMALL = {'LI', 'MC', 'AD', 'SM', 'MT', 'IM', 'JE', 'GG', 'XK', 'LU', 'ME'}
+
+def nearest_country(lon: float, lat: float) -> str | None:
+    if not (EU_BOX[0] <= lon <= EU_BOX[2] and EU_BOX[1] <= lat <= EU_BOX[3]):
+        return None
+    k = math.cos(math.radians(lat))
+    return min((c for c in EU_CENTROID if c not in _SMALL), key=lambda c: ((EU_CENTROID[c][0] - lon) * k) ** 2 + (EU_CENTROID[c][1] - lat) ** 2)
+
+def in_alps(lon: float | None, lat: float | None) -> bool:
+    return lon is not None and lat is not None and any((w <= lon <= e and s <= lat <= n for w, s, e, n in ALPS_BOXES))
+
+def eu_region(country: str | None, lon: float | None=None, lat: float | None=None) -> str | None:
+    if in_alps(lon, lat):
+        return 'Alps'
+    return EU_REGION.get(country or '')
 
 def load_aircraft() -> dict:
     with open(os.path.join(HERE, 'aircraft.json'), encoding='utf-8') as f:
@@ -93,8 +157,14 @@ def _version_of(paths: list[str]) -> str:
             found = True
             h.update(os.path.basename(p).encode() + b'\x00' + _stripped(p).encode() + b'\x00')
     return h.hexdigest()[:12] if found else 'none'
-PHYSICS_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h')) + [os.path.join(HERE, 'build_day.py')]
+_PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
+PHYSICS_FILES = _PIPELINE_FILES + [os.path.join(HERE, 'build_day.py')]
+PHYSICS_FILES_EU = _PIPELINE_FILES + [os.path.join(PIPELINE, 'om.py'), os.path.join(PIPELINE, 'replay.py'), os.path.join(HERE, 'build_eu.py')]
 PHYSICS_VERSION = _version_of(PHYSICS_FILES)
+PHYSICS_VERSION_EU = _version_of(PHYSICS_FILES_EU)
+
+def physics_version(macro: str='US') -> str:
+    return globals()['PHYSICS_VERSION_EU'] if macro == 'EU' else globals()['PHYSICS_VERSION']
 SCORE_FILES = [os.path.join(HERE, f) for f in ('evaluate.js', 'lines.js', 'site.js', 'gbm.js', 'corrections.mjs')] + glob.glob(os.path.join(ROOT, 'public', 'js', 'shared', '*')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'ridgex.js')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'png*.js'))
 SCORE_VERSION = _version_of(SCORE_FILES)
 
