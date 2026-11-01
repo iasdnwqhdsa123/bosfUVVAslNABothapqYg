@@ -1,0 +1,978 @@
+{
+"_": "WeGlide type name -> the site's polar (POLARS key); exact false: the nearest similar polar. null: left out on purpose (motor gliders that tour, hang/paragliders). Types not here are counted in the data report (unmapped) and skipped: add them here.",
+"types": {
+"AS 33 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"AS 33 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"AS 33 Es 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"AS 33 Me 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"AS 34 Me 18m": {
+"key": "asg29",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"ASG 29 15m": {
+"key": "asg29_15",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASG 29 18m": {
+"key": "asg29",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASG 29 E 18m": {
+"key": "asg29",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASG 29 Es 18m": {
+"key": "asg29",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASG 32 Mi": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"ASH 25": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASH 25 Mi": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASH 26 E": {
+"key": "ash26e",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASH 30 Mi": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"ASH 31 Mi 18m": {
+"key": "asg29",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASH 31 Mi 21m": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"ASK 13": {
+"key": "ask13",
+"exact": true,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"ASK 21": {
+"key": "ask21",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"ASK 21 B": {
+"key": "ask21",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"ASK 23": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"ASK 23 B": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"ASW 15": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"ASW 15 B": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"ASW 17": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASW 19": {
+"key": "asw19",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"ASW 20": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 20 C": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 20 L": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 24": {
+"key": "asw24",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"ASW 24 B": {
+"key": "asw24",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"ASW 24 E": {
+"key": "asw24",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"ASW 27": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 27 B": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 28": {
+"key": "asw28",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"ASW 28 18 E": {
+"key": "asw28_18",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASW 28 18m": {
+"key": "asw28_18",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASW 28 E": {
+"key": "asw28",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"Antares 20E": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"Arcus": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Arcus E": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Arcus J": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Arcus M": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Arcus T": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 100": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"DG 1000M 20m": {
+"key": "dg1000",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 1000S 18m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 1000S 20m": {
+"key": "dg1000",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 1000T 20m": {
+"key": "dg1000",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 200": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"DG 300": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"DG 300 WL": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"DG 400": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"DG 400 17m": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"DG 600M": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"DG 800A/B 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"DG 800A/B 18m": {
+"key": "dg808",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"DG 800S 18m": {
+"key": "dg808",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"DG 808C Competition 18m": {
+"key": "dg808",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Discus 2a": {
+"key": "discus2",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"Discus 2b": {
+"key": "discus2",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"Discus 2c 18m": {
+"key": "discus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Discus 2c FES 18m": {
+"key": "discus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Discus 2cT 15m": {
+"key": "discus2",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"Discus 2cT 18m": {
+"key": "discus2",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"Discus a": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Discus b": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Discus b WL": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Discus bT": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Duo Discus": {
+"key": "duo",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Duo Discus T": {
+"key": "duo",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Duo Discus X": {
+"key": "duo",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Duo Discus XL": {
+"key": "duo",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"Duo Discus XLT": {
+"key": "duo",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"EB 29R": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"G 102 Astir CS": {
+"key": "astir",
+"exact": true,
+"cls": "club",
+"grp": "low"
+},
+"G 102 Astir CS 77": {
+"key": "astir",
+"exact": true,
+"cls": "club",
+"grp": "low"
+},
+"G 102 Astir CS Jeans": {
+"key": "astir",
+"exact": true,
+"cls": "club",
+"grp": "low"
+},
+"G 102 Club Astir": {
+"key": "astir",
+"exact": true,
+"cls": "club",
+"grp": "low"
+},
+"G 102 Std. Astir": {
+"key": "astir",
+"exact": true,
+"cls": "club",
+"grp": "low"
+},
+"G 103 Twin 2": {
+"key": "g103",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"G 103 Twin 3 18m": {
+"key": "g103",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"G 103 Twin Astir RG": {
+"key": "g103",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"G 103 Twin Astir Trainer FG": {
+"key": "g103",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"Genesis": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Glasflügel 304": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"HpH 304 CZ": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"HpH 304 CZ 17.4m": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"HpH 304 SJ Shark": {
+"key": "asg29",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"HpH 304C Wasp": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"JS1 18m": {
+"key": "js1",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"JS1C TJ 21m": {
+"key": "js1_21",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"JS3 15m": {
+"key": "asg29_15",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"JS3 18m": {
+"key": "js1",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"JS3 RES 15m": {
+"key": "asg29_15",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"JS3 RES 18m": {
+"key": "js1",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"JS3 TJ 15m": {
+"key": "asg29_15",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"JS3 TJ 18m": {
+"key": "js1",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"K 8": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"L-13 Blanik": {
+"key": "ask13",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"L-13 Blaník": {
+"key": "ask13",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"L23 SuperBlanik": {
+"key": "trainer",
+"exact": true,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"L23 SuperBlanik 18.2m": {
+"key": "trainer",
+"exact": true,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"LAK-17A 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"LAK-17B FES 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LAK-17B FES 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"LS 1-c": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"LS 1-f": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"LS 3": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"LS 3a": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"LS 4": {
+"key": "ls4",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"LS 4 neo": {
+"key": "ls4",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"LS 6": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"LS 6-c": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"LS 6-c 18m": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"LS 7 neo": {
+"key": "ls8",
+"exact": false,
+"cls": "standard",
+"grp": "high"
+},
+"LS 8": {
+"key": "ls8",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"LS 8 15m": {
+"key": "ls8",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"LS 8 18m": {
+"key": "ls8_18",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Mini Nimbus": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Nimbus 4": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 4 DM": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 4 T": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"PIK-20 B": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"PIK-20 E": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"PW 5": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"PW 6 U": {
+"key": "ask21",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"Pegase": {
+"key": "pegase",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"SHK": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-42-2 Jantar 2b": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-50 Puchacz": {
+"key": "ask21",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"SZD-55-1 Nexus": {
+"key": "ls8",
+"exact": false,
+"cls": "standard",
+"grp": "high"
+},
+"SZD-56-2 Diana 2 FES": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"SZD-59 15m": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Schweizer SGS 1-26": {
+"key": "sgs126",
+"exact": true,
+"cls": "club",
+"grp": "low"
+},
+"Schweizer SGS 1-34": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Schweizer SGS 2-32": {
+"key": "ask21",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"Schweizer SGS 2-33": {
+"key": "sgs233",
+"exact": true,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Schweizer SGS 2-33A": {
+"key": "sgs233",
+"exact": true,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Std. Cirrus": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Std. Libelle": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Std. Libelle 201 B": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Ventus 2bx": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus 2c 15m": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus 2c 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 2cM 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 2cx 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 2cxM 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 2cxa 15m": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus 3 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 3F 15m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 3F 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 3M 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 3T 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus b 15m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus c 15m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus c 17.6m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus cM 17.6m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus cT 17.6m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"mini LAK": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"mini LAK-FES": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Stemme S10": null,
+"Stemme S10-VT": null,
+"Stemme S12": null,
+"Super Dimona": null,
+"HK 36 Super Dimona": null,
+"Taifun 17E": null,
+"Sinus": null,
+"Pipistrel Sinus": null,
+"Pipistrel Taurus": null,
+"Hang glider": null,
+"Paraglider": null,
+"Silent 2 Electro": null,
+"Alisport Silent 2 Electro": null
+}
+}

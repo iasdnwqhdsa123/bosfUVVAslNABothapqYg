@@ -1,0 +1,135 @@
+name: Collect
+on:
+  schedule:
+    - cron: "17 0 * * *"
+    - cron: "42 4 * * *"
+    - cron: "15 13 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days this run"
+        type: choice
+        options: ["3", "1", "5", "8"]
+        default: "3"
+      new_days:
+        description: "New days from the flight archive (off: seed days only)"
+        type: choice
+        options: ["on", "off"]
+        default: "on"
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: calib
+  cancel-in-progress: false
+env:
+  DAYS_PER_RUN: "3"
+  MAX_REQUESTS: "150"
+  MINUTES: "25"
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - id: g
+        run: |
+          if [ -f calib/paused ]; then echo "paused"; echo "run=no" >> "$GITHUB_OUTPUT"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Keep the data while paused
+        id: keep
+        if: steps.g.outputs.run == 'no'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          age="$(python3 calib/state.py age calib-data)"
+          echo "newest data: $age days old"
+          if [ "$age" != none ] && [ "${age%.*}" -ge 30 ]; then python3 calib/state.py raw calib-data /tmp/keep && echo "again=yes" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/upload-artifact@v7
+        if: steps.keep.outputs.again == 'yes'
+        with:
+          name: calib-data
+          path: /tmp/keep/calib-data.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+      - name: Keep the schedule on
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF: ${{ github.workflow_ref }}
+        run: |
+          self="${SELF#*/.github/workflows/}"; self="${self%%@*}"
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$self/enable" && echo "kept on"
+  collect:
+    needs: gate
+    if: needs.gate.outputs.run == 'yes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      WORKERS: "4"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: pip install -q -r pipeline/requirements.txt
+      - name: Check the key
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+      - name: Restore the data
+        id: restore
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/data
+          set +e
+          python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/fetch.err
+          rc=$?
+          set -e
+          if [ "$rc" = 3 ]; then echo "no data yet: starting from the seed"
+          elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::couldn't fetch the data (exit $rc)"; exit 1; fi
+          python3 calib/state.py decrypt calib/seed.enc /tmp/seed.json.gz
+      - name: Collect
+        env:
+          DAYS: ${{ inputs.days || env.DAYS_PER_RUN }}
+          NEW: ${{ inputs.new_days || 'on' }}
+        run: |
+          mkdir -p /tmp/data/logs
+          extra=""
+          [ "$NEW" = off ] && extra="--no-new"
+          python3 calib/run.py collect --data /tmp/data --seed /tmp/seed.json.gz --work /tmp/work --days "$DAYS" \
+            --requests "$MAX_REQUESTS" --minutes "$MINUTES" $extra 2>> "/tmp/data/logs/stderr-$GITHUB_RUN_ID.log" \
+            || { echo "::error::collect failed (details in the encrypted log)"; exit 1; }
+      - name: Report
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          python3 calib/run.py report --data /tmp/data --out /tmp/data/report 2>> "/tmp/data/logs/stderr-$GITHUB_RUN_ID.log" \
+            || echo "::warning::report failed (details in the encrypted log)"
+      - name: Pack
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          rm -rf /tmp/work
+          mkdir -p /tmp/out
+          python3 calib/state.py pack /tmp/data /tmp/out/calib-data.enc
+          ls -la /tmp/out
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.restore.outcome == 'success'
+        with:
+          name: calib-data
+          path: /tmp/out/calib-data.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error

@@ -1,0 +1,56 @@
+name: Train
+on:
+  push:
+    branches: [main]
+    paths: ["calib/train.request"]
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Which flights"
+        type: choice
+        options: [all, seed]
+        default: all
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: calib
+  cancel-in-progress: false
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r calib/requirements.txt
+      - name: Restore the data
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          mkdir -p /tmp/data
+          python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/fetch.err || { echo "::error::no data to train on"; exit 1; }
+      - name: Train
+        env:
+          INPUT: ${{ inputs.dataset }}
+        run: |
+          ds="$INPUT"
+          if [ -z "$ds" ]; then ds="$(python3 -c 'import json; print(json.load(open("calib/train.request")).get("dataset", "all"))')"; fi
+          case "$ds" in all|seed) ;; *) echo "::error::dataset must be all or seed"; exit 1;; esac
+          mkdir -p /tmp/model
+          python3 calib/run.py train --data /tmp/data --out /tmp/model --dataset "$ds" 2> /tmp/model/stderr.log \
+            || { echo "::error::train failed (details in the encrypted log)"; }
+          mkdir -p /tmp/out
+          python3 calib/state.py pack /tmp/model /tmp/out/calib-model.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-model
+          path: /tmp/out/calib-model.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error

@@ -1,0 +1,190 @@
+from __future__ import annotations
+import csv
+import math
+import re
+import statistics as st
+import sys
+from collections import Counter, defaultdict
+from datetime import date
+import common
+import rows
+import workq
+HOURS = [(9, 13), (13, 15), (15, 16), (16, 17), (17, 22)]
+WS_BANDS = [(0, 1), (1, 1.5), (1.5, 2), (2, 2.5), (2.5, 3.5), (3.5, 99)]
+WIND_BANDS = [(0, 3), (3, 6), (6, 9), (9, 99)]
+
+def q(xs, p):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    k = (len(xs) - 1) * p
+    a, b = (math.floor(k), math.ceil(k))
+    return xs[a] + (xs[b] - xs[a]) * (k - a)
+
+def dist(xs) -> str:
+    xs = [x for x in xs if x is not None and math.isfinite(x)]
+    if not xs:
+        return '–'
+    return f'{q(xs, 0.5):.2f} ({q(xs, 0.25):.2f}–{q(xs, 0.75):.2f}; 5–95 %: {q(xs, 0.05):.2f}–{q(xs, 0.95):.2f}) n={len(xs)}'
+
+def med(xs) -> str:
+    xs = [x for x in xs if x is not None and math.isfinite(x)]
+    return f'{st.median(xs):.2f} n={len(xs)}' if xs else '–'
+
+def ratio(a, b):
+    return a / b if a is not None and b is not None and (a > 0) and (b > 0) else None
+
+def leg_ratio(r):
+    return ratio(r['vair'], r['m_xc'])
+
+def climb_ratio(r):
+    return ratio(r['rate'], r['m_ach'])
+
+def circ_ratio(r):
+    return ratio(r['therm'], r['m_circ'])
+
+def usable_leg(r):
+    return r['ok'] and r['cat'] == 'thermal' and r['paired']
+
+def fails(r) -> list[str]:
+    out = []
+    t, ca, d = (r.get('t') or 0, r.get('ca') or 0, r.get('dist') or 0)
+    if t <= 600:
+        out.append('t ≤ 600 s')
+    if ca <= 0.2:
+        out.append('mean climb ≤ 0.2 m/s')
+    if d < 30:
+        out.append('< 30 km')
+    if (r.get('tcount') or 0) < 2:
+        out.append('< 2 thermals')
+    if r.get('last') and (r.get('dh') or 0) < -500:
+        out.append('final glide losing > 500 m')
+    if ca > 0 and t and (abs((r.get('dh') or 0) / ca) / t >= 0.3):
+        out.append('≥ 30 % height correction')
+    return out
+
+def table(title, groups, cols) -> list[str]:
+    out = [f'### {title}', '', '| | ' + ' | '.join((h for h, _ in cols)) + ' |', '|---|' + '---|' * len(cols)]
+    for g, rs in groups:
+        out.append(f'| {g} | ' + ' | '.join((fn(rs) for _, fn in cols)) + ' |')
+    return out + ['']
+
+def by(rs, key):
+    d = defaultdict(list)
+    for r in rs:
+        d[key(r)].append(r)
+
+    def order(k):
+        m = re.match('-?\\d+(\\.\\d+)?', str(k))
+        return (0, float(m.group(0)), str(k)) if m else (1, 0.0, str(k))
+    return sorted(d.items(), key=lambda kv: order(kv[0]))
+
+def band(x, bands):
+    if x is None:
+        return '–'
+    for a, b in bands:
+        if a <= x < b:
+            return f"{a}–{(b if b < 99 else '+')}"
+    return '–'
+
+def hour_bin(x):
+    if x is None:
+        return '–'
+    for a, b in HOURS:
+        if a <= x < b:
+            return f'{a}–{b}'
+    return 'other'
+
+def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
+    state = common.read_json(f'{data}/state.json') if __import__('os').path.exists(f'{data}/state.json') else workq.new_state([])
+    days = rows.load_days(data)
+    L, C, F = rows.tables(days, model)
+    out = [f'# Calibration data report ({model.upper()})', '', f'Built {date.today().isoformat()}. Review this before training (train runs only when started by hand).', '']
+    pr = workq.progress(state, date.today())
+    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}); seed days left: {pr['seed_left']} of {pr['seed_days']}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F)} (seed {sum((f['src'] == 'seed' for f in F))}), legs {len(L)} (usable thermal legs: {sum((usable_leg(r) for r in L))}), circling climbs {len(C)}.", '']
+    cnt = lambda key: ', '.join((f'{k} {v}' for k, v in sorted(Counter((key(f) for f in F)).items(), key=lambda kv: -kv[1])))
+    out += ['## Rows', '', f"- By region: {cnt(lambda f: f['region'])}.", f"- By glider class: {cnt(lambda f: f['cls'])}.", f"- By group: {cnt(lambda f: f['grp'])}.", f"- By month: {cnt(lambda f: (f['date'] or '')[5:7])}.", f"- By year: {cnt(lambda f: (f['date'] or '')[:4])}.", f"- Polars: {cnt(lambda f: f['key'] + ('' if f['key_exact'] else '~'))} (~: the nearest similar polar).", '']
+    um = state.get('unmapped') or {}
+    out += ['### Aircraft types not in aircraft.json (skipped; add them there)', '', (', '.join((f"{k or '(none)'} {v}" for k, v in sorted(um.items(), key=lambda kv: -kv[1]))) or 'none') + '.', '']
+    boxes = [b for d in days for b in d.get('boxes', [])]
+    out += ['## Pairing with the model', '', f"- Boxes built: {sum((b.get('ok', False) for b in boxes))} of {len(boxes)} (failed: {dict(Counter((b.get('error') for b in boxes if not b.get('ok'))))}).", f"- Legs with the model's values: {sum((r['paired'] for r in L))} of {len(L)}; climbs: {sum((r['paired'] for r in C))} of {len(C)}; flights with PFD at the takeoff: {sum((f['paired'] for f in F))} of {len(F)}.", "- Unpaired legs and climbs are outside the model's hours (6 AM–9 PM local) or in a box that failed.", '']
+    out += ['## Field coverage (share present among paired rows)', '', '| Field | Legs | Climbs |', '|---|---|---|']
+    pl, pc = ([r for r in L if r['paired']], [r for r in C if r['paired']])
+    for k in rows.MODEL_KEYS:
+        f = lambda rs: f"{sum((r['m_' + k] is not None for r in rs)) / len(rs):.0%}" if rs else '–'
+        out.append(f'| {k} | {f(pl)} | {f(pc)} |')
+    out.append('')
+    fl = Counter((x for r in L for x in fails(r)))
+    out += ['## Outliers and filters', '', f"- Climbs over 6 m/s: {sum(((r['rate'] or 0) > 6 for r in C))}; engine on: {sum((bool(r['engon']) for r in C))}; climbs under 0.2 m/s: {sum(((r['rate'] or 0) < 0.2 for r in C))}.", f"- Legs over 200 km/h (height-corrected ground speed): {sum(((r['vg'] or 0) > 200 for r in L))}; in the air: {sum(((r['vair'] or 0) > 200 for r in L))}.", f"- Legs failing the filters (a leg can fail several): {', '.join((f'{k} {v}' for k, v in fl.most_common())) or 'none'}.", f"- Leg categories: {dict(Counter((r['cat'] for r in L)))}.", '']
+    ul = [r for r in L if usable_leg(r)]
+    uc = [r for r in C if r['paired'] and (not r['engon']) and ((r['rate'] or 0) > 0)]
+    cols = [('XC: flown in the air / model (still air)', lambda rs: dist([leg_ratio(r) for r in rs])), ('Ground speed flown / model along the leg', lambda rs: dist([ratio(r['vg'], r['m_gs']) for r in rs])), ('Circling share flown / model', lambda rs: dist([circ_ratio(r) for r in rs]))]
+    ccols = [("Climb flown / model's achieved climb", lambda rs: dist([climb_ratio(r) for r in rs])), ("Flown top AGL − model's usable top (m)", lambda rs: dist([(r['agl1'] - r['m_top']) / 1 if r['agl1'] is not None and r['m_top'] is not None else None for r in rs]))]
+    out += ["## Flown / the site's model", '', 'Usable thermal legs (filters passed, cat thermal) and circling climbs (engine off). Median (IQR; 5–95 %). Model 0 (no usable lift there then) leaves a ratio out: counted below.', '']
+    out += [f"- Usable legs where the model had no XC speed: {sum((not (r['m_xc'] or 0) > 0 for r in ul))} of {len(ul)}; climbs where it had no climb: {sum((not (r['m_ach'] or 0) > 0 for r in uc))} of {len(uc)} (false 'no lift').", '']
+    terr = lambda r: 'flat' if rows.flat(r) else 'hills/mountains'
+    out += table('Legs, all and by terrain', [('all', ul)] + by(ul, terr), cols)
+    out += table('Legs by local solar hour', by(ul, lambda r: hour_bin(r['m_solar'])), cols)
+    out += table("Legs by the model's W* (m/s)", by(ul, lambda r: band(r['m_ws'], WS_BANDS)), cols)
+    out += table('Legs by region', by(ul, lambda r: r['region']), cols)
+    out += table('Legs by glider class', by(ul, lambda r: r['cls']), cols)
+    out += table('Legs by source (seed: legs from the first collection)', by(ul, lambda r: r['src']), cols)
+    out += table('Climbs, all and by terrain', [('all', uc)] + by(uc, terr), ccols)
+    out += table('Climbs by local solar hour', by(uc, lambda r: hour_bin(r['m_solar'])), ccols)
+    out += table("Climbs by the model's W* (m/s)", by(uc, lambda r: band(r['m_ws'], WS_BANDS)), ccols)
+    out += table('Climbs by region', by(uc, lambda r: r['region']), ccols)
+    out += table("Climbs by source (seed: detected by the first collection's script; new: calib/track.py)", by(uc, lambda r: r['src']), ccols)
+    rl = [r for r in L if r['r_autoMean'] is not None and (r['dist'] or 0) >= 20]
+    rcols = [('legs', lambda rs: str(len(rs))), ('mean distance flown→Auto route (km)', lambda rs: med([r['r_autoMean'] for r in rs])), ('…→straight line (km)', lambda rs: med([r['r_straightMean'] for r in rs])), ('Auto route nearer / farther / same', lambda rs: f"{sum((r['r_autoMean'] < r['r_straightMean'] - 0.05 for r in rs))} / {sum((r['r_autoMean'] > r['r_straightMean'] + 0.05 for r in rs))} / {sum((abs(r['r_autoMean'] - r['r_straightMean']) <= 0.05 for r in rs))}"), ('max distance (km)', lambda rs: med([r['r_autoMax'] for r in rs])), ('share off to the same side', lambda rs: med([r['r_sameShare'] for r in rs])), ('bends where the pilot did (> 2 km)', lambda rs: (lambda xs: f'{sum(xs) / len(xs):.0%} of {len(xs)}' if xs else '–')([r['r_bendMatch'] for r in rs if r['r_bendMatch'] is not None])), ("bends where the pilot didn't", lambda rs: (lambda xs: f'{sum(xs) / len(xs):.0%} of {len(xs)}' if xs else '–')([r['r_autoBendsAlone'] for r in rs if r['r_autoBendsAlone'] is not None])), ("Auto route's time / flown", lambda rs: med([ratio(r['r_autoH'], r['r_flownH']) for r in rs]))]
+    out += ['## Auto route against the line flown', '', "Per free-distance leg of 20 km or more, its own turnpoints, from the hour flown: the line flown in straight pieces of ≥ 5 km (new flights: the track; seed: through the leg's climbs, the track wasn't kept) against xctask autoPaths' way through the site's model (without what only the app has: Thermal Triggers' weighting, the 3D thermals, the wave bars). Medians.", '']
+    out += table('All legs, by how the line was made', [('all', rl)] + by(rl, lambda r: r['line_src']), rcols)
+    out += table("Where the pilot's line bent (> 2 km off the course) or didn't", by(rl, lambda r: 'bent' if abs(r['r_flownBend'] or 0) > 2 else 'straight'), rcols)
+    out += table('By region', by(rl, lambda r: r['region']), rcols)
+    out += table("Cumulus or blue (the model's)", by(rl, lambda r: 'cu' if r['m_cu'] else 'blue'), rcols)
+    out += table("By the model's wind (m/s)", by(rl, lambda r: band(r['m_wind'], WIND_BANDS)), rcols)
+    out += table('Thermal legs that passed the filters', by(rl, lambda r: 'usable' if usable_leg(r) else 'other'), rcols)
+    out += [f"- Auto route errors: {sum((r['r_error'] is not None for r in L))}.", '']
+    pf = [ratio(f['pfd'], f['free_km']) for f in F if f['paired']]
+    out += ['## Potential Flight Distance (Std, at the takeoff, storm cut 2 %) / km flown', '', dist(pf) + ' (typical flights: PFD reads above them by design).', '']
+    per = []
+    for d in days:
+        dl = [r for r in L if r['date'] == d['date']]
+        dc = [r for r in C if r['date'] == d['date']]
+        ur = [leg_ratio(r) for r in dl if usable_leg(r)]
+        cr = [climb_ratio(r) for r in dc if r['paired'] and (not r['engon'])]
+        paired = (sum((r['paired'] for r in dl)) + sum((r['paired'] for r in dc))) / max(1, len(dl) + len(dc))
+        why = []
+        if any((not b.get('ok') for b in d.get('boxes', []))):
+            why.append('a box failed')
+        if paired < 0.5:
+            why.append(f'paired {paired:.0%}')
+        ur2, cr2 = ([x for x in ur if x], [x for x in cr if x])
+        if ur2 and (not 0.4 <= st.median(ur2) <= 2.5):
+            why.append(f'XC ratio {st.median(ur2):.2f}')
+        if cr2 and (not 0.3 <= st.median(cr2) <= 3):
+            why.append(f'climb ratio {st.median(cr2):.2f}')
+        if dc and sum((bool(r['engon']) for r in dc)) / len(dc) > 0.3:
+            why.append('engine on in > 30 % of climbs')
+        nolift = sum((1 for r in dl if usable_leg(r) and (not (r['m_xc'] or 0) > 0)))
+        if nolift >= 2:
+            why.append(f'{nolift} usable legs where the model had no lift')
+        regions = sorted({f['region'] for f in d['flights']})
+        per.append({'date': d['date'], 'regions': ' '.join(regions), 'flights': len(d['flights']), 'legs': len(dl), 'usable_legs': len(ur), 'climbs': len(dc), 'paired': round(paired, 2), 'xc_ratio': round(st.median(ur2), 2) if ur2 else '', 'climb_ratio': round(st.median(cr2), 2) if cr2 else '', 'flags': '; '.join(why)})
+    sus = [p for p in per if p['flags']]
+    out += ['## Suspicious days', '', f'{len(sus)} of {len(per)} days flagged (all days: the CSV beside this report).', '']
+    if sus:
+        out += ['| Day | Regions | Flights | Usable legs | Climbs | Paired | XC ratio | Climb ratio | Why |', '|---|---|---|---|---|---|---|---|---|']
+        out += [f"| {p['date']} | {p['regions']} | {p['flights']} | {p['usable_legs']} | {p['climbs']} | {p['paired']} | {p['xc_ratio']} | {p['climb_ratio']} | {p['flags']} |" for p in sus[:200]]
+        out.append('')
+    if days_csv:
+        with open(days_csv, 'w', newline='') as fh:
+            w = csv.DictWriter(fh, fieldnames=list(per[0].keys()) if per else ['date'])
+            w.writeheader()
+            w.writerows(per)
+    return '\n'.join(out) + '\n'
+if __name__ == '__main__':
+    if len(sys.argv) not in (3, 4):
+        sys.exit(__doc__)
+    text = build(sys.argv[1], sys.argv[3] if len(sys.argv) == 4 else None)
+    with open(sys.argv[2], 'w') as f:
+        f.write(text)
