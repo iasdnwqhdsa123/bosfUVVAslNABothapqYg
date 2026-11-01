@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import date, timedelta
+import common
 START = date(2021, 1, 1)
 RECENT_DAYS, RECENT_LAG = (30, 3)
 MAX_TRIES = 3
@@ -23,11 +24,25 @@ def _open(state: dict, d: str) -> bool:
 
 def _retry(state: dict, d: str) -> bool:
     x = state['done'].get(d)
-    return x is not None and x.get('status') == 'failed' and (x.get('tries', 0) < MAX_TRIES)
+    return x is not None and x.get('status') in ('failed', 'pending') and (x.get('tries', 0) < MAX_TRIES)
 
-def next_days(state: dict, n: int, today: date, new_ok: bool=True) -> list[tuple[str, str]]:
+def _redo(state: dict, d: str) -> bool:
+    x = state['done'].get(d)
+    return x is not None and x.get('status') in ('ok', 'partial') and (x.get('v', 1) < common.DAY_VERSION) and (x.get('redo_tries', 0) < MAX_TRIES)
+
+def next_days(state: dict, n: int, today: date, new_ok: bool=True, pending=()) -> list[tuple[str, str]]:
     out = []
     seed = set(state['seed_days'])
+    for d in sorted(pending):
+        if len(out) >= n:
+            return out
+        if _retry(state, d):
+            out.append((d, 'seed' if d in seed else 'new'))
+    for d in sorted(state['done']):
+        if len(out) >= n:
+            return out
+        if _redo(state, d):
+            out.append((d, 'redo'))
     for d in state['seed_days']:
         if len(out) >= n:
             return out
@@ -64,4 +79,5 @@ def progress(state: dict, today: date) -> dict:
     by = {}
     for x in done.values():
         by[x.get('status')] = by.get(x.get('status'), 0) + 1
-    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by}
+    redo = sum((1 for d in done if _redo(state, d)))
+    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo}

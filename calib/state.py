@@ -37,13 +37,16 @@ def newest(name: str, repo: str, token: str | None) -> dict | None:
     arts.sort(key=lambda a: a.get('created_at') or '', reverse=True)
     return arts[0] if arts else None
 
-def fetch(name: str, dest: str, repo: str | None=None) -> bool:
+def fetch(name: str, dest: str, repo: str | None=None, id_file: str | None=None) -> bool:
     repo = repo or os.environ['GITHUB_REPOSITORY']
     tokens = [t for t in (os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN'), os.environ.get('CALIB_ALT_TOKEN')) if t]
     last = None
     for tok in tokens or [None]:
         try:
             a = newest(name, repo, tok)
+            if id_file:
+                with open(id_file, 'w') as f:
+                    f.write(f"{a['id']}\n" if a else 'none\n')
             if not a:
                 return False
             blob = _get(a['archive_download_url'], tok)
@@ -110,8 +113,13 @@ def unpack(enc: str, dest: str) -> None:
             tf.extractall(dest, filter='data') if sys.version_info >= (3, 12) else tf.extractall(dest)
 if __name__ == '__main__':
     a = sys.argv[1:]
+    idf = None
+    if a[:1] == ['fetch'] and '--id' in a[:-1]:
+        i = a.index('--id')
+        idf = a[i + 1]
+        del a[i:i + 2]
     if a[:1] == ['fetch'] and len(a) in (3, 4):
-        sys.exit(0 if fetch(a[1], a[2], a[3] if len(a) == 4 else None) else 3)
+        sys.exit(0 if fetch(a[1], a[2], a[3] if len(a) == 4 else None, idf) else 3)
     elif a[:1] == ['age'] and len(a) == 2:
         d = age_days(a[1])
         print('none' if d is None else f'{d:.1f}')

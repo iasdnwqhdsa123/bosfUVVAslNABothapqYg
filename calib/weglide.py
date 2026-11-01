@@ -93,7 +93,7 @@ def _h(item) -> float | None:
     except Exception:
         return None
 
-def candidate(item: dict, aircraft: dict, unmapped: dict) -> dict | None:
+def _where(item: dict):
     ap = item.get('takeoff_airport') or {}
     reg = ap.get('region') or ''
     if not reg.startswith('US'):
@@ -107,6 +107,15 @@ def candidate(item: dict, aircraft: dict, unmapped: dict) -> dict | None:
         st = common.nearest_state((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
     if st in ('AK', 'HI') or st not in common.REGION:
         return None
+    return (st, from_ap)
+
+def candidate(item: dict, aircraft: dict, unmapped: dict) -> dict | None:
+    w = _where(item)
+    if not w:
+        return None
+    st, from_ap = w
+    ap = item.get('takeoff_airport') or {}
+    bbox = item.get('bbox')
     name = (item.get('aircraft') or {}).get('name') or ''
     if name not in aircraft:
         unmapped[name] = unmapped.get(name, 0) + 1
@@ -118,7 +127,10 @@ def candidate(item: dict, aircraft: dict, unmapped: dict) -> dict | None:
     h = _h(item)
     if h is None or km < MIN_KM[ac['grp']] or h < MIN_H[ac['grp']]:
         return None
-    return {'id': item['id'], 'date': item.get('scoring_date'), 'state': st, 'state_from_airport': from_ap, 'region': common.REGION[st], 'tz': ap.get('timezone') or common.TZ.get(st, 'America/Chicago'), 'ac': name, 'key': ac['key'], 'key_exact': ac['exact'], 'cls': ac['cls'], 'grp': ac['grp'], 'takeoff': item.get('takeoff_time'), 'landing': item.get('landing_time'), 'dur_h': round(h, 2), 'bbox': bbox, 'dmst': item.get('dmst_index'), 'list_km': km, 'list_kmh': (item.get('contest') or {}).get('speed')}
+    return {'id': item['id'], 'date': item.get('scoring_date'), 'state': st, 'state_from_airport': from_ap, 'region': common.REGION[st], 'tz': ap.get('timezone') or common.TZ.get(st, 'America/Chicago'), 'ac': name, 'key': ac['key'], 'key_exact': ac['exact'], 'cls': ac['cls'], 'grp': ac['grp'], 'takeoff': item.get('takeoff_time'), 'landing': item.get('landing_time'), 'dur_h': round(h, 2), 'bbox': bbox, 'dmst': item.get('dmst_index'), 'list_km': km, 'list_kmh': (item.get('contest') or {}).get('speed'), 'pilot': pilot_of(item)}
+
+def pilot_of(item: dict) -> str | None:
+    return common.pilot_key((item.get('user') or {}).get('id'))
 
 def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, seen: set) -> list:
     buckets = {}
@@ -138,3 +150,57 @@ def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, 
     for k in keys[:MAX_PER_DAY]:
         out.append(rnd.choice(buckets[k]))
     return out
+SLED_MIN = 25
+AFTERNOON_SOLAR = 12
+EARLY_SOLAR = 15
+SHORT_TRACKS_PER_DAY = 4
+LIST_LIMIT = 100
+
+def solar_hour(t_iso: str | None, lon: float | None) -> float | None:
+    try:
+        t = datetime.fromisoformat(t_iso).timestamp()
+    except Exception:
+        return None
+    return None if lon is None else round((t / 3600 % 24 + lon / 15) % 24, 2)
+
+def short_candidate(item: dict, aircraft: dict) -> dict | None:
+    w = _where(item)
+    if not w:
+        return None
+    name = (item.get('aircraft') or {}).get('name') or ''
+    ac = aircraft.get(name)
+    h, bbox = (_h(item), item.get('bbox'))
+    if not ac or h is None or (not bbox):
+        return None
+    km = (item.get('contest') or {}).get('distance') or 0
+    if km >= MIN_KM[ac['grp']] and h >= MIN_H[ac['grp']]:
+        return None
+    st, from_ap = w
+    tp = [round((bbox[0] + bbox[2]) / 2, 5), round((bbox[1] + bbox[3]) / 2, 5)]
+    s0, s1 = (solar_hour(item.get('takeoff_time'), tp[0]), solar_hour(item.get('landing_time'), tp[0]))
+    return {'id': item['id'], 'kind': 'short', 'date': item.get('scoring_date'), 'state': st, 'state_from_airport': from_ap, 'region': common.REGION[st], 'tz': (item.get('takeoff_airport') or {}).get('timezone') or common.TZ.get(st, 'America/Chicago'), 'ac': name, 'key': ac['key'], 'cls': ac['cls'], 'grp': ac['grp'], 'takeoff': item.get('takeoff_time'), 'landing': item.get('landing_time'), 'dur_h': round(h, 2), 'bbox': bbox, 'list_km': km, 'tp': tp, 'tp_src': 'bbox', 'solar0': s0, 'solar1': s1, 'afternoon': s0 is not None and s0 >= AFTERNOON_SOLAR, 'sled': h * 60 < SLED_MIN, 'pilot': pilot_of(item), 'src': 'weglide'}
+
+def day_summary(day: str, items: list, aircraft: dict) -> dict:
+    regs = {}
+    for it in items:
+        if it.get('scoring_date') != day:
+            continue
+        w = _where(it)
+        name = (it.get('aircraft') or {}).get('name') or ''
+        ac = aircraft.get(name)
+        h, bbox = (_h(it), it.get('bbox'))
+        if not w or not ac or h is None:
+            continue
+        km = (it.get('contest') or {}).get('distance') or 0
+        lon = (bbox[0] + bbox[2]) / 2 if bbox else common.CENTROID[w[0]][0]
+        s0, s1 = (solar_hour(it.get('takeoff_time'), lon), solar_hour(it.get('landing_time'), lon))
+        r = regs.setdefault(common.REGION[w[0]], {'up': 0, 'long': 0, 'aft': 0, 'aft_short': 0, 'aft_sled': 0, 'aft_early': 0})
+        r['up'] += 1
+        long = km >= MIN_KM[ac['grp']] and h >= MIN_H[ac['grp']]
+        r['long'] += long
+        if s0 is not None and s0 >= AFTERNOON_SOLAR:
+            r['aft'] += 1
+            r['aft_short'] += not long
+            r['aft_sled'] += h * 60 < SLED_MIN
+            r['aft_early'] += s1 is not None and s1 < EARLY_SOLAR
+    return {'n': len(items), 'full': len(items) >= LIST_LIMIT, 'regions': regs}

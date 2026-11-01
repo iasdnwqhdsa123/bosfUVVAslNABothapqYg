@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from datetime import date
 import common
 import rows
+import track
+import weglide
 import workq
 HOURS = [(9, 13), (13, 15), (15, 16), (16, 17), (17, 22)]
 WS_BANDS = [(0, 1), (1, 1.5), (1.5, 2), (2, 2.5), (2.5, 3.5), (3.5, 99)]
@@ -94,14 +96,106 @@ def hour_bin(x):
         if a <= x < b:
             return f'{a}–{b}'
     return 'other'
+SEASON = {**{m: 'spring (Mar–May)' for m in (3, 4, 5)}, **{m: 'summer (Jun–Aug)' for m in (6, 7, 8)}, **{m: 'autumn (Sep–Nov)' for m in (9, 10, 11)}, **{m: 'winter (Dec–Feb)' for m in (12, 1, 2)}}
+LATE = 15
+
+def share(rs, test) -> str:
+    return f'{sum((1 for r in rs if test(r))) / len(rs):.0%}' if rs else '–'
+
+def mmed(xs) -> str:
+    xs = [x for x in xs if x is not None and math.isfinite(x)]
+    return f'{st.median(xs):.2f}' if xs else '–'
+SURV_COLS = [('airborne', lambda rs: str(len(rs))), ('still flying 1 h later', lambda rs: share(rs, lambda r: r['out'] == 'flying')), ('landed home', lambda rs: share(rs, lambda r: r['out'] == 'home')), ('landed away or engine', lambda rs: share(rs, lambda r: r['out'] in ('away', 'engine'))), ('landed, place unknown (seed)', lambda rs: share(rs, lambda r: r['out'] == 'unknown')), ('with the forecast', lambda rs: str(sum((r['paired'] for r in rs)))), ('W* own (median)', lambda rs: mmed([r['m_ws0'] for r in rs])), ('W* shown (held)', lambda rs: mmed([r['m_ws'] for r in rs])), ('held over own', lambda rs: share([r for r in rs if r['held'] is not None], lambda r: r['held']))]
+FOUND = ('climb', 'save')
+
+def _failed_share(rs) -> str:
+    n = [r for r in rs if r['out'] in FOUND or r['failed']]
+    return share(n, lambda r: r['failed'])
+GLIDE_COLS = [('glides', lambda rs: str(len(rs))), ('searches', lambda rs: str(sum((r['search'] for r in rs)))), ('climb found', lambda rs: str(sum((r['out'] == 'climb' for r in rs)))), ('low save', lambda rs: str(sum((r['out'] == 'save' for r in rs)))), (f'weak (< {track.WEAK_RATE} m/s)', lambda rs: str(sum((r['out'] == 'weak' for r in rs)))), ('landed away or engine', lambda rs: str(sum((r['out'] in ('away', 'engine') for r in rs)))), ('landed home', lambda rs: str(sum((r['out'] == 'home' for r in rs)))), ('landed, unknown', lambda rs: str(sum((r['out'] == 'unknown' for r in rs)))), ('failed / (found + failed)', _failed_share), ('W* own: found / failed', lambda rs: f"{mmed([r['m_ws0'] for r in rs if r['out'] in FOUND])} / {mmed([r['m_ws0'] for r in rs if r['failed']])}"), ('W* shown: found / failed', lambda rs: f"{mmed([r['m_ws'] for r in rs if r['out'] in FOUND])} / {mmed([r['m_ws'] for r in rs if r['failed']])}")]
+
+def late(r) -> bool:
+    return r.get('solar') is not None and r['solar'] >= LATE
+
+def survival_section(H, G) -> list[str]:
+    out = ['## Late landings (survival)', '', f"The climbs found don't show the searches that failed: a pilot who found nothing late and landed leaves no late climb. Here each whole hour a glider was soaring (from {track.AFTER_TAKEOFF_S // 60} min after takeoff to its landing or engine start): still flying an hour later, or how it ended within it: home (within {track.HOME_KM:g} km of the takeoff: late in the day a pilot's choice, not a sign of no lift), away (a landout or another field) or engine (started in the air); seed flights kept no track, so where they landed is unknown. The forecast is the site's where the glider was then: W* own (the forecast's) and shown (with the evening hold). Days stored before the forecast was sampled there have none until they're built again ({sum((r['old_day'] for r in H))} of {len(H)} hours).", '']
+    out += table('By local hour', by(H, lambda r: int(r['lh'])), SURV_COLS)
+    out += table('By local solar hour', by(H, lambda r: hour_bin(r['solar'])), SURV_COLS)
+    lt = [r for r in H if late(r)]
+    out += table(f'Solar hour {LATE} on, by season', by(lt, lambda r: SEASON.get(r['month'], '–')), SURV_COLS)
+    au = [r for r in H if r['month'] in (9, 10, 11)]
+    out += table('Autumn (Sep–Nov) by month and solar hour', by(au, lambda r: f"{r['month']:02d} {hour_bin(r['solar'])}"), SURV_COLS)
+    out += table(f"Solar hour {LATE} on, by the forecast's own W* (m/s)", by(lt, lambda r: band(r['m_ws0'], WS_BANDS)), SURV_COLS)
+    out += table(f"Solar hour {LATE} on, held or not (the evening hold put W* over the forecast's own)", by([r for r in lt if r['held'] is not None], lambda r: 'held' if r['held'] else 'own'), SURV_COLS)
+    out += ['## Searches: climbs found and failed', '', f"Each glide from a climb's top to the next climb or the end of soaring, by when it ended. A search: lasting ≥ {track.SEARCH_S // 60} min, losing ≥ {track.SEARCH_M} m or ending under {track.LOW_AGL} m above the ground. Found: a climb (a low save: from under {track.LOW_AGL} m); failed: the next climb under {track.WEAK_RATE} m/s (the site's least usable), a landing away or the engine. A landing home isn't counted as failed. W*: at the glide's end.", '']
+    out += table('All glides by solar hour', by(G, lambda r: hour_bin(r['solar'])), GLIDE_COLS)
+    sg = [r for r in G if r['search']]
+    out += table('Searches by solar hour', by(sg, lambda r: hour_bin(r['solar'])), GLIDE_COLS)
+    out += table(f'Searches from solar hour {LATE}, by season', by([r for r in sg if late(r)], lambda r: SEASON.get(r['month'], '–')), GLIDE_COLS)
+    out += table(f"Searches from solar hour {LATE}, by the forecast's own W* (m/s)", by([r for r in sg if late(r)], lambda r: band(r['m_ws0'], WS_BANDS)), GLIDE_COLS)
+    return out
+
+def pilot_section(L, C, F, H, G) -> list[str]:
+    keyed = [f for f in F if f['pilot']]
+    per = Counter((f['pilot'] for f in keyed))
+    days = defaultdict(set)
+    for f in keyed:
+        days[f['pilot']].add(f['date'])
+    n = sorted(per.values())
+    out = ['## Pilots', '', f"- Flights with a pilot key: {len(keyed)} of {len(F)} (the rest: the seed's and the first days' until their day lists are looked up, a few a run).", f"- Distinct pilots: {len(per)}; flights per pilot: max {(n[-1] if n else '–')}, median {(st.median(n) if n else '–')}; pilots on 2 days or more: {sum((len(v) >= 2 for v in days.values()))}.", '']
+    sid = rows.strength(L, F)
+    lab = lambda r: sid.get(r['fid'], 'unknown')
+    order = {'low': 0, 'mid': 1, 'high': 2, 'unknown': 3}
+    groups = lambda rs: sorted(by(rs, lab), key=lambda kv: order.get(kv[0], 9))
+    cl = [r for r in C if r['paired'] and (not r['engon']) and ((r['rate'] or 0) > 0) and late({'solar': r['m_solar']})]
+    lg = [r for r in L if usable_leg(r) and late({'solar': r['m_solar']})]
+    lh = [r for r in H if late(r)]
+    ls = [r for r in G if r['search'] and late(r)]
+    ids = lambda rs: {r['fid'] for r in rs}
+    out += [f'### By pilot strength (solar hour {LATE} on)', '', "Strength: the pilot's flown XC speed against the site's on their other days (leave the day out), in terciles; unknown: no key, or no other day yet. For scaling the evening hold by the pilot setting later.", '', '| Strength | flights | climb flown / model (late) | XC flown / model (late) | still flying 1 h later | landed away or engine | failed searches |', '|---|---|---|---|---|---|---|']
+    keys = sorted({lab(f) for f in F}, key=lambda k: order.get(k, 9))
+    for k in keys:
+        sel = lambda rs: [r for r in rs if lab(r) == k]
+        out.append(f"| {k} | {len(ids(sel(F)))} | {dist([climb_ratio(r) for r in sel(cl)])} | {dist([leg_ratio(r) for r in sel(lg)])} | {share(sel(lh), lambda r: r['out'] == 'flying')} of {len(sel(lh))} | {share(sel(lh), lambda r: r['out'] in ('away', 'engine'))} | {_failed_share(sel(ls))} of {len(sel(ls))} |")
+    return out + ['']
+
+def dead_section(S, R) -> list[str]:
+    out = ['## Dead days', '', f"A day the forecast promised and that didn't give has few or no long flights, and the speed rows drop the short ones. So the day lists' short flights (under the minimum distance or time) are kept as a class of their own, never in the speed rows: afternoon launches from solar hour {weglide.AFTERNOON_SOLAR}, a sled ride down within {weglide.SLED_MIN} min, and up to {weglide.SHORT_TRACKS_PER_DAY} a day tracked (did it ever climb: {track.WEAK_RATE} m/s for {track.SHORT_CLIMB_S // 60} min after the release). Pattern, training and tow flights are short on good days too, so a day is judged by its region's share, not by single flights.", '']
+    aft = [r for r in S if r['afternoon']]
+    tr = [r for r in aft if r['tracked']]
+    out += [f"- Short flights kept: {len(S)} ({len(aft)} afternoon launches, {len(tr)} of them tracked; never climbed: {sum((not r['climbed'] for r in tr))}).", '']
+    cols = [('short flights', lambda rs: str(len(rs))), ('sled rides', lambda rs: share(rs, lambda r: r['sled'])), ('tracked', lambda rs: str(sum((bool(r['tracked']) for r in rs)))), ('never climbed (tracked)', lambda rs: share([r for r in rs if r['tracked']], lambda r: not r['climbed'])), ('forecast W* own at takeoff', lambda rs: mmed([r['m_ws0'] for r in rs])), ("day's best W* own there", lambda rs: mmed([r['best_ws0'] for r in rs]))]
+    out += table("Afternoon short flights by the day's best W* own there (m/s)", by(aft, lambda r: band(r['best_ws0'], WS_BANDS)), cols)
+    listed = [r for r in R if r['list']]
+    dead = [r for r in R if r['dead']]
+    out += [f"### Region-days ({len(R)}: {len(listed)} with a day list, {sum((r['built'] for r in R))} with the forecast built)", '', f'Possibly dead: the forecast good there (best afternoon W* own, median over the takeoffs, ≥ {rows.DEAD_WS} m/s, or XC Speed ≥ {rows.DEAD_XC:g} km/h) and the region quiet or short against its normal (same region, weekend or weekday, half of the year). A full day list (100 flights) may miss its shortest flights.', '', f'{len(dead)} flagged.', '']
+    if dead:
+        out += ['| Day | Region | Type | Uploads (normal) | Long | Afternoon: short / sled / landed early | Best W* own | Best XC | Why |', '|---|---|---|---|---|---|---|---|---|']
+        f = lambda x, n=1: '–' if x is None else f'{x:.{n}f}'
+        for r in dead[:150]:
+            out.append(f"| {r['date']} | {r['region']} | {r['day_type']} | {r['up']} ({f(r['normal_up'], 0)}) | {r['long']} | {r['aft_short']} / {r['aft_sled']} / {r['aft_early']} of {r['aft']} | {f(r['best_ws0'], 2)} | {f(r['best_xc'], 0)} | {r['dead']} |")
+        out.append('')
+    gb = [r for r in R if r['built'] and r['list']]
+    rcols = [('region-days', lambda rs: str(len(rs))), ('uploads (median)', lambda rs: mmed([r['up'] for r in rs])), ('with a long flight', lambda rs: share(rs, lambda r: r['long'])), ('afternoon short share', lambda rs: (lambda a, b: f'{a / b:.0%}' if b else '–')(sum((r['aft_short'] for r in rs)), sum((r['aft'] for r in rs)))), ('possibly dead', lambda rs: str(sum((bool(r['dead']) for r in rs))))]
+    out += table('Built region-days with a list, by the best W* own (m/s) and day type', by(gb, lambda r: f"{band(r['best_ws0'], WS_BANDS)} {r['day_type']}"), rcols)
+    return out
+
+def obs_section(O, N) -> list[str]:
+    out = ['## Observations against the forecast', '', "Hourly surface reports (ASOS) at up to 3 airports a box, and the evening sounding (00Z, about 8 PM EDT / 5 PM PDT) in the box, from Iowa Environmental Mesonet's archive: every day built, flown or not. Cumulus: FEW / SCT layers under 4,000 m; heights above the ground.", '']
+    cols = [('station-days', lambda rs: str(len(rs))), ('highest temperature: reported − forecast (°C)', lambda rs: dist([r['tmax_diff'] for r in rs])), ('hours with cumulus: reported / forecast / both', lambda rs: f"{sum((r['cu_obs'] for r in rs))} / {sum((r['cu_fc'] for r in rs))} / {sum((r['cu_both'] for r in rs))}"), ('cloudbase reported − forecast (m)', lambda rs: dist([r['base_diff'] for r in rs]))]
+    out += table('Surface reports by region', [('all', O)] + by(O, lambda r: r['region']), cols)
+    scols = [('soundings', lambda rs: str(len(rs))), ('mixing height reported (m)', lambda rs: dist([r['mix_obs'] for r in rs])), ('reported − forecast zi (m)', lambda rs: dist([r['mix_diff'] for r in rs])), ('lapse 0–2 km reported (°C/km)', lambda rs: dist([r['lapse_obs'] for r in rs])), ('forecast blapse', lambda rs: dist([r['blapse_fc'] for r in rs]))]
+    out += table('Evening soundings by region', [('all', N)] + by(N, lambda r: r['region']), scols)
+    return out
 
 def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
     state = common.read_json(f'{data}/state.json') if __import__('os').path.exists(f'{data}/state.json') else workq.new_state([])
     days = rows.load_days(data)
-    L, C, F = rows.tables(days, model)
+    pilots = state.get('pilots') or {}
+    L, C, F = rows.tables(days, model, pilots=pilots)
+    H, G = rows.survival(days, model, pilots=pilots)
     out = [f'# Calibration data report ({model.upper()})', '', f'Built {date.today().isoformat()}. Review this before training (train runs only when started by hand).', '']
     pr = workq.progress(state, date.today())
-    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}); seed days left: {pr['seed_left']} of {pr['seed_days']}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F)} (seed {sum((f['src'] == 'seed' for f in F))}), legs {len(L)} (usable thermal legs: {sum((usable_leg(r) for r in L))}), circling climbs {len(C)}.", '']
+    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}); seed days left: {pr['seed_left']} of {pr['seed_days']}; stored with an older file, to build again: {pr['redo_left']}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F)} (seed {sum((f['src'] == 'seed' for f in F))}), legs {len(L)} (usable thermal legs: {sum((usable_leg(r) for r in L))}), circling climbs {len(C)}.", '']
     cnt = lambda key: ', '.join((f'{k} {v}' for k, v in sorted(Counter((key(f) for f in F)).items(), key=lambda kv: -kv[1])))
     out += ['## Rows', '', f"- By region: {cnt(lambda f: f['region'])}.", f"- By glider class: {cnt(lambda f: f['cls'])}.", f"- By group: {cnt(lambda f: f['grp'])}.", f"- By month: {cnt(lambda f: (f['date'] or '')[5:7])}.", f"- By year: {cnt(lambda f: (f['date'] or '')[:4])}.", f"- Polars: {cnt(lambda f: f['key'] + ('' if f['key_exact'] else '~'))} (~: the nearest similar polar).", '']
     um = state.get('unmapped') or {}
@@ -134,6 +228,10 @@ def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
     out += table("Climbs by the model's W* (m/s)", by(uc, lambda r: band(r['m_ws'], WS_BANDS)), ccols)
     out += table('Climbs by region', by(uc, lambda r: r['region']), ccols)
     out += table("Climbs by source (seed: detected by the first collection's script; new: calib/track.py)", by(uc, lambda r: r['src']), ccols)
+    out += survival_section(H, G)
+    out += pilot_section(L, C, F, H, G)
+    out += dead_section(rows.shorts(days, model, pilots), rows.regiondays(days, state.get('daylists') or {}, model))
+    out += obs_section(*rows.observations(days, model))
     rl = [r for r in L if r['r_autoMean'] is not None and (r['dist'] or 0) >= 20]
     rcols = [('legs', lambda rs: str(len(rs))), ('mean distance flown→Auto route (km)', lambda rs: med([r['r_autoMean'] for r in rs])), ('…→straight line (km)', lambda rs: med([r['r_straightMean'] for r in rs])), ('Auto route nearer / farther / same', lambda rs: f"{sum((r['r_autoMean'] < r['r_straightMean'] - 0.05 for r in rs))} / {sum((r['r_autoMean'] > r['r_straightMean'] + 0.05 for r in rs))} / {sum((abs(r['r_autoMean'] - r['r_straightMean']) <= 0.05 for r in rs))}"), ('max distance (km)', lambda rs: med([r['r_autoMax'] for r in rs])), ('share off to the same side', lambda rs: med([r['r_sameShare'] for r in rs])), ('bends where the pilot did (> 2 km)', lambda rs: (lambda xs: f'{sum(xs) / len(xs):.0%} of {len(xs)}' if xs else '–')([r['r_bendMatch'] for r in rs if r['r_bendMatch'] is not None])), ("bends where the pilot didn't", lambda rs: (lambda xs: f'{sum(xs) / len(xs):.0%} of {len(xs)}' if xs else '–')([r['r_autoBendsAlone'] for r in rs if r['r_autoBendsAlone'] is not None])), ("Auto route's time / flown", lambda rs: med([ratio(r['r_autoH'], r['r_flownH']) for r in rs]))]
     out += ['## Auto route against the line flown', '', "Per free-distance leg of 20 km or more, its own turnpoints, from the hour flown: the line flown in straight pieces of ≥ 5 km (new flights: the track; seed: through the leg's climbs, the track wasn't kept) against xctask autoPaths' way through the site's model (without what only the app has: Thermal Triggers' weighting, the 3D thermals, the wave bars). Medians.", '']

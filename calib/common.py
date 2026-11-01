@@ -1,5 +1,7 @@
 from __future__ import annotations
 import gzip
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -23,6 +25,39 @@ def nearest_state(lon: float, lat: float) -> str:
 def load_aircraft() -> dict:
     with open(os.path.join(HERE, 'aircraft.json'), encoding='utf-8') as f:
         return json.load(f)['types']
+DAY_VERSION = 2
+
+def pilot_key(user_id) -> str | None:
+    pw = os.environ.get('CALIB_DATA_KEY')
+    if user_id is None or not pw:
+        return None
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    k = hmac.new(pw.encode(), b'calib pilot key v1', hashlib.sha256).digest()
+    return hmac.new(k, f'weglide-user:{uid}'.encode(), hashlib.sha256).hexdigest()[:16]
+
+def holidays(year: int) -> set:
+    from datetime import date, timedelta
+
+    def nth(month, wd, n):
+        if n > 0:
+            d = date(year, month, 1)
+            return d + timedelta(days=(wd - d.weekday()) % 7 + 7 * (n - 1))
+        d = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
+        return d - timedelta(days=(d.weekday() - wd) % 7)
+    fixed = [date(year, 1, 1), date(year, 6, 19), date(year, 7, 4), date(year, 11, 11), date(year, 12, 25)]
+    out = {nth(1, 0, 3), nth(2, 0, 3), nth(5, 0, -1), nth(9, 0, 1), nth(10, 0, 2), nth(11, 3, 4), nth(11, 3, 4) + timedelta(days=1)}
+    for d in fixed:
+        out.add(d)
+        out.add(d - timedelta(days=1) if d.weekday() == 5 else d + timedelta(days=1) if d.weekday() == 6 else d)
+    return out
+
+def day_type(day: str) -> str:
+    from datetime import date
+    d = date.fromisoformat(day)
+    return 'weekend' if d.weekday() >= 5 or d in holidays(d.year) else 'weekday'
 
 def read_json(path: str):
     op = gzip.open if path.endswith('.gz') else open

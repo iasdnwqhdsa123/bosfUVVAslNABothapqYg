@@ -1,6 +1,8 @@
 from __future__ import annotations
+import bisect
 import math
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 CIRC_DEG, CIRC_WIN, CIRC_GAP = (220.0, 30.0, 25.0)
 CLIMB_GAIN, CLIMB_DUR, CLIMB_TURN = (150.0, 60.0, 270.0)
 ENGINE_ON = 500.0
@@ -214,6 +216,183 @@ def flight_from(item: dict, detail: dict, data: dict) -> dict:
     thin, last = ([], -1000000000.0)
     for f in fx:
         if f['t'] - last >= TRACK_S:
-            thin.append([round(f['t']), round(f['p'][0], 5), round(f['p'][1], 5), round(f['z']), None if f['g'] is None else round(f['g'])])
+            p = [round(f['t']), round(f['p'][0], 5), round(f['p'][1], 5), round(f['z']), None if f['g'] is None else round(f['g'])]
+            if es:
+                p.append(None if f['e'] is None else round(f['e']))
+            thin.append(p)
             last = f['t']
     return {'legs': legs, 'climbs': cl, 'tp': tp, 'track': thin, 'zmax': max((f['z'] for f in fx), default=None), 'engine_max': max(es) if es else None, 'engine_med': sorted(es)[len(es) // 2] if es else None}
+HOME_KM = 3.0
+AFTER_TAKEOFF_S = 20 * 60
+WEAK_RATE = 0.5
+SEARCH_S, SEARCH_M = (15 * 60, 600)
+LOW_AGL = 400
+ENGINE_OFF_S = 300
+PROBE_KEYS = ('ws', 'ws0', 'zi', 'top', 'band', 'climb', 'ach', 'usable', 'xc', 'cu', 'cb', 'shade', 'sun', 'sunElev', 'relief', 'elev', 'solar', 'localHour', 'wind', 't2', 'blapse')
+FAILED = ('weak', 'away', 'engine')
+
+def _t(x):
+    try:
+        return ts(x) if isinstance(x, str) else float(x) if x is not None else None
+    except (TypeError, ValueError):
+        return None
+
+def _climbs_sorted(f: dict) -> list[dict]:
+    out = []
+    for c in f.get('climbs') or []:
+        t0 = _t(c.get('t0'))
+        if t0 is not None:
+            out.append({**c, '_t0': t0, '_t1': t0 + (c.get('dur') or 0)})
+    return sorted(out, key=lambda c: c['_t0'])
+
+def times_of(f: dict):
+    tr = f.get('track') or []
+    a, b = (_t(f.get('takeoff')), _t(f.get('landing')))
+    if a is None and tr:
+        a = tr[0][0]
+    if b is None and tr:
+        b = tr[-1][0]
+    return (a, b) if a is not None and b is not None and (b > a) else (None, None)
+
+def pos_at(f: dict, t: float) -> dict:
+    tr = f.get('track') or []
+    if tr:
+        i = bisect.bisect_left([p[0] for p in tr], t)
+        i = min(range(max(0, i - 1), min(len(tr), i + 1)), key=lambda k: abs(tr[k][0] - t))
+        p = tr[i]
+        return {'lon': p[1], 'lat': p[2], 'z': p[3], 'agl': None if p[4] is None else p[3] - p[4], 'src': 'track'}
+    t_off, _ = times_of(f)
+    knots = ([(t_off, f['tp'][0], f['tp'][1])] if t_off is not None and f.get('tp') else []) + [(c['_t1'], c['lon'], c['lat']) for c in _climbs_sorted(f) if c.get('lon') is not None]
+    knots.sort()
+    if not knots:
+        return {'lon': None, 'lat': None, 'z': None, 'agl': None, 'src': None}
+    if t <= knots[0][0]:
+        k = knots[0]
+        return {'lon': k[1], 'lat': k[2], 'z': None, 'agl': None, 'src': 'climbs'}
+    for (ta, xa, ya), (tb, xb, yb) in zip(knots, knots[1:]):
+        if ta <= t <= tb:
+            w = (t - ta) / (tb - ta) if tb > ta else 0.0
+            return {'lon': xa + (xb - xa) * w, 'lat': ya + (yb - ya) * w, 'z': None, 'agl': None, 'src': 'climbs'}
+    k = knots[-1]
+    return {'lon': k[1], 'lat': k[2], 'z': None, 'agl': None, 'src': 'climbs'}
+
+def engine_start(f: dict) -> float | None:
+    tr, t_eng = (f.get('track') or [], None)
+    off_since = None
+    es = [(p[0], p[5]) for p in tr if len(p) > 5 and p[5] is not None]
+    for (t, e), nxt in zip(es, es[1:] + [(None, None)]):
+        if e <= ENGINE_ON:
+            off_since = t if off_since is None else off_since
+        elif nxt[1] is not None and nxt[1] > ENGINE_ON:
+            if off_since is not None and t - off_since >= ENGINE_OFF_S:
+                t_eng = t
+                break
+            off_since = None
+    soared = False
+    for c in _climbs_sorted(f):
+        if not c.get('engon'):
+            soared = True
+        elif soared:
+            t_eng = c['_t0'] if t_eng is None else min(t_eng, c['_t0'])
+            break
+    return t_eng
+
+def ending(f: dict) -> dict | None:
+    t_off, t_land = times_of(f)
+    if t_off is None:
+        return None
+    t_eng = engine_start(f)
+    if t_eng is not None and t_off < t_eng < t_land:
+        p = pos_at(f, t_eng)
+        return {'t': t_eng, 'how': 'engine', **p}
+    p = pos_at(f, t_land)
+    if p['src'] == 'track' and f.get('tp') and (p['lon'] is not None):
+        how = 'home' if dist_km(f['tp'], [p['lon'], p['lat']]) <= HOME_KM else 'away'
+    else:
+        how = 'unknown'
+    return {'t': t_land, 'how': how, **p}
+
+def _when(f: dict, t: float, lon) -> dict:
+    tz = ZoneInfo(f.get('tz') or 'America/Chicago')
+    loc = datetime.fromtimestamp(t, tz)
+    solar = None if lon is None else round((t / 3600 % 24 + lon / 15) % 24, 2)
+    return {'lh': loc.hour + loc.minute / 60, 'solar': solar, 'month': loc.month}
+
+def hour_samples(f: dict) -> list[dict]:
+    end = ending(f)
+    if not end:
+        return []
+    t_off, _ = times_of(f)
+    T = math.ceil((t_off + AFTER_TAKEOFF_S) / 3600) * 3600
+    out = []
+    while T < end['t']:
+        p = pos_at(f, T)
+        out.append({'t': int(T), 'out': 'flying' if end['t'] >= T + 3600 else end['how'], 'lon': p['lon'], 'lat': p['lat'], 'agl': None if p['agl'] is None else round(p['agl']), 'pos': p['src'], **_when(f, T, p['lon'])})
+        T += 3600
+    return out
+
+def glides(f: dict) -> list[dict]:
+    end = ending(f)
+    if not end:
+        return []
+    cs = [c for c in _climbs_sorted(f) if c['_t0'] < end['t'] and (not c.get('engon'))]
+    out = []
+    for i, c in enumerate(cs):
+        t0, z0 = (c['_t1'], c.get('z1'))
+        if i + 1 < len(cs):
+            n = cs[i + 1]
+            t1, z1, agl, lon, lat = (n['_t0'], n.get('z0'), n.get('agl0'), n.get('lon'), n.get('lat'))
+            how = 'weak' if (n.get('rate') or 0) < WEAK_RATE else 'save' if agl is not None and agl < LOW_AGL else 'climb'
+        else:
+            t1, z1, agl, lon, lat, how = (end['t'], end['z'], end['agl'], end['lon'], end['lat'], end['how'])
+        dur = t1 - t0
+        if dur <= 0:
+            continue
+        loss = None if z0 is None or z1 is None else z0 - z1
+        search = dur >= SEARCH_S or (loss is not None and loss >= SEARCH_M) or (agl is not None and agl < LOW_AGL)
+        out.append({'t0': int(round(t0)), 't': int(round(t1)), 'dur': int(round(dur)), 'loss': None if loss is None else round(loss), 'agl': None if agl is None else round(agl), 'out': how, 'search': bool(search), 'failed': how in FAILED, 'lon': lon, 'lat': lat, **_when(f, t1, lon)})
+    return out
+
+def probes(f: dict) -> list[dict]:
+    pts = {}
+    for h in hour_samples(f):
+        pts[h['t']] = (h['lon'], h['lat'])
+    for g in glides(f):
+        pts.setdefault(g['t'], (g['lon'], g['lat']))
+    return [{'t': t, 'lon': round(lo, 5), 'lat': round(la, 5)} for t, (lo, la) in sorted(pts.items()) if lo is not None and la is not None]
+SHORT_CLIMB_S = 120
+RELEASE_UP, RELEASE_DROP, RELEASE_S = (100.0, 20.0, 60.0)
+
+def short_summary(data: dict) -> dict | None:
+    fx = fixes(data)
+    if len(fx) < 10:
+        return None
+    z0 = fx[0]['z']
+    rel = None
+    for i, f in enumerate(fx):
+        if f['z'] - z0 < RELEASE_UP:
+            continue
+        for g in fx[i + 1:]:
+            if g['t'] - f['t'] > RELEASE_S or g['z'] > f['z']:
+                break
+            if f['z'] - g['z'] >= RELEASE_DROP:
+                rel = i
+                break
+        if rel is not None:
+            break
+    if rel is None:
+        rel = max(range(len(fx)), key=lambda k: fx[k]['z'])
+    after = fx[rel:]
+    best, j = (None, 0)
+    for i, f in enumerate(after):
+        j = max(j, i)
+        while j < len(after) and after[j]['t'] - f['t'] < SHORT_CLIMB_S:
+            j += 1
+        if j >= len(after):
+            break
+        if any(((after[k]['e'] or 0) > ENGINE_ON for k in range(i, j + 1))):
+            continue
+        r = (after[j]['z'] - f['z']) / (after[j]['t'] - f['t'])
+        best = r if best is None else max(best, r)
+    R = fx[rel]
+    return {'rel_t': iso(R['t']), 'rel_agl': None if R['g'] is None else round(R['z'] - R['g']), 'gain_max': round(max((f['z'] for f in after)) - R['z']), 'best2': None if best is None else round(best, 2), 'climbed': best is not None and best >= WEAK_RATE, 'tp': [round(fx[0]['p'][0], 5), round(fx[0]['p'][1], 5)], 'home': dist_km(fx[0]['p'], fx[-1]['p']) <= HOME_KM, 'engine': any(((f['e'] or 0) > ENGINE_ON for f in after))}

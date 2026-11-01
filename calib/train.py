@@ -12,6 +12,7 @@ GRP = {'vlow': 0, 'low': 1, 'high': 2}
 FEATURES = ['m_xc', 'm_climb', 'm_ach', 'm_ws', 'm_zi', 'm_top', 'm_band', 'm_shade', 'm_sun', 'm_sunElev', 'm_relief', 'm_elev', 'm_cb', 'm_cu', 'm_wind', 'm_cloud', 'm_cloudlow', 'm_blapse', 'm_twidth', 'm_sink', 'm_ridgev', 'm_densAlt', 'm_solar', 'doy_s', 'doy_c', 'cls', 'grp']
 PARAMS = dict(loss='absolute_error', max_iter=120, learning_rate=0.06, max_leaf_nodes=8, min_samples_leaf=25, l2_regularization=1.0, random_state=7)
 FOLDS = 5
+PILOT_MAX_SHARE = 0.05
 
 def feats(r: dict) -> list[float]:
     d = date.fromisoformat(r['date']).timetuple().tm_yday
@@ -49,14 +50,59 @@ def model():
     from sklearn.ensemble import HistGradientBoostingRegressor
     return HistGradientBoostingRegressor(**PARAMS)
 
-def crossval(X, y, groups):
+def pilot_group(r) -> str:
+    return f"p:{r['pilot']}" if r.get('pilot') else f"f:{r['fid']}"
+
+def weather_group(r) -> str:
+    return f"{r['date']}|{r['region']}"
+
+def weights(rs, flights_of: dict | None=None) -> np.ndarray:
+    if flights_of is None:
+        fl = {}
+        for r in rs:
+            if r.get('pilot'):
+                fl.setdefault(r['pilot'], set()).add(r['fid'])
+        flights_of = {p: len(v) for p, v in fl.items()}
+    w = np.array([1 / math.sqrt(flights_of.get(r.get('pilot'), 1)) if r.get('pilot') else 1.0 for r in rs], dtype=float)
+    keys = np.array([r.get('pilot') or '' for r in rs])
+    groups = len(set(keys) - {''}) + len({r['fid'] for r in rs if not r.get('pilot')})
+    for _ in range(5 if groups * PILOT_MAX_SHARE >= 1 else 0):
+        tot, over = (w.sum(), False)
+        for p in set(keys) - {''}:
+            idx = keys == p
+            s = w[idx].sum()
+            if tot > 0 and s > PILOT_MAX_SHARE * tot * 1.0001:
+                rest = tot - s
+                w[idx] *= PILOT_MAX_SHARE * rest / (1 - PILOT_MAX_SHARE) / s if rest > 0 else 1
+                over = True
+        if not over:
+            break
+    return w
+
+def wmedian(y, w) -> float:
+    o = np.argsort(y)
+    c = np.cumsum(w[o])
+    return float(y[o][np.searchsorted(c, c[-1] / 2)])
+
+def folds(pg, wg, k):
     from sklearn.model_selection import GroupKFold
-    k = min(FOLDS, len(set(groups)))
+    k = min(k, len(set(pg)))
+    for tr, te in GroupKFold(n_splits=k).split(np.zeros(len(pg)), groups=pg):
+        bad = set(wg[te])
+        yield (np.array([i for i in tr if wg[i] not in bad], dtype=int), te)
+
+def crossval(X, y, pg, wg=None, w=None):
+    wg = np.asarray(pg if wg is None else wg)
+    pg = np.asarray(pg)
+    w = np.ones_like(y) if w is None else w
     p_ml, p_const = (np.zeros_like(y), np.zeros_like(y))
-    for tr, te in GroupKFold(n_splits=k).split(X, y, groups):
-        m = model().fit(X[tr], y[tr])
+    dropped = []
+    for tr, te in folds(pg, wg, FOLDS):
+        dropped.append(1 - len(tr) / max(1, len(y) - len(te)))
+        m = model().fit(X[tr], y[tr], sample_weight=w[tr])
         p_ml[te] = m.predict(X[te])
-        p_const[te] = np.median(y[tr])
+        p_const[te] = wmedian(y[tr], w[tr])
+    crossval.dropped = float(np.mean(dropped)) if dropped else 0.0
     return (p_ml, p_const)
 
 def export(m, names) -> dict:
@@ -99,8 +145,13 @@ def groups_of(rs):
 def run(data: str, out: str, which: str='all') -> dict:
     os.makedirs(out, exist_ok=True)
     days = rows.load_days(data)
-    L, C, _ = rows.tables(days, srcs={'seed'} if which == 'seed' else None)
-    res, models, md = ({}, {}, [f'# Calibration model ({which}, {date.today().isoformat()})', '', "Cross-validated by day (5 folds; a day never in both training and test). Ratio: flown / the model (1 = right on); MAE: mean |log(flown / model)| (0.10 ≈ 10 %). Physics: the site's model as it is; constant: one correction factor; ML: the trees.", ''])
+    L, C, F = rows.tables(days, srcs={'seed'} if which == 'seed' else None, pilots=rows.load_pilots(data))
+    per = {}
+    for f in F:
+        if f['pilot']:
+            per[f['pilot']] = per.get(f['pilot'], 0) + 1
+    n = sorted(per.values())
+    res, models, md = ({}, {}, [f'# Calibration model ({which}, {date.today().isoformat()})', '', f"Cross-validated by pilot (5 folds; a pilot never in both training and test, a flight without a pilot key its own group) with the weather kept apart (each fold's training without the test rows' days in their regions). Rows weighted 1/√(the pilot's flights), no pilot over {PILOT_MAX_SHARE:.0%} of the weight. Ratio: flown / the model (1 = right on); MAE: mean |log(flown / model)| (0.10 ≈ 10 %). Physics: the site's model as it is; constant: one correction factor; ML: the trees.", '', f"Pilots: {len(per)} distinct, {sum(n)} of {len(F)} flights with a key; flights per pilot: max {(n[-1] if n else '–')}, median {(np.median(n) if n else '–')}.", ''])
     for target in ('xc', 'climb', 'circ'):
         rs, X, y, g = dataset(L, C, target)
         if len(y) < 60 or len(set(g)) < 10:
@@ -109,7 +160,11 @@ def run(data: str, out: str, which: str='all') -> dict:
         keep = [j for j in range(X.shape[1]) if np.isfinite(X[:, j]).mean() >= 0.02]
         names = [FEATURES[j] for j in keep]
         X = X[:, keep]
-        p_ml, p_c = crossval(X, y, g)
+        pg = np.array([pilot_group(r) for r in rs])
+        wg = np.array([weather_group(r) for r in rs])
+        w = weights(rs, per)
+        p_ml, p_c = crossval(X, y, pg, wg, w)
+        dropped = crossval.dropped
         zero = np.zeros_like(y)
         tab = []
         for name, sel in groups_of(rs).items():
@@ -120,12 +175,12 @@ def run(data: str, out: str, which: str='all') -> dict:
             for lab, p in (('physics', zero), ('constant', p_c), ('ml', p_ml)):
                 row[lab] = metrics(y[idx], p[idx], None, lab)
             tab.append(row)
-        m = model().fit(X, y)
+        m = model().fit(X, y, sample_weight=w)
         e = export(m, names)
         chk = max((abs(predict_export(e, list(X[i])) - m.predict(X[i:i + 1])[0]) for i in range(min(200, len(y)))))
         models[target] = e
-        res[target] = {'rows': int(len(y)), 'days': int(len(set(g))), 'table': tab, 'export_check': float(chk)}
-        md += [f'## {target} ({len(y)} rows, {len(set(g))} days)', '', '| Group | n | Physics: median ratio, MAE | Constant | ML |', '|---|---|---|---|---|']
+        res[target] = {'rows': int(len(y)), 'days': int(len(set(g))), 'groups': int(len(set(pg))), 'train_dropped': dropped, 'table': tab, 'export_check': float(chk)}
+        md += [f"## {target} ({len(y)} rows, {len(set(g))} days, {len(set(pg))} pilot groups; each fold's training {dropped:.0%} smaller for the test rows' weather)", '', '| Group | n | Physics: median ratio, MAE | Constant | ML |', '|---|---|---|---|---|']
         for row in tab:
             c = lambda k: f"{row[k]['median_ratio']:.2f}, {row[k]['mae_log']:.3f}"
             md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |")

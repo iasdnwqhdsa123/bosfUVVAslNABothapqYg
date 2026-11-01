@@ -10,10 +10,55 @@ import track
 import weglide
 import workq
 KEEP_LOGS = 20
+PILOT_BACKFILL_DAYS = 20
 MODELS = tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr').split(',') if m))
+QUIET_SHARE = 0.2
+QUIET_MIN_AFT = 2
+QUIET_KM = 150
+SHORT_PER_REGION = 15
 
-def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> list[dict]:
+def _inside(p, bbox) -> bool:
+    return bbox[0] <= p[0] <= bbox[2] and bbox[1] <= p[1] <= bbox[3]
+
+def short_flights(d: str, items: list, aircraft: dict, long: list[dict], summary: dict, state: dict) -> list[dict]:
+    taken = {f['id'] for f in long}
+    cands = [c for c in (weglide.short_candidate(it, aircraft) for it in items if it.get('id') not in taken) if c and c['date'] == d]
+    boxes = {B['region']: B['bbox'] for B in dayrun.boxes(long)} if long else {}
+    keep = [c for c in cands if c['region'] in boxes and _inside(c['tp'], boxes[c['region']])]
+    q = state.setdefault('quiet', {'days': 0, 'built': 0})
+    if common.day_type(d) == 'weekend' and q['days'] < QUIET_SHARE * (q['built'] + 1):
+        regs = summary.get('regions') or {}
+        quiet = sorted((r for r, x in regs.items() if not x['long'] and x['aft'] >= QUIET_MIN_AFT and (r not in boxes)), key=lambda r: (-regs[r]['aft'], r))
+        if quiet:
+            qc = [c for c in cands if c['region'] == quiet[0]]
+            aft = [c for c in qc if c['afternoon']] or qc
+            anchor = max(aft, key=lambda c: (sum((track.dist_km(c['tp'], o['tp']) <= QUIET_KM for o in aft)), -c['id']))['tp']
+            keep += [c for c in qc if track.dist_km(c['tp'], anchor) <= QUIET_KM]
+    by = {}
+    for c in sorted(keep, key=lambda c: (not c['afternoon'], c['id'])):
+        if len(by.setdefault(c['region'], [])) < SHORT_PER_REGION:
+            by[c['region']].append(c)
+    return [c for cs in by.values() for c in cs]
+
+def _short_tracks(client, d: str, shorts: list[dict], long: list[dict]) -> None:
+    import random
+    rnd = random.Random(f'short:{d}')
+    long_regs = {f['region'] for f in long}
+    order = sorted(shorts, key=lambda c: (not c['afternoon'], c['region'] in long_regs, rnd.random()))
+    for c in order[:weglide.SHORT_TRACKS_PER_DAY]:
+        dat = client.data(c['id'])
+        try:
+            sm = track.short_summary(dat) if dat else None
+        except Exception as e:
+            common.note(f"{d}: short flight {c['id']} unreadable: {e!r}")
+            sm = None
+        if sm:
+            c.update({k: v for k, v in sm.items() if k != 'tp'}, tp=sm['tp'], tp_src='track', tracked=True)
+
+def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> tuple[list[dict], list[dict]]:
     items = client.day_list(d)
+    summary = weglide.day_summary(d, items, aircraft)
+    state.setdefault('daylists', {})[d] = summary
     seen = set(state['seen'])
     chosen = weglide.choose(d, items, aircraft, state['counts'], state['unmapped'], seen)
     common.note(f'{d}: list {len(items)} flights, chosen {len(chosen)}')
@@ -37,7 +82,23 @@ def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> list[d
         ws = free.get('score') or {}
         rec = {**c, 'src': 'weglide', 'tp': t['tp'], 'zmax': t['zmax'], 'engine_max': t['engine_max'], 'engine_med': t['engine_med'], 'free_km': free.get('distance'), 'free_kmh': free.get('speed'), 'thermal_avg': ws.get('thermal_avg'), 'thermal_pct': ws.get('thermal_percentage'), 'glide_ratio': ws.get('glide_ratio'), 'agl_avg': ws.get('agl_avg'), 'wind_kmh': ws.get('wind_speed'), 'wind_dir': ws.get('wind_direction'), 'legs': t['legs'], 'climbs': t['climbs'], 'track': t['track']}
         out.append(rec)
-    return out
+    shorts = short_flights(d, items, aircraft, out, summary, state)
+    if shorts:
+        try:
+            _short_tracks(client, d, shorts, out)
+        except weglide.Stop:
+            pass
+        common.note(f"{d}: short flights kept {len(shorts)} ({sum((bool(c.get('tracked')) for c in shorts))} with the track)")
+    return (out, shorts)
+
+def _observations(obs_client, d: str, items: list[dict], data: str) -> list[dict]:
+    if not items or obs_client.used >= obs_client.budget:
+        return []
+    try:
+        return dayrun.observations(obs_client, d, dayrun.boxes(items), os.path.join(data, 'obs'))
+    except Exception as e:
+        common.note(f'{d}: observations failed: {e!r}')
+        return []
 
 def collect(a) -> int:
     t0 = time.time()
@@ -58,13 +119,20 @@ def collect(a) -> int:
         state['seed_days'].append(d)
     aircraft = common.load_aircraft()
     client = weglide.Client(a.requests)
+    obs_client = dayrun.Obs()
+    os.makedirs(f'{data}/obs', exist_ok=True)
     todo = workq.next_days(state, a.days, date.today(), new_ok=not a.no_new)
-    common.log(f"{len(todo)} days to do ({sum((s == 'seed' for _, s in todo))} from the seed)")
+    common.log(f"{len(todo)} days to do ({sum((s == 'seed' for _, s in todo))} from the seed, {sum((s == 'redo' for _, s in todo))} built again)")
     run = {'at': stamp, 'days': 0, 'ok': 0, 'empty': 0, 'failed': 0, 'skipped': 0}
     for i, (d, src) in enumerate(todo):
         if (time.time() - t0) / 60 > a.minutes:
             common.log(f"time's up after {i} days")
             break
+        if src == 'redo':
+            _redo_day(a, d, i, seed_by, state, run, obs_client)
+            common.write_json(sp, state)
+            continue
+        shorts = []
         if src == 'seed':
             flights = [dict(f) for f in seed_by.get(d, [])]
         else:
@@ -72,40 +140,111 @@ def collect(a) -> int:
                 run['skipped'] += 1
                 continue
             try:
-                flights = _flights_from_weglide(client, d, state, aircraft)
+                flights, shorts = _flights_from_weglide(client, d, state, aircraft)
             except weglide.Stop as e:
                 common.log(f'day {i + 1}: WeGlide stopped for this run ({e})')
                 common.note(f'{d}: WeGlide stopped: {e}')
                 run['skipped'] += 1
                 continue
         prev = state['done'].get(d, {})
-        if not flights:
+        if not flights and (not shorts):
             state['done'][d] = {'status': 'empty', 'src': src, 'tries': prev.get('tries', 0) + 1}
             run['empty'] += 1
             common.log(f'day {i + 1} ({src}): no flights to use')
         else:
-            res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=MODELS, workers=a.workers)
+            obs = _observations(obs_client, d, flights + shorts, data)
+            res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=MODELS, workers=a.workers, short=shorts, obs=obs)
             okb = sum((b.get('ok', False) for b in res['boxes']))
             status = 'ok' if okb == len(res['boxes']) else 'partial' if okb else 'failed'
+            if src == 'new' and status != 'failed':
+                q = state.setdefault('quiet', {'days': 0, 'built': 0})
+                q['built'] += 1
+                q['days'] += any((c['region'] not in {f['region'] for f in flights} for c in shorts))
             if status != 'failed':
                 common.write_json(f'{data}/days/{d}.json.gz', res)
                 if src == 'new':
                     for f in flights:
                         state['counts'][f['grp']] = state['counts'].get(f['grp'], 0) + 1
-            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(flights)}
+            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(flights), 'v': common.DAY_VERSION}
             run[status if status != 'partial' else 'ok'] += 1
-            common.log(f"day {i + 1} ({src}): {len(flights)} flights, {okb}/{len(res['boxes'])} boxes built")
+            common.log(f"day {i + 1} ({src}): {len(flights)} flights, {len(shorts)} short, {len(obs)} stations, {okb}/{len(res['boxes'])} boxes built")
         run['days'] += 1
         common.write_json(sp, state)
+    if not a.no_new:
+        nb = _backfill_pilots(client, state, seed_by, data, t0, a.minutes)
+        if nb:
+            common.log(f'pilots: {nb} day lists looked up')
     state['weglide']['requests'] = state['weglide'].get('requests', 0) + client.used
     for k, v in client.status.items():
         state['weglide']['status'][k] = state['weglide']['status'].get(k, 0) + v
-    run.update({'requests': client.used, 'minutes': round((time.time() - t0) / 60, 1), 'weglide_stopped': client.stopped})
+    run.update({'requests': client.used, 'minutes': round((time.time() - t0) / 60, 1), 'weglide_stopped': client.stopped, 'obs_requests': obs_client.used})
     state['runs'] = (state.get('runs') or [])[-199:] + [run]
     common.write_json(sp, state)
     pr = workq.progress(state, date.today())
-    common.log(f"done: {run['days']} days ({run['ok']} built, {run['empty']} empty, {run['failed']} failed, {run['skipped']} left for later), {client.used} WeGlide requests; {pr['days_done']} days in all, {pr['seed_left']} seed days left")
+    common.log(f"done: {run['days']} days ({run['ok']} built, {run['empty']} empty, {run['failed']} failed, {run['skipped']} left for later), {client.used} WeGlide requests, {obs_client.used} for observations; {pr['days_done']} days in all, {pr['seed_left']} seed days left")
     return 0
+
+def _redo_day(a, d: str, i: int, seed_by: dict, state: dict, run: dict, obs_client) -> None:
+    fn = f'{a.data}/days/{d}.json.gz'
+    x = state['done'][d]
+    old = common.read_json(fn) if os.path.exists(fn) else {}
+    shorts = [dayrun.clean(f) for f in old.get('short') or []]
+    obs = [dayrun.clean(f) for f in old.get('obs') or []]
+    if d in seed_by:
+        flights = [dict(f) for f in seed_by[d]]
+    else:
+        flights = [dayrun.clean(f) for f in old.get('flights') or []]
+    if not flights and (not shorts):
+        x['redo_tries'] = workq.MAX_TRIES
+        run['skipped'] += 1
+        return
+    if not obs:
+        obs = _observations(obs_client, d, flights + shorts, a.data)
+    res = dayrun.run_day(d, flights, os.path.join(a.work, f'd{i}'), models=MODELS, workers=a.workers, short=shorts, obs=obs)
+    okb = sum((b.get('ok', False) for b in res['boxes']))
+    if okb:
+        common.write_json(fn, res)
+        x.update({'status': 'ok' if okb == len(res['boxes']) else 'partial', 'boxes': len(res['boxes']), 'flights': len(flights), 'v': common.DAY_VERSION})
+        run['ok'] += 1
+    else:
+        x['redo_tries'] = x.get('redo_tries', 0) + 1
+        run['failed'] += 1
+    run['days'] += 1
+    common.log(f"day {i + 1} (built again): {len(flights)} flights, {okb}/{len(res['boxes'])} boxes built")
+
+def _backfill_pilots(client, state: dict, seed_by: dict, data: str, t0: float, minutes: float) -> int:
+    if not os.environ.get('CALIB_DATA_KEY') or client.stopped:
+        return 0
+    pil = state.setdefault('pilots', {})
+    tried = state.setdefault('pilot_days', {})
+    days = list(state['seed_days']) + sorted((d for d, x in state['done'].items() if x.get('src') == 'new'))
+    n, aircraft = (0, common.load_aircraft())
+    for d in days:
+        if n >= PILOT_BACKFILL_DAYS or (time.time() - t0) / 60 > minutes or tried.get(d, 0) >= 2:
+            continue
+        if d in seed_by:
+            fids = {f['id'] for f in seed_by[d]}
+        else:
+            fn = f'{data}/days/{d}.json.gz'
+            fids = {f['id'] for f in common.read_json(fn).get('flights') or [] if not f.get('pilot')} if os.path.exists(fn) else set()
+        fids = {x for x in fids if str(x) not in pil}
+        if not fids:
+            tried[d] = 2
+            continue
+        try:
+            items = client.day_list(d)
+        except weglide.Stop:
+            break
+        n += 1
+        tried[d] = tried.get(d, 0) + 1
+        if items:
+            state.setdefault('daylists', {}).setdefault(d, weglide.day_summary(d, items, aircraft))
+        for it in items:
+            if it.get('id') in fids:
+                k = weglide.pilot_of(it)
+                if k:
+                    pil[str(it['id'])] = k
+    return n
 
 def report_cmd(a) -> int:
     import report
@@ -122,11 +261,13 @@ def export_cmd(a) -> int:
     import io
     import json
     import rows
-    L, C, F = rows.tables(rows.load_days(a.data))
+    days = rows.load_days(a.data)
+    L, C, F = rows.tables(days)
+    H, G = rows.survival(days)
     os.makedirs(a.out, exist_ok=True)
-    for name, rs in (('legs', L), ('climbs', C), ('flights', F)):
+    for name, rs in (('legs', L), ('climbs', C), ('flights', F), ('hours', H), ('glides', G)):
         buf = io.StringIO()
-        keys = list(rs[0].keys()) if rs else ['date']
+        keys = [k for k in rs[0].keys() if k != 'pilot'] if rs else ['date']
         w = csv.DictWriter(buf, fieldnames=keys, extrasaction='ignore')
         w.writeheader()
         w.writerows(rs)
@@ -134,7 +275,8 @@ def export_cmd(a) -> int:
             with gzip.GzipFile(fileobj=f, mode='wb', mtime=0) as g:
                 g.write(buf.getvalue().encode())
     st = common.read_json(f'{a.data}/state.json')
-    st.pop('seen', None)
+    for k in ('seen', 'pilots', 'pilot_days', 'daylists'):
+        st.pop(k, None)
     with open(os.path.join(a.out, 'state.json'), 'w') as f:
         json.dump(st, f, indent=1, sort_keys=True)
     common.log(f'exported {len(F)} flights, {len(L)} legs, {len(C)} climbs')
