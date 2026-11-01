@@ -167,7 +167,7 @@ def dead_section(S, R) -> list[str]:
     out += table("Afternoon short flights by the day's best W* own there (m/s)", by(aft, lambda r: band(r['best_ws0'], WS_BANDS)), cols)
     listed = [r for r in R if r['list']]
     dead = [r for r in R if r['dead']]
-    out += [f"### Region-days ({len(R)}: {len(listed)} with a day list, {sum((r['built'] for r in R))} with the forecast built)", '', f'Possibly dead: the forecast good there (best afternoon W* own, median over the takeoffs, ≥ {rows.DEAD_WS} m/s, or XC Speed ≥ {rows.DEAD_XC:g} km/h) and the region quiet or short against its normal (same region, weekend or weekday, half of the year). A full day list (100 flights) may miss its shortest flights.', '', f'{len(dead)} flagged.', '']
+    out += [f"### Region-days ({len(R)}: {len(listed)} with a day list, {sum((r['built'] for r in R))} with the forecast built)", '', f'Possibly dead: the forecast good there (best afternoon W* own, median over the takeoffs, ≥ {rows.DEAD_WS} m/s, or XC Speed ≥ {rows.DEAD_XC:g} km/h), few went far (long flights at most {rows.DEAD_LONG_SHARE:.0%} of the uploads, 1 at least) and: {rows.DEAD_MIN_NEVER} or more tracked afternoon short flights never climbed (half of those tracked); or {rows.DEAD_MIN_AFT}+ afternoon launches, {rows.DEAD_SHORT_MIN:.0%}+ of them short, {rows.DEAD_SHORT_UP:.0%} over the normal; or, where the normal is {rows.DEAD_NORMAL_UP}+ uploads, no long flight with uploads at most {rows.DEAD_QUIET:.0%} of it, or where {rows.DEAD_NO_LONG:.0%} of such days have one (normal: same region, weekend or weekday, half of the year). A full day list (100 flights) may miss its shortest flights.', '', f'{len(dead)} flagged.', '']
     if dead:
         out += ['| Day | Region | Type | Uploads (normal) | Long | Afternoon: short / sled / landed early | Best W* own | Best XC | Why |', '|---|---|---|---|---|---|---|---|---|']
         f = lambda x, n=1: '–' if x is None else f'{x:.{n}f}'
@@ -185,6 +185,42 @@ def obs_section(O, N) -> list[str]:
     out += table('Surface reports by region', [('all', O)] + by(O, lambda r: r['region']), cols)
     scols = [('soundings', lambda rs: str(len(rs))), ('mixing height reported (m)', lambda rs: dist([r['mix_obs'] for r in rs])), ('reported − forecast zi (m)', lambda rs: dist([r['mix_diff'] for r in rs])), ('lapse 0–2 km reported (°C/km)', lambda rs: dist([r['lapse_obs'] for r in rs])), ('forecast blapse', lambda rs: dist([r['blapse_fc'] for r in rs]))]
     out += table('Evening soundings by region', [('all', N)] + by(N, lambda r: r['region']), scols)
+    return out
+NOLIFT = 'usable legs where the model had no lift'
+
+def day_checks(days, L, C) -> list[dict]:
+    per = []
+    for d in days:
+        dl = [r for r in L if r['date'] == d['date']]
+        dc = [r for r in C if r['date'] == d['date']]
+        ur = [leg_ratio(r) for r in dl if usable_leg(r)]
+        cr = [climb_ratio(r) for r in dc if r['paired'] and (not r['engon'])]
+        paired = (sum((r['paired'] for r in dl)) + sum((r['paired'] for r in dc))) / max(1, len(dl) + len(dc))
+        why = []
+        if any((not b.get('ok') for b in d.get('boxes', []))):
+            why.append('a box failed')
+        if paired < 0.5:
+            why.append(f'paired {paired:.0%}')
+        ur2, cr2 = ([x for x in ur if x], [x for x in cr if x])
+        if ur2 and (not 0.4 <= st.median(ur2) <= 2.5):
+            why.append(f'XC ratio {st.median(ur2):.2f}')
+        if cr2 and (not 0.3 <= st.median(cr2) <= 3):
+            why.append(f'climb ratio {st.median(cr2):.2f}')
+        if dc and sum((bool(r['engon']) for r in dc)) / len(dc) > 0.3:
+            why.append('engine on in > 30 % of climbs')
+        nolift = sum((1 for r in dl if usable_leg(r) and (not (r['m_xc'] or 0) > 0)))
+        if nolift >= 2:
+            why.append(f'{nolift} {NOLIFT}')
+        regions = sorted({f['region'] for f in d['flights']})
+        per.append({'date': d['date'], 'regions': ' '.join(regions), 'flights': len(d['flights']), 'legs': len(dl), 'usable_legs': len(ur), 'climbs': len(dc), 'paired': round(paired, 2), 'xc_ratio': round(st.median(ur2), 2) if ur2 else '', 'climb_ratio': round(st.median(cr2), 2) if cr2 else '', 'flags': '; '.join(why)})
+    return per
+
+def bad_days(per) -> dict:
+    out = {}
+    for p in per:
+        why = [w for w in p['flags'].split('; ') if w and (not w.endswith(NOLIFT))]
+        if why:
+            out[p['date']] = '; '.join(why)
     return out
 
 def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
@@ -244,30 +280,7 @@ def build(data: str, days_csv: str | None=None, model: str='hrrr') -> str:
     out += [f"- Auto route errors: {sum((r['r_error'] is not None for r in L))}.", '']
     pf = [ratio(f['pfd'], f['free_km']) for f in F if f['paired']]
     out += ['## Potential Flight Distance (Std, at the takeoff, storm cut 2 %) / km flown', '', dist(pf) + ' (typical flights: PFD reads above them by design).', '']
-    per = []
-    for d in days:
-        dl = [r for r in L if r['date'] == d['date']]
-        dc = [r for r in C if r['date'] == d['date']]
-        ur = [leg_ratio(r) for r in dl if usable_leg(r)]
-        cr = [climb_ratio(r) for r in dc if r['paired'] and (not r['engon'])]
-        paired = (sum((r['paired'] for r in dl)) + sum((r['paired'] for r in dc))) / max(1, len(dl) + len(dc))
-        why = []
-        if any((not b.get('ok') for b in d.get('boxes', []))):
-            why.append('a box failed')
-        if paired < 0.5:
-            why.append(f'paired {paired:.0%}')
-        ur2, cr2 = ([x for x in ur if x], [x for x in cr if x])
-        if ur2 and (not 0.4 <= st.median(ur2) <= 2.5):
-            why.append(f'XC ratio {st.median(ur2):.2f}')
-        if cr2 and (not 0.3 <= st.median(cr2) <= 3):
-            why.append(f'climb ratio {st.median(cr2):.2f}')
-        if dc and sum((bool(r['engon']) for r in dc)) / len(dc) > 0.3:
-            why.append('engine on in > 30 % of climbs')
-        nolift = sum((1 for r in dl if usable_leg(r) and (not (r['m_xc'] or 0) > 0)))
-        if nolift >= 2:
-            why.append(f'{nolift} usable legs where the model had no lift')
-        regions = sorted({f['region'] for f in d['flights']})
-        per.append({'date': d['date'], 'regions': ' '.join(regions), 'flights': len(d['flights']), 'legs': len(dl), 'usable_legs': len(ur), 'climbs': len(dc), 'paired': round(paired, 2), 'xc_ratio': round(st.median(ur2), 2) if ur2 else '', 'climb_ratio': round(st.median(cr2), 2) if cr2 else '', 'flags': '; '.join(why)})
+    per = day_checks(days, L, C)
     sus = [p for p in per if p['flags']]
     out += ['## Suspicious days', '', f'{len(sus)} of {len(per)} days flagged (all days: the CSV beside this report).', '']
     if sus:

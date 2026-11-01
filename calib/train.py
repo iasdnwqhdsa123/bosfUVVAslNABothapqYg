@@ -33,7 +33,7 @@ def feats(r: dict) -> list[float]:
         v.append(np.nan if x is None else float(x))
     return v
 
-def dataset(L, C, target):
+def dataset(L, C, target, skip=()):
     if target == 'xc':
         rs = [r for r in L if report.usable_leg(r) and (r['m_xc'] or 0) > 0 and ((r['vair'] or 0) > 0)]
         y = [math.log(r['vair'] / r['m_xc']) for r in rs]
@@ -43,6 +43,9 @@ def dataset(L, C, target):
     else:
         rs = [r for r in L if report.usable_leg(r) and (r['therm'] or 0) > 0 and ((r['m_circ'] or 0) > 0)]
         y = [math.log(r['therm'] / r['m_circ']) for r in rs]
+    keep = [r['date'] not in skip for r in rs]
+    dataset.dropped = len(rs) - sum(keep)
+    rs, y = ([r for r, k in zip(rs, keep) if k], [v for v, k in zip(y, keep) if k])
     X = np.array([feats(r) for r in rs], dtype=float).reshape(-1, len(FEATURES))
     return (rs, X, np.array(y), np.array([r['date'] for r in rs]))
 
@@ -146,14 +149,16 @@ def run(data: str, out: str, which: str='all') -> dict:
     os.makedirs(out, exist_ok=True)
     days = rows.load_days(data)
     L, C, F = rows.tables(days, srcs={'seed'} if which == 'seed' else None, pilots=rows.load_pilots(data))
+    bad = report.bad_days(report.day_checks(days, *(rows.tables(days)[:2] if which == 'seed' else (L, C))))
     per = {}
     for f in F:
         if f['pilot']:
             per[f['pilot']] = per.get(f['pilot'], 0) + 1
     n = sorted(per.values())
-    res, models, md = ({}, {}, [f'# Calibration model ({which}, {date.today().isoformat()})', '', f"Cross-validated by pilot (5 folds; a pilot never in both training and test, a flight without a pilot key its own group) with the weather kept apart (each fold's training without the test rows' days in their regions). Rows weighted 1/√(the pilot's flights), no pilot over {PILOT_MAX_SHARE:.0%} of the weight. Ratio: flown / the model (1 = right on); MAE: mean |log(flown / model)| (0.10 ≈ 10 %). Physics: the site's model as it is; constant: one correction factor; ML: the trees.", '', f"Pilots: {len(per)} distinct, {sum(n)} of {len(F)} flights with a key; flights per pilot: max {(n[-1] if n else '–')}, median {(np.median(n) if n else '–')}.", ''])
+    res, models, md = ({}, {}, [f'# Calibration model ({which}, {date.today().isoformat()})', '', f"Cross-validated by pilot (5 folds; a pilot never in both training and test, a flight without a pilot key its own group) with the weather kept apart (each fold's training without the test rows' days in their regions). Rows weighted 1/√(the pilot's flights), no pilot over {PILOT_MAX_SHARE:.0%} of the weight. Ratio: flown / the model (1 = right on); MAE: mean |log(flown / model)| (0.10 ≈ 10 %). Physics: the site's model as it is; constant: one correction factor; ML: the trees.", '', f"Pilots: {len(per)} distinct, {sum(n)} of {len(F)} flights with a key; flights per pilot: max {(n[-1] if n else '–')}, median {(np.median(n) if n else '–')}.", '', f"Suspicious days left out (the data report's, but for usable legs where the model had no lift alone): {len(bad)}" + (': ' + '; '.join((f'{d} ({w})' for d, w in sorted(bad.items()))) if bad else '') + '.', ''])
     for target in ('xc', 'climb', 'circ'):
-        rs, X, y, g = dataset(L, C, target)
+        rs, X, y, g = dataset(L, C, target, bad)
+        skipped = dataset.dropped
         if len(y) < 60 or len(set(g)) < 10:
             md += [f'## {target}: too few rows ({len(y)} on {len(set(g))} days)', '']
             continue
@@ -179,8 +184,8 @@ def run(data: str, out: str, which: str='all') -> dict:
         e = export(m, names)
         chk = max((abs(predict_export(e, list(X[i])) - m.predict(X[i:i + 1])[0]) for i in range(min(200, len(y)))))
         models[target] = e
-        res[target] = {'rows': int(len(y)), 'days': int(len(set(g))), 'groups': int(len(set(pg))), 'train_dropped': dropped, 'table': tab, 'export_check': float(chk)}
-        md += [f"## {target} ({len(y)} rows, {len(set(g))} days, {len(set(pg))} pilot groups; each fold's training {dropped:.0%} smaller for the test rows' weather)", '', '| Group | n | Physics: median ratio, MAE | Constant | ML |', '|---|---|---|---|---|']
+        res[target] = {'rows': int(len(y)), 'days': int(len(set(g))), 'groups': int(len(set(pg))), 'train_dropped': dropped, 'table': tab, 'export_check': float(chk), 'suspicious_dropped': skipped}
+        md += [f"## {target} ({len(y)} rows, {len(set(g))} days, {len(set(pg))} pilot groups; {skipped} rows of suspicious days left out; each fold's training {dropped:.0%} smaller for the test rows' weather)", '', '| Group | n | Physics: median ratio, MAE | Constant | ML |', '|---|---|---|---|---|']
         for row in tab:
             c = lambda k: f"{row[k]['median_ratio']:.2f}, {row[k]['mae_log']:.3f}"
             md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |")

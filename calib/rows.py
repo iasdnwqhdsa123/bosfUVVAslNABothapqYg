@@ -95,8 +95,10 @@ def strength(legs: list[dict], flights: list[dict]) -> dict:
     return {k: 'low' if v < a else 'mid' if v < b else 'high' for k, v in val.items()}
 DEAD_WS, DEAD_XC = (1.5, 50.0)
 BEST_FROM, BEST_TO = (11, 17)
-DEAD_QUIET, DEAD_SHORT_UP = (0.5, 0.25)
-DEAD_MIN_AFT, DEAD_MIN_TRACKED = (3, 2)
+DEAD_QUIET, DEAD_NORMAL_UP = (0.5, 5)
+DEAD_SHORT_UP, DEAD_SHORT_MIN, DEAD_MIN_AFT = (0.25, 2 / 3, 4)
+DEAD_MIN_TRACKED, DEAD_MIN_NEVER = (2, 2)
+DEAD_NO_LONG, DEAD_LONG_SHARE = (0.75, 0.25)
 NORMAL_MIN_DAYS = 4
 
 def half(day: str) -> str:
@@ -158,16 +160,19 @@ def regiondays(days: list[dict], daylists: dict, model: str='hrrr') -> list[dict
         xc = st.median(b['xc']) if b['xc'] else None
         row = {'date': d, 'region': r, 'day_type': dt, 'list': c is not None, 'list_full': bool((daylists.get(d) or {}).get('full')), 'up': c['up'] if c else None, 'long': c['long'] if c else None, 'aft': c['aft'] if c else None, 'aft_short': c['aft_short'] if c else None, 'aft_sled': c['aft_sled'] if c else None, 'aft_early': c['aft_early'] if c else None, 'normal_days': len(ns), 'normal_up': n_up, 'normal_aft_short': None if n_short is None else round(n_short, 2), 'normal_long_days': None if n_long is None else round(n_long, 2), 'best_ws0': ws, 'best_xc': xc, 'tracked': b['tracked'], 'never_climbed': b['never'], 'built': (d, r) in built}
         good = ws is not None and ws >= DEAD_WS or (xc is not None and xc >= DEAD_XC)
+        few_long = c['long'] <= max(1, int(c['up'] * DEAD_LONG_SHARE)) if c else b['long'] <= 1
+        busy = n_up is not None and n_up >= DEAD_NORMAL_UP
         why = []
-        if good and c:
-            if n_up and n_up >= 2 and (c['up'] <= DEAD_QUIET * n_up):
-                why.append(f"quiet: {c['up']} uploads, normal {n_up:g}")
-            if n_short is not None and c['aft'] >= DEAD_MIN_AFT and (c['aft_short'] / c['aft'] >= n_short + DEAD_SHORT_UP):
-                why.append(f"short: {c['aft_short']} of {c['aft']} afternoon launches, normal {n_short:.0%}")
-            if dt == 'weekend' and (not c['long']) and (n_long is not None) and (n_long >= 0.5):
-                why.append(f'no long flight, normal on {n_long:.0%} of such days')
-        if good and b['tracked'] >= DEAD_MIN_TRACKED and (b['never'] / b['tracked'] >= 0.5):
+        if good and few_long and (b['tracked'] >= DEAD_MIN_TRACKED) and (b['never'] >= DEAD_MIN_NEVER) and (b['never'] / b['tracked'] >= 0.5):
             why.append(f"{b['never']} of {b['tracked']} tracked afternoon short flights never climbed")
+        if good and few_long and c:
+            sh = c['aft_short'] / c['aft'] if c['aft'] else 0
+            if n_short is not None and c['aft'] >= DEAD_MIN_AFT and (sh >= DEAD_SHORT_MIN) and (sh >= n_short + DEAD_SHORT_UP):
+                why.append(f"short: {c['aft_short']} of {c['aft']} afternoon launches, normal {n_short:.0%}")
+            if busy and (not c['long']) and (c['up'] <= DEAD_QUIET * n_up):
+                why.append(f"quiet: {c['up']} uploads, no long flight, normal {n_up:g}")
+            if busy and (not c['long']) and (n_long is not None) and (n_long >= DEAD_NO_LONG):
+                why.append(f'no long flight, normal on {n_long:.0%} of such days')
         row['dead'] = '; '.join(why)
         out.append(row)
     return out

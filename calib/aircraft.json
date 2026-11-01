@@ -1,6 +1,12 @@
 {
 "_": "WeGlide type name -> the site's polar (POLARS key); exact false: the nearest similar polar. null: left out on purpose (motor gliders that tour, hang/paragliders). Types not here are counted in the data report (unmapped) and skipped: add them here.",
 "types": {
+"AC-4 Russia": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "AS 33 15m": {
 "key": "asg29_15",
 "exact": false,
@@ -13,6 +19,12 @@
 "cls": "18m",
 "grp": "high"
 },
+"AS 33 Es 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
 "AS 33 Es 18m": {
 "key": "ventus3",
 "exact": true,
@@ -23,6 +35,12 @@
 "key": "ventus3",
 "exact": true,
 "cls": "18m",
+"grp": "high"
+},
+"AS 34 Me 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
 "grp": "high"
 },
 "AS 34 Me 18m": {
@@ -49,10 +67,22 @@
 "cls": "18m",
 "grp": "high"
 },
+"ASG 29 Es 15m": {
+"key": "asg29_15",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
 "ASG 29 Es 18m": {
 "key": "asg29",
 "exact": true,
 "cls": "18m",
+"grp": "high"
+},
+"ASG 32": {
+"key": "arcus",
+"exact": true,
+"cls": "twoseat",
 "grp": "high"
 },
 "ASG 32 Mi": {
@@ -67,10 +97,28 @@
 "cls": "open",
 "grp": "high"
 },
+"ASH 25 >= 26m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASH 25 E": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
 "ASH 25 Mi": {
 "key": "nimbus4",
 "exact": false,
 "cls": "open",
+"grp": "high"
+},
+"ASH 26": {
+"key": "ash26e",
+"exact": true,
+"cls": "18m",
 "grp": "high"
 },
 "ASH 26 E": {
@@ -115,6 +163,12 @@
 "cls": "twoseat",
 "grp": "low"
 },
+"ASK 21 Mi": {
+"key": "ask21",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
 "ASK 23": {
 "key": "astir",
 "exact": false,
@@ -151,7 +205,25 @@
 "cls": "club",
 "grp": "high"
 },
+"ASW 19 B": {
+"key": "asw19",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"ASW 19 Club": {
+"key": "asw19",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
 "ASW 20": {
+"key": "asw20",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 20 16.6m": {
 "key": "asw20",
 "exact": true,
 "cls": "15m",
@@ -167,6 +239,18 @@
 "key": "asw20",
 "exact": true,
 "cls": "15m",
+"grp": "high"
+},
+"ASW 22 BL": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASW 22 BLE": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
 "grp": "high"
 },
 "ASW 24": {
@@ -187,6 +271,12 @@
 "cls": "standard",
 "grp": "high"
 },
+"ASW 24 WL": {
+"key": "asw24",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
 "ASW 27": {
 "key": "asw27",
 "exact": true,
@@ -194,6 +284,12 @@
 "grp": "high"
 },
 "ASW 27 B": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 27-J": {
 "key": "asw27",
 "exact": true,
 "cls": "15m",
@@ -229,6 +325,12 @@
 "cls": "open",
 "grp": "high"
 },
+"Apis WR": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "Arcus": {
 "key": "arcus",
 "exact": true,
@@ -259,10 +361,34 @@
 "cls": "twoseat",
 "grp": "high"
 },
+"Calif A 21": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"Cirrus": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Club Libelle": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
 "DG 100": {
 "key": "stdcirrus",
 "exact": false,
 "cls": "club",
+"grp": "high"
+},
+"DG 1000 18m FG": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
 "grp": "high"
 },
 "DG 1000M 20m": {
@@ -307,6 +433,12 @@
 "cls": "club",
 "grp": "high"
 },
+"DG 303": {
+"key": "discus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
 "DG 400": {
 "key": "asw20",
 "exact": false,
@@ -317,6 +449,60 @@
 "key": "asw20",
 "exact": false,
 "cls": "15m",
+"grp": "high"
+},
+"DG 500 20m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 500 22m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 500 Trainer RG": {
+"key": "g103",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"DG 500M 20m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 500M 22m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 505 6 Orion": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 505 M Orion 20m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 505M 22m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 600 18m": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
 "grp": "high"
 },
 "DG 600M": {
@@ -337,16 +523,52 @@
 "cls": "18m",
 "grp": "high"
 },
+"DG 800LA 18m": {
+"key": "dg808",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"DG 800S 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
 "DG 800S 18m": {
 "key": "dg808",
 "exact": true,
 "cls": "18m",
 "grp": "high"
 },
+"DG 808C 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
 "DG 808C Competition 18m": {
 "key": "dg808",
 "exact": true,
 "cls": "18m",
+"grp": "high"
+},
+"DG 808S 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"DG 808S 18m": {
+"key": "dg808",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Discus 2T": {
+"key": "discus2",
+"exact": true,
+"cls": "standard",
 "grp": "high"
 },
 "Discus 2a": {
@@ -361,6 +583,12 @@
 "cls": "standard",
 "grp": "high"
 },
+"Discus 2c 15m": {
+"key": "discus2",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
 "Discus 2c 18m": {
 "key": "discus2c",
 "exact": true,
@@ -368,6 +596,12 @@
 "grp": "high"
 },
 "Discus 2c FES 18m": {
+"key": "discus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Discus 2cFES 18m": {
 "key": "discus2c",
 "exact": true,
 "cls": "18m",
@@ -433,6 +667,12 @@
 "cls": "twoseat",
 "grp": "high"
 },
+"Duo Discus XL FES": {
+"key": "duo",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
 "Duo Discus XLT": {
 "key": "duo",
 "exact": true,
@@ -487,6 +727,18 @@
 "cls": "twoseat",
 "grp": "low"
 },
+"G 103 Twin 3 SL 18m": {
+"key": "g103",
+"exact": true,
+"cls": "twoseat",
+"grp": "low"
+},
+"G 103 Twin 3 SL 20m": {
+"key": "g103",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
 "G 103 Twin Astir RG": {
 "key": "g103",
 "exact": true,
@@ -511,6 +763,24 @@
 "cls": "15m",
 "grp": "high"
 },
+"Glasflügel 304 17m": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"H-301": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"HP 24 15m": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
 "HpH 304 CZ": {
 "key": "ls6",
 "exact": false,
@@ -523,10 +793,34 @@
 "cls": "15m",
 "grp": "high"
 },
+"HpH 304 ES Shark": {
+"key": "asg29",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"HpH 304 MS Shark": {
+"key": "asg29",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"HpH 304 S Shark": {
+"key": "asg29",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
 "HpH 304 SJ Shark": {
 "key": "asg29",
 "exact": false,
 "cls": "18m",
+"grp": "high"
+},
+"HpH 304 TS Twin Shark": {
+"key": "arcus",
+"exact": false,
+"cls": "twoseat",
 "grp": "high"
 },
 "HpH 304C Wasp": {
@@ -535,15 +829,45 @@
 "cls": "15m",
 "grp": "high"
 },
+"IS 28 B2": {
+"key": "ask21",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
 "JS1 18m": {
 "key": "js1",
 "exact": true,
 "cls": "18m",
 "grp": "high"
 },
+"JS1 TJ 18m": {
+"key": "js1",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"JS1C 21m": {
+"key": "js1_21",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
 "JS1C TJ 21m": {
 "key": "js1_21",
 "exact": true,
+"cls": "open",
+"grp": "high"
+},
+"JS2 18m": {
+"key": "js1",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"JS2 21m": {
+"key": "js1_21",
+"exact": false,
 "cls": "open",
 "grp": "high"
 },
@@ -589,6 +913,18 @@
 "cls": "club",
 "grp": "low"
 },
+"Ka 6": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Ka 6 E": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "L-13 Blanik": {
 "key": "ask13",
 "exact": false,
@@ -613,10 +949,34 @@
 "cls": "twoseat",
 "grp": "vlow"
 },
+"LAK-12": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
 "LAK-17A 18m": {
 "key": "ventus2c",
 "exact": true,
 "cls": "18m",
+"grp": "high"
+},
+"LAK-17A T 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LAK-17A T 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"LAK-17B 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
 "grp": "high"
 },
 "LAK-17B FES 15m": {
@@ -626,6 +986,18 @@
 "grp": "high"
 },
 "LAK-17B FES 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"LAK-17C FES 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LAK-17C FES 18m": {
 "key": "ventus2c",
 "exact": true,
 "cls": "18m",
@@ -641,6 +1013,18 @@
 "key": "stdcirrus",
 "exact": false,
 "cls": "club",
+"grp": "high"
+},
+"LS 10 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LS 10 18m": {
+"key": "asg29",
+"exact": false,
+"cls": "18m",
 "grp": "high"
 },
 "LS 3": {
@@ -673,6 +1057,18 @@
 "cls": "15m",
 "grp": "high"
 },
+"LS 6 17.5m": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"LS 6 WL": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
 "LS 6-c": {
 "key": "ls6",
 "exact": true,
@@ -683,6 +1079,18 @@
 "key": "ls8_18",
 "exact": false,
 "cls": "18m",
+"grp": "high"
+},
+"LS 7": {
+"key": "ls8",
+"exact": false,
+"cls": "standard",
+"grp": "high"
+},
+"LS 7 WL": {
+"key": "ls8",
+"exact": false,
+"cls": "standard",
 "grp": "high"
 },
 "LS 7 neo": {
@@ -715,6 +1123,30 @@
 "cls": "15m",
 "grp": "high"
 },
+"Mosquito": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Mosquito WL": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Nimbus 2": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 2c": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
 "Nimbus 4": {
 "key": "nimbus4",
 "exact": true,
@@ -733,7 +1165,37 @@
 "cls": "open",
 "grp": "high"
 },
+"Nimbus 4D": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 4DM": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 4M": {
+"key": "nimbus4",
+"exact": true,
+"cls": "open",
+"grp": "high"
+},
+"Nixus": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
 "PIK-20 B": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"PIK-20 D": {
 "key": "asw20",
 "exact": false,
 "cls": "15m",
@@ -751,11 +1213,23 @@
 "cls": "club",
 "grp": "low"
 },
+"PW 6": {
+"key": "ask21",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
 "PW 6 U": {
 "key": "ask21",
 "exact": false,
 "cls": "twoseat",
 "grp": "low"
+},
+"PZL KR-03A Puchatek": {
+"key": "ask13",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
 },
 "Pegase": {
 "key": "pegase",
@@ -763,8 +1237,44 @@
 "cls": "club",
 "grp": "high"
 },
+"Phöbus A": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Phöbus B": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Phöbus C": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Pilatus B4 FG": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Pilatus B4 RG": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "SHK": {
 "key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-41 Jantar Std.": {
+"key": "asw19",
 "exact": false,
 "cls": "club",
 "grp": "high"
@@ -775,16 +1285,46 @@
 "cls": "club",
 "grp": "high"
 },
+"SZD-48 Jantar Std. 2": {
+"key": "asw19",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-48-3 Jantar Std. 3": {
+"key": "asw19",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
 "SZD-50 Puchacz": {
 "key": "ask21",
 "exact": false,
 "cls": "twoseat",
 "grp": "low"
 },
+"SZD-51 Junior": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "SZD-55-1 Nexus": {
 "key": "ls8",
 "exact": false,
 "cls": "standard",
+"grp": "high"
+},
+"SZD-56-1 Diana": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"SZD-56-2 Diana 2": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
 "grp": "high"
 },
 "SZD-56-2 Diana 2 FES": {
@@ -799,6 +1339,24 @@
 "cls": "club",
 "grp": "high"
 },
+"SZD-59 15m WL": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Schweizer SGS 1-23": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Schweizer SGS 1-23H": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "Schweizer SGS 1-26": {
 "key": "sgs126",
 "exact": true,
@@ -806,6 +1364,24 @@
 "grp": "low"
 },
 "Schweizer SGS 1-34": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Schweizer SGS 1-35": {
+"key": "asw19",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Schweizer SGS 1-35C": {
+"key": "asw19",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Schweizer SGS 1-36 Sprite": {
 "key": "astir",
 "exact": false,
 "cls": "club",
@@ -829,7 +1405,43 @@
 "cls": "twoseat",
 "grp": "vlow"
 },
+"Schweizer SGU 2-22": {
+"key": "sgs233",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Silent 2": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Solo L 33": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SparrowHawk": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
 "Std. Cirrus": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Std. Cirrus Top": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Std. Cirrus WL": {
 "key": "stdcirrus",
 "exact": true,
 "cls": "club",
@@ -841,10 +1453,46 @@
 "cls": "club",
 "grp": "high"
 },
+"Std. Libelle 17m": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
 "Std. Libelle 201 B": {
 "key": "stdcirrus",
 "exact": true,
 "cls": "club",
+"grp": "high"
+},
+"Std. Libelle WL": {
+"key": "stdcirrus",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"Ventus 2 cxa": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 2a": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus 2ax": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus 2b": {
+"key": "asw27",
+"exact": true,
+"cls": "15m",
 "grp": "high"
 },
 "Ventus 2bx": {
@@ -871,6 +1519,12 @@
 "cls": "18m",
 "grp": "high"
 },
+"Ventus 2cT 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
 "Ventus 2cx 18m": {
 "key": "ventus2c",
 "exact": true,
@@ -883,13 +1537,43 @@
 "cls": "18m",
 "grp": "high"
 },
+"Ventus 2cxT 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
 "Ventus 2cxa 15m": {
 "key": "asw27",
 "exact": true,
 "cls": "15m",
 "grp": "high"
 },
+"Ventus 2cxa 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 2cxa FES 18m": {
+"key": "ventus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 3 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
 "Ventus 3 18m": {
+"key": "ventus3",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Ventus 3E 18m": {
 "key": "ventus3",
 "exact": true,
 "cls": "18m",
@@ -919,7 +1603,31 @@
 "cls": "18m",
 "grp": "high"
 },
+"Ventus a 15m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus a 16.6m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
 "Ventus b 15m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus b 16.6m": {
+"key": "ls6",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus bT 15m": {
 "key": "ls6",
 "exact": true,
 "cls": "15m",
@@ -973,6 +1681,13 @@
 "Hang glider": null,
 "Paraglider": null,
 "Silent 2 Electro": null,
-"Alisport Silent 2 Electro": null
+"Alisport Silent 2 Electro": null,
+"Carat": null,
+"G 109 B": null,
+"Taurus": null,
+"Lambada UFM-15": null,
+"Phoenix": null,
+"Lambada UFM-13": null,
+"RF 4": null
 }
 }
