@@ -39,7 +39,7 @@ def pending_days(data: str) -> set:
     return {os.path.basename(p)[:-8] for p in glob.glob(f'{data}/pending/*.json.gz')}
 
 def doable(todo: list, pending: set, new_ok: bool) -> list:
-    return [(d, s) for d, s in todo if s != 'new' or d in pending or new_ok]
+    return [(d, s) for d, s in todo if s not in ('new', 'revisit') or d in pending or new_ok]
 
 def assign(costs: dict, n: int) -> dict:
     load = [0.0] * n
@@ -69,6 +69,7 @@ def plan(a) -> int:
     for d in workq.spread([d for d in seed_by if d not in set(state['seed_days'])]):
         state['seed_days'].append(d)
     aircraft = common.load_aircraft()
+    ac = common.aircraft_version(aircraft)
     today = _today()
     used = used_today(state, today)
     budget = 0 if a.no_new else max(0, min(a.requests, a.daily - used))
@@ -78,14 +79,22 @@ def plan(a) -> int:
     pend = pending_days(data)
     if os.path.isdir(f'{data}/obs'):
         shutil.copytree(f'{data}/obs', f'{out}/obs', dirs_exist_ok=True)
-    todo = doable(workq.next_days(state, a.days, today, new_ok=new_ok, pending=pend), pend, new_ok)
-    common.log(f"{len(todo)} days to plan ({sum((s == 'seed' for _, s in todo))} from the seed, {sum((s == 'redo' for _, s in todo))} built again, {sum((d in pend for d, _ in todo))} waiting); WeGlide: {used} requests today, {budget} this run")
-    run = {'at': stamp, 'days': 0, 'ok': 0, 'empty': 0, 'failed': 0, 'skipped': 0, 'left': 0, 'lost': 0, 'planned': 0}
+    todo = doable(workq.next_days(state, a.days, today, new_ok=new_ok, pending=pend, ac=ac), pend, new_ok)
+    common.log(f"{len(todo)} days to plan ({sum((s == 'seed' for _, s in todo))} from the seed, {sum((s == 'redo' for _, s in todo))} built again, {sum((s == 'revisit' for _, s in todo))} chosen from again, {sum((d in pend for d, _ in todo))} waiting); WeGlide: {used} requests today, {budget} this run")
+    run = {'at': stamp, 'days': 0, 'ok': 0, 'empty': 0, 'failed': 0, 'skipped': 0, 'left': 0, 'lost': 0, 'planned': 0, 'revisited': 0, 'added': 0}
     costs, srcs = ({}, {})
     for d, src in todo:
         prev = state['done'].get(d, {})
-        shorts, obs = ([], [])
-        if src == 'redo':
+        shorts, obs, extra = ([], [], {})
+        if src == 'revisit':
+            got = _plan_revisit(a, d, state, client, aircraft, ac, d in pend, run, t0)
+            if got is None:
+                continue
+            flights, shorts, obs, extra = got
+            for f in flights:
+                if f['id'] in set(extra['new_ids']):
+                    state['counts'][f['grp']] = state['counts'].get(f['grp'], 0) + 1
+        elif src == 'redo':
             fn = f'{data}/days/{d}.json.gz'
             old = common.read_json(fn) if os.path.exists(fn) else {}
             shorts = [dayrun.clean(f) for f in old.get('short') or []]
@@ -101,6 +110,7 @@ def plan(a) -> int:
         elif d in pend:
             pj = common.read_json(f'{data}/pending/{d}.json.gz')
             flights, shorts = (pj['flights'], pj.get('short') or [])
+            extra = {'ac': pj.get('ac')}
         elif src == 'seed':
             flights = [dict(f) for f in seed_by.get(d, [])]
         else:
@@ -113,19 +123,20 @@ def plan(a) -> int:
                 common.note(f'{d}: WeGlide stopped: {e}')
                 run['skipped'] += 1
                 continue
+            extra = {'ac': ac}
             q = state.setdefault('quiet', {'days': 0, 'built': 0})
             if flights or shorts:
                 q['built'] += 1
                 q['days'] += any((c['region'] not in {f['region'] for f in flights} for c in shorts))
         if not flights and (not shorts):
-            state['done'][d] = {'status': 'empty', 'src': src, 'tries': prev.get('tries', 0) + 1}
+            state['done'][d] = {'status': 'empty', 'src': src, 'tries': prev.get('tries', 0) + 1, **({'ac': extra['ac']} if extra.get('ac') else {})}
             run['empty'] += 1
             run['days'] += 1
             continue
         if src == 'new':
             for f in flights:
                 state['counts'][f['grp']] = state['counts'].get(f['grp'], 0) + 1
-        common.write_json(f'{out}/in/{d}.json.gz', {'day': d, 'src': src, 'flights': flights, 'short': shorts, 'obs': obs})
+        common.write_json(f'{out}/in/{d}.json.gz', {'day': d, 'src': src, 'flights': flights, 'short': shorts, 'obs': obs, **extra})
         costs[d] = max(1, len({f.get('region') for f in flights + shorts})) * len(runmod.MODELS)
         srcs[d] = src
     if client.stopped:
@@ -134,6 +145,8 @@ def plan(a) -> int:
         nb = runmod._backfill_pilots(client, state, seed_by, data, t0, a.minutes)
         if nb:
             common.log(f'pilots: {nb} day lists looked up')
+    for d, items in (getattr(client, 'lists', None) or {}).items():
+        common.write_json(f'{out}/lists/{d}.json.gz', items)
     n = min(a.shards, len(costs))
     sh = assign(costs, n) if n else {}
     days = [{'day': d, 'src': srcs[d], 'shard': sh[d]} for d in sorted(sh, key=lambda d: (sh[d], -costs[d], d))]
@@ -145,9 +158,52 @@ def plan(a) -> int:
     state['runs'] = (state.get('runs') or [])[-199:] + [run]
     common.write_json(f'{out}/state.json', state)
     common.write_json(f'{out}/todo.json', {'at': stamp, 't0': t0, 'no_new': bool(a.no_new), 'days': days}, indent=1)
-    common.log(f"planned {len(days)} days on {n} shards, {run['empty']} empty, {run['skipped']} left for later; {client.used} WeGlide requests")
+    common.log(f"planned {len(days)} days on {n} shards, {run['empty']} empty, {run['skipped']} left for later, {run['revisited']} chosen from again ({run['added']} flights more); {client.used} WeGlide requests")
     _output('shards', json.dumps(list(range(n))))
     return 0
+
+def _plan_revisit(a, d: str, state: dict, client, aircraft: dict, ac: str, from_pending: bool, run: dict, t0: float):
+    data = a.data
+    x = state['done'][d]
+    if from_pending:
+        pj = common.read_json(f'{data}/pending/{d}.json.gz')
+        return (pj['flights'], pj.get('short') or [], pj.get('obs') or [], {'new_ids': pj.get('new_ids') or [], 'ac': pj.get('ac'), 'obs_for': pj.get('obs_for') or []})
+    fn = f'{data}/days/{d}.json.gz'
+    if x.get('status') != 'empty' and (not os.path.exists(fn)):
+        x['ac'] = ac
+        run['revisited'] += 1
+        run['days'] += 1
+        return None
+    old = common.read_json(fn) if os.path.exists(fn) else {}
+    stored = [dayrun.clean(f) for f in old.get('flights') or []]
+    if len(stored) >= weglide.MAX_PER_DAY:
+        x['ac'] = ac
+        run['revisited'] += 1
+        run['days'] += 1
+        return None
+    lp = f'{data}/lists/{d}.json.gz'
+    items = common.read_json(lp) if os.path.exists(lp) else None
+    if items is None and (client.stopped or (time.time() - t0) / 60 > a.minutes):
+        run['skipped'] += 1
+        return None
+    try:
+        new, stopped = runmod._revisit_from_weglide(client, d, state, aircraft, stored, items)
+    except weglide.Stop as e:
+        common.note(f'{d}: WeGlide stopped: {e}')
+        run['skipped'] += 1
+        return None
+    run['revisited'] += 1
+    if not new:
+        if not stopped:
+            x['ac'] = ac
+        run['days'] += 1
+        return None
+    run['added'] += len(new)
+    shorts = [dayrun.clean(f) for f in old.get('short') or []]
+    obs = [dayrun.clean(f) for f in old.get('obs') or []]
+    obs_for = sorted({f['region'] for f in new} - {f.get('region') for f in stored}) if obs else []
+    common.note(f'{d}: chosen from again: {len(new)} flights more ({len(stored)} stored)')
+    return (stored + new, shorts, obs, {'new_ids': [f['id'] for f in new], 'ac': None if stopped else ac, 'obs_for': obs_for})
 
 def build(a) -> int:
     t0 = time.time()
@@ -173,6 +229,8 @@ def build(a) -> int:
         try:
             short = inp.get('short') or []
             obs = inp.get('obs') or runmod._observations(obs_client, d, inp['flights'] + short, a.out)
+            if inp.get('obs') and inp.get('obs_for'):
+                obs = obs + runmod._observations(obs_client, d, [f for f in inp['flights'] if f.get('region') in inp['obs_for']], a.out)
             res = dayrun.run_day(d, inp['flights'], work, models=runmod.MODELS, workers=a.workers, short=short, obs=obs)
             common.write_json(f'{a.out}/days/{d}.json.gz', res)
             status['built'].append(d)
@@ -237,6 +295,9 @@ def merge(a) -> int:
                 run['failed' if how == 'error' else 'lost'] += 1
             run['days'] += 1
             continue
+        if src == 'revisit':
+            _merge_revisit(data, d, how, fn, inp, state, run)
+            continue
         if how == 'built':
             res = common.read_json(fn)
             okb = sum((b.get('ok', False) for b in res['boxes']))
@@ -244,7 +305,7 @@ def merge(a) -> int:
             if status != 'failed':
                 shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
                 stored = True
-            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(inp['flights']), 'v': common.DAY_VERSION}
+            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(inp['flights']), 'v': common.DAY_VERSION, **({'ac': inp['ac']} if inp.get('ac') else {})}
             run[status if status != 'partial' else 'ok'] += 1
             run['days'] += 1
         elif how == 'left':
@@ -264,7 +325,10 @@ def merge(a) -> int:
                 if os.path.exists(pf):
                     os.remove(pf)
             else:
-                common.write_json(pf, {'day': d, 'flights': inp['flights'], 'short': inp.get('short') or []})
+                common.write_json(pf, {'day': d, 'flights': inp['flights'], 'short': inp.get('short') or [], 'ac': inp.get('ac')})
+    for p in glob.glob(f'{a.plan}/lists/*.json.gz'):
+        os.makedirs(f'{data}/lists', exist_ok=True)
+        shutil.copyfile(p, f'{data}/lists/{os.path.basename(p)}')
     for p in glob.glob(f'{a.built}/*/obs/*.json'):
         os.makedirs(f'{data}/obs', exist_ok=True)
         shutil.copyfile(p, f'{data}/obs/{os.path.basename(p)}')
@@ -276,11 +340,53 @@ def merge(a) -> int:
     run['minutes'] = round((time.time() - todo['t0']) / 60, 1)
     common.write_json(f'{data}/state.json', state)
     pr = workq.progress(state, _today())
-    common.log(f"merged: {run['days']} days ({run['ok']} built, {run['empty']} empty, {run['failed']} failed, {run['lost']} lost, {run['left']} waiting, {run['skipped']} left for later), {run.get('requests', 0)} WeGlide requests; {pr['days_done']} days in all, {pr['seed_left']} seed days left")
+    common.log(f"merged: {run['days']} days ({run['ok']} built, {run['empty']} empty, {run['failed']} failed, {run['lost']} lost, {run['left']} waiting, {run['skipped']} left for later; {run.get('revisited', 0)} chosen from again, {run.get('stored_more', 0)} flights more stored), {run.get('requests', 0)} WeGlide requests; {pr['days_done']} days in all, {pr['seed_left']} seed days left, {pr['revisit_left']} to choose from again")
     more, why = chain(state, data, a.daily, todo.get('no_new', False))
     common.log(f"next run: {('yes' if more else 'no')} ({why})")
     _output('more', 'yes' if more else 'no')
     return 0
+
+def _merge_revisit(data: str, d: str, how: str, fn, inp: dict, state: dict, run: dict) -> None:
+    prev = state['done'][d]
+    new_ids = set(inp.get('new_ids') or [])
+    new = [f for f in inp['flights'] if f['id'] in new_ids]
+    pf = f'{data}/pending/{d}.json.gz'
+    stored = False
+    if how == 'built':
+        res = common.read_json(fn)
+        okb = sum((b.get('ok', False) for b in res['boxes']))
+        if okb:
+            shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
+            prev.update({'status': 'ok' if okb == len(res['boxes']) else 'partial', 'boxes': len(res['boxes']), 'flights': len(inp['flights']), 'v': common.DAY_VERSION})
+            if inp.get('ac'):
+                prev['ac'] = inp['ac']
+            prev.pop('rv_tries', None)
+            run['ok'] += 1
+            run['stored_more'] = run.get('stored_more', 0) + len(new)
+            stored = True
+        else:
+            prev['rv_tries'] = prev.get('rv_tries', 0) + 1
+            run['failed'] += 1
+    elif how == 'left':
+        run['left'] += 1
+    else:
+        prev['rv_tries'] = prev.get('rv_tries', 0) + 1
+        run['failed' if how == 'error' else 'lost'] += 1
+    if how != 'left':
+        run['days'] += 1
+    if stored:
+        if os.path.exists(pf):
+            os.remove(pf)
+        return
+    for f in new:
+        state['counts'][f['grp']] = max(0, state['counts'].get(f['grp'], 0) - 1)
+    if prev.get('rv_tries', 0) >= workq.MAX_TRIES:
+        if os.path.exists(pf):
+            os.remove(pf)
+        prev['ac'] = inp.get('ac') or common.aircraft_version()
+        prev.pop('rv_tries', None)
+    else:
+        common.write_json(pf, {'day': d, 'revisit': True, 'flights': inp['flights'], 'short': inp.get('short') or [], 'obs': inp.get('obs') or [], 'new_ids': sorted(new_ids), 'ac': inp.get('ac'), 'obs_for': inp.get('obs_for') or []})
 
 def chain(state: dict, data: str, daily: int, no_new: bool) -> tuple[bool, str]:
     today = _today()
@@ -295,7 +401,7 @@ def chain(state: dict, data: str, daily: int, no_new: bool) -> tuple[bool, str]:
     pend = pending_days(data)
     work = doable(workq.next_days(state, 1, today, new_ok=new_ok, pending=pend), pend, new_ok)
     if work:
-        return (True, 'work left' if work[0][1] != 'new' or work[0][0] in pend else f'new days, {left} WeGlide requests left today')
+        return (True, 'work left' if work[0][1] not in ('new', 'revisit') or work[0][0] in pend else f'new days, {left} WeGlide requests left today')
     return (False, 'nothing left without WeGlide; ' + ('WeGlide failing' if not wg_ok else "today's WeGlide budget spent" if left < MIN_REQUESTS else 'new days off' if no_new else 'no days left'))
 
 def main() -> int:

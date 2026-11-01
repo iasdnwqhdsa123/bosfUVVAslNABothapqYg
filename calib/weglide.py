@@ -27,6 +27,7 @@ class Client:
         self._open = opener or (lambda req: urllib.request.urlopen(req, timeout=40))
         self._sleep, self._clock, self._last = (sleep, clock, -1000000000.0)
         self.status = {}
+        self.lists = {}
 
     def get(self, path: str, params: dict | None=None):
         if self.stopped:
@@ -77,7 +78,9 @@ class Client:
 
     def day_list(self, day: str) -> list:
         r = self.get('flight', {'country_id_in': 'US', 'scoring_date_start': day, 'scoring_date_end': day, 'order_by': '-distance', 'limit': 100})
-        return r if isinstance(r, list) else []
+        r = r if isinstance(r, list) else []
+        self.lists[day] = [slim(it) for it in r if isinstance(it, dict)]
+        return r
 
     def detail(self, fid: int):
         return self.get(f'flightdetail/{int(fid)}')
@@ -130,15 +133,23 @@ def candidate(item: dict, aircraft: dict, unmapped: dict) -> dict | None:
     return {'id': item['id'], 'date': item.get('scoring_date'), 'state': st, 'state_from_airport': from_ap, 'region': common.REGION[st], 'tz': ap.get('timezone') or common.TZ.get(st, 'America/Chicago'), 'ac': name, 'key': ac['key'], 'key_exact': ac['exact'], 'cls': ac['cls'], 'grp': ac['grp'], 'takeoff': item.get('takeoff_time'), 'landing': item.get('landing_time'), 'dur_h': round(h, 2), 'bbox': bbox, 'dmst': item.get('dmst_index'), 'list_km': km, 'list_kmh': (item.get('contest') or {}).get('speed'), 'pilot': pilot_of(item)}
 
 def pilot_of(item: dict) -> str | None:
+    if 'pilot' in item:
+        return item['pilot']
     return common.pilot_key((item.get('user') or {}).get('id'))
 
-def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, seen: set) -> list:
+def slim(item: dict) -> dict:
+    ap = item.get('takeoff_airport') or {}
+    con = item.get('contest') or {}
+    return {'id': item.get('id'), 'scoring_date': item.get('scoring_date'), 'takeoff_time': item.get('takeoff_time'), 'landing_time': item.get('landing_time'), 'bbox': item.get('bbox'), 'dmst_index': item.get('dmst_index'), 'takeoff_airport': {'region': ap.get('region'), 'timezone': ap.get('timezone')}, 'aircraft': {'name': (item.get('aircraft') or {}).get('name')}, 'contest': {'distance': con.get('distance'), 'speed': con.get('speed')}, 'pilot': pilot_of(item)}
+
+def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, seen: set, taken=(), room: int=MAX_PER_DAY) -> list:
     buckets = {}
+    taken = set(taken)
     for it in items:
         if it.get('id') in seen:
             continue
         c = candidate(it, aircraft, unmapped)
-        if c and c['date'] == day:
+        if c and c['date'] == day and ((c['region'], c['grp']) not in taken):
             buckets.setdefault((c['region'], c['grp']), []).append(c)
     rnd = random.Random(f'7:{day}')
     keys = sorted(buckets)
@@ -147,7 +158,7 @@ def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, 
     under = lambda g: g in SHARE and counts.get(g, 0) / total < SHARE[g]
     keys.sort(key=lambda k: 0 if under(k[1]) else 1)
     out = []
-    for k in keys[:MAX_PER_DAY]:
+    for k in keys[:max(0, min(room, MAX_PER_DAY))]:
         out.append(rnd.choice(buckets[k]))
     return out
 SLED_MIN = 25

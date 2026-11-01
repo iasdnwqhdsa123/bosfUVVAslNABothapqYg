@@ -25,6 +25,9 @@ def nearest_state(lon: float, lat: float) -> str:
 def load_aircraft() -> dict:
     with open(os.path.join(HERE, 'aircraft.json'), encoding='utf-8') as f:
         return json.load(f)['types']
+
+def aircraft_version(types: dict | None=None) -> str:
+    return hashlib.sha256(json.dumps(types if types is not None else load_aircraft(), sort_keys=True).encode()).hexdigest()[:12]
 DAY_VERSION = 2
 
 def pilot_key(user_id) -> str | None:

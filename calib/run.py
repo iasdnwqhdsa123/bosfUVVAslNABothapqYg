@@ -62,12 +62,38 @@ def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> tuple[
     seen = set(state['seen'])
     chosen = weglide.choose(d, items, aircraft, state['counts'], state['unmapped'], seen)
     common.note(f'{d}: list {len(items)} flights, chosen {len(chosen)}')
+    out, stopped = _fetch_chosen(client, d, chosen, state)
+    if stopped:
+        raise weglide.Stop(client.stopped or 'stopped')
+    shorts = short_flights(d, items, aircraft, out, summary, state)
+    if shorts:
+        try:
+            _short_tracks(client, d, shorts, out)
+        except weglide.Stop:
+            pass
+        common.note(f"{d}: short flights kept {len(shorts)} ({sum((bool(c.get('tracked')) for c in shorts))} with the track)")
+    return (out, shorts)
+
+def _revisit_from_weglide(client, d: str, state: dict, aircraft: dict, stored: list[dict], items: list | None=None) -> tuple[list[dict], bool]:
+    if items is None:
+        items = client.day_list(d)
+    state.setdefault('daylists', {})[d] = weglide.day_summary(d, items, aircraft)
+    seen = set(state['seen']) | {f['id'] for f in stored}
+    taken = {(f.get('region'), f.get('grp')) for f in stored}
+    chosen = weglide.choose(d, items, aircraft, state['counts'], {}, seen, taken=taken, room=weglide.MAX_PER_DAY - len(stored))
+    common.note(f'{d}: chosen again from {len(items)} listed: {len(chosen)} more')
+    return _fetch_chosen(client, d, chosen, state)
+
+def _fetch_chosen(client, d: str, chosen: list[dict], state: dict) -> tuple[list[dict], bool]:
     out = []
     for c in chosen:
-        det = client.detail(c['id'])
-        if not det:
-            continue
-        dat = client.data(c['id'])
+        try:
+            det = client.detail(c['id'])
+            if not det:
+                continue
+            dat = client.data(c['id'])
+        except weglide.Stop:
+            return (out, True)
         if not dat:
             continue
         state['seen'].append(c['id'])
@@ -82,14 +108,7 @@ def _flights_from_weglide(client, d: str, state: dict, aircraft: dict) -> tuple[
         ws = free.get('score') or {}
         rec = {**c, 'src': 'weglide', 'tp': t['tp'], 'zmax': t['zmax'], 'engine_max': t['engine_max'], 'engine_med': t['engine_med'], 'free_km': free.get('distance'), 'free_kmh': free.get('speed'), 'thermal_avg': ws.get('thermal_avg'), 'thermal_pct': ws.get('thermal_percentage'), 'glide_ratio': ws.get('glide_ratio'), 'agl_avg': ws.get('agl_avg'), 'wind_kmh': ws.get('wind_speed'), 'wind_dir': ws.get('wind_direction'), 'legs': t['legs'], 'climbs': t['climbs'], 'track': t['track']}
         out.append(rec)
-    shorts = short_flights(d, items, aircraft, out, summary, state)
-    if shorts:
-        try:
-            _short_tracks(client, d, shorts, out)
-        except weglide.Stop:
-            pass
-        common.note(f"{d}: short flights kept {len(shorts)} ({sum((bool(c.get('tracked')) for c in shorts))} with the track)")
-    return (out, shorts)
+    return (out, False)
 
 def _observations(obs_client, d: str, items: list[dict], data: str) -> list[dict]:
     if not items or obs_client.used >= obs_client.budget:
