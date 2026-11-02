@@ -15,7 +15,8 @@ MAX_PER_DAY = 10
 MIN_KM = {'high': 100, 'low': 40, 'vlow': 15}
 MIN_H = {'high': 1.5, 'low': 1.0, 'vlow': 0.75}
 SHARE = {'low': 0.25, 'vlow': 0.065}
-EU_LISTS = (('DE', 'NL', 'BE', 'LU', 'DK'), ('AT', 'CH', 'LI', 'SI', 'IT', 'SM', 'MT'), ('FR', 'MC', 'ES', 'PT', 'AD'), ('GB', 'IE', 'IM', 'JE', 'GG', 'SE', 'NO', 'FI', 'IS'), ('PL', 'CZ', 'SK', 'HU', 'LT', 'LV', 'EE', 'HR', 'BA', 'RS', 'ME', 'MK', 'AL', 'GR', 'BG', 'RO', 'XK', 'MD'))
+EU_LISTS = (('DE', 'NL', 'BE', 'LU', 'DK'), ('AT', 'CH', 'SI', 'IT'), ('FR', 'ES', 'PT'), ('GB', 'IE', 'SE', 'NO', 'FI', 'IS'), ('PL', 'CZ', 'SK', 'HU', 'LT', 'LV', 'EE', 'HR', 'BA', 'RS', 'ME', 'MK', 'GR', 'BG', 'RO'))
+NOT_LISTED = ('LI', 'SM', 'MT', 'MC', 'AD', 'IM', 'JE', 'GG', 'AL', 'XK', 'MD')
 
 class Stop(Exception):
     pass
@@ -79,6 +80,9 @@ class Client:
                 self._sleep(30 * (attempt + 1))
         return None
 
+    def _refused(self) -> int:
+        return self.status.get('400', 0) + self.status.get('422', 0)
+
     def _list(self, day: str, countries: str) -> list | None:
         return self.get('flight', {'country_id_in': countries, 'scoring_date_start': day, 'scoring_date_end': day, 'order_by': '-distance', 'limit': LIST_LIMIT})
 
@@ -89,16 +93,20 @@ class Client:
         else:
             for group in EU_LISTS:
                 if self.comma_ok and len(group) > 1:
-                    before = self.status.get('422', 0)
+                    before = self._refused()
                     got = self._list(day, ','.join(group))
-                    if got is None and self.status.get('422', 0) > before:
+                    if got is None and self._refused() > before:
                         self.comma_ok = False
                         self.fails = max(0, self.fails - 1)
                     if self.comma_ok:
                         pages.append(got)
                         continue
                 for c in group:
-                    pages.append(self._list(day, c))
+                    before = self._refused()
+                    got = self._list(day, c)
+                    if got is None and self._refused() > before:
+                        self.fails = max(0, self.fails - 1)
+                    pages.append(got)
         pages = [p for p in pages if isinstance(p, list)]
         self.last_full = any((len(p) >= LIST_LIMIT for p in pages))
         r = [it for p in pages for it in p]

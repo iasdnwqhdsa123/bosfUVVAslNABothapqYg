@@ -1688,6 +1688,232 @@
 "Lambada UFM-15": null,
 "Phoenix": null,
 "Lambada UFM-13": null,
-"RF 4": null
+"RF 4": null,
+"H 30": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"BS-1": {
+"key": "asw20",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"SZD-54-2 Perkoz 17.5m": {
+"key": "g103",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"SZD-54-2 Perkoz 20m WL": {
+"key": "g103",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"DuckHawk": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Apis 2 M 15m": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Janus 18.2m": {
+"key": "duo",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"Applebay Zuni II": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Slingsby T.50 Skylark 4": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Schreder HP-18": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Franklin PS-2": {
+"key": "sgs233",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Ka 1": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Ventus bT 16.6m": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Marske Pioneer III": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Ventus 2cT 15m": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Ventus 3T 15m": {
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LS 4 WL": {
+"key": "ls4",
+"exact": true,
+"cls": "club",
+"grp": "high"
+},
+"LS 8 neo": {
+"key": "ls8",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"LS 8T 18m": {
+"key": "ls8_18",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"ASG 29 E 15m": {
+"key": "asg29_15",
+"exact": true,
+"cls": "15m",
+"grp": "high"
+},
+"LS 10-st 18m": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"ASW 22 BE": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 3 25.5m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"Nimbus 3D 25.6m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"Quintus": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"EB 29": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"SB 10": {
+"key": "nimbus4",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 500 Trainer FG": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"LAK-19 15m": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LS 2": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"PIK-30": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Mistral C": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Woodstock One": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Grunau Baby": {
+"key": "sgs233",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Ka 4 Rhönlerche II": {
+"key": "sgs233",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Schweizer SGS 2-8": {
+"key": "sgs233",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Marske Monarch E": null,
+"TST-10 Atlas": null,
+"AMT-200 Super Ximango": null,
+"SF 25 C 2000": null,
+"RF-5B": null,
+"HK36 Super Dimona": null,
+"D 37": null,
+"SZD-45 Ogar": null,
+"PW 2": null,
+"Robinson JR-V": null
 }
 }
