@@ -354,7 +354,7 @@ def run(D: dict, out: str) -> dict:
                 md.append('')
     by_lead = compare_leads(D) if D.get('days') else {}
     if by_lead:
-        md += ['## Days ahead: which model is nearer at each lead', '', "The same observations of the air against each model's run of the day (lead 0) and its runs 1, 2, 3 and 5 days before (common.LEADS): n, median ratio (cb: shift in m), MAE; all rows of each.", '']
+        md += ['## Days ahead: which model is nearer at each lead', '', f"The same observations of the air against each model's run of the day (lead 0) and its runs {common.leads_text()} days before (common.LEADS): n, median ratio (cb: shift in m), MAE; all rows of each.", '']
         for macro, cmp_m in by_lead.items():
             for t, by_m in cmp_m.items():
                 bases = sorted({common.base_model(m) for m in by_m})

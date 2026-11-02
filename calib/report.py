@@ -270,7 +270,7 @@ def lead_section(days: list[dict], models: list[str], pilots: dict) -> list[str]
     lv = {m: {k: v for k, v in d.items() if v} for m, d in lv.items()}
     cv = {m: {k: v for k, v in d.items() if v} for m, d in cv.items()}
     mae = lambda xs: f'{sum((abs(math.log(x)) for x in xs)) / len(xs):.3f}' if xs else '–'
-    out = ['## Days ahead: which model is nearer at each lead', '', f"Each box-day also built from the runs 1, 2, 3 and 5 days before (HRRR: 1; ECMWF's from {common.ECMWF_RUNS_FIRST}; GFS beside ECMWF in Europe, its 0 the same day's 00Z), evaluated as the site would have shown it then. Error: MAE of log(flown / model) (0.10 ~ 10 %; the bias a constant fixes is in the ratio). Usable thermal legs (XC speed) and circling climbs.", '']
+    out = ['## Days ahead: which model is nearer at each lead', '', f"Each box-day also built from the runs {common.leads_text('gfs')} days before (HRRR: {common.leads_text('hrrr')}; ECMWF's from {common.ECMWF_RUNS_FIRST}; GFS beside ECMWF in Europe, its 0 the same day's 00Z), evaluated as the site would have shown it then. Error: MAE of log(flown / model) (0.10 ~ 10 %; the bias a constant fixes is in the ratio). Usable thermal legs (XC speed) and circling climbs.", '']
     for kind, vals in (('Legs (XC speed)', lv), ('Climbs', cv)):
         out += [f'### {kind}: each model by lead', '', '| Model | Lead (days) | n | flown / model | error |', '|---|---|---|---|---|']
         for b, leads in sorted(by_base.items()):

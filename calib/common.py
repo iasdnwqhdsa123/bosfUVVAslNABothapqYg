@@ -33,7 +33,7 @@ EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '0
 SAMPLED = {'icon', 'icond2'}
 ICON_FIRST = '2025-01-17'
 EU_START = '2024-03-01'
-LEADS = {m: tuple((int(x) for x in ns.split('+') if x.strip().isdigit())) for m, _, ns in (p.partition(':') for p in os.environ.get('CALIB_LEADS', 'hrrr:1,gfs:1+2+3+5,ecmwf:1+2+3+5').split(',') if ':' in p)}
+LEADS = {m: tuple((int(x) for x in ns.split('+') if x.strip().isdigit())) for m, _, ns in (p.partition(':') for p in os.environ.get('CALIB_LEADS', 'hrrr:1,gfs:1+3+5+7,ecmwf:1+3+5+7').split(',') if ':' in p)}
 LEAD_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_LEAD_SHARE', '1') or 0)))
 LEAD_EXTRA = {'EU': ('gfs',)}
 ECMWF_RUNS_FIRST = '2026-07-31'
@@ -52,6 +52,10 @@ def lead_sampled(day: str) -> bool:
     if not day or LEAD_SHARE <= 0:
         return False
     return int(hashlib.sha256(f'lead-sample:{day}'.encode()).hexdigest()[:8], 16) / 2 ** 32 < LEAD_SHARE
+
+def leads_text(model: str | None=None) -> str:
+    ns = sorted(set(LEADS.get(model, ())) if model else {n for v in LEADS.values() for n in v})
+    return ', '.join(map(str, ns[:-1])) + (' and ' if len(ns) > 1 else '') + (str(ns[-1]) if ns else '')
 
 def lead_models(macro: str, day: str | None) -> list[str]:
     if not day or not lead_sampled(day):
