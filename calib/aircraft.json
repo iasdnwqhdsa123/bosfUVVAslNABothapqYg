@@ -14,7 +14,7 @@
 "grp": "high"
 },
 "AS 33 18m": {
-"key": "ventus3",
+"key": "as33",
 "exact": true,
 "cls": "18m",
 "grp": "high"
@@ -26,13 +26,13 @@
 "grp": "high"
 },
 "AS 33 Es 18m": {
-"key": "ventus3",
+"key": "as33",
 "exact": true,
 "cls": "18m",
 "grp": "high"
 },
 "AS 33 Me 18m": {
-"key": "ventus3",
+"key": "as33",
 "exact": true,
 "cls": "18m",
 "grp": "high"
@@ -81,13 +81,13 @@
 },
 "ASG 32": {
 "key": "arcus",
-"exact": true,
+"exact": false,
 "cls": "twoseat",
 "grp": "high"
 },
 "ASG 32 Mi": {
 "key": "arcus",
-"exact": true,
+"exact": false,
 "cls": "twoseat",
 "grp": "high"
 },
@@ -129,19 +129,19 @@
 },
 "ASH 30 Mi": {
 "key": "nimbus4",
-"exact": true,
+"exact": false,
 "cls": "open",
 "grp": "high"
 },
 "ASH 31 Mi 18m": {
 "key": "asg29",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
 "ASH 31 Mi 21m": {
 "key": "nimbus4",
-"exact": true,
+"exact": false,
 "cls": "open",
 "grp": "high"
 },
@@ -423,19 +423,19 @@
 },
 "DG 300": {
 "key": "discus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
 "DG 300 WL": {
 "key": "discus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
 "DG 303": {
 "key": "discus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
@@ -614,9 +614,9 @@
 "grp": "high"
 },
 "Discus 2cT 18m": {
-"key": "discus2",
+"key": "discus2c",
 "exact": true,
-"cls": "standard",
+"cls": "18m",
 "grp": "high"
 },
 "Discus a": {
@@ -705,13 +705,13 @@
 },
 "G 102 Club Astir": {
 "key": "astir",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "low"
 },
 "G 102 Std. Astir": {
 "key": "astir",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "low"
 },
@@ -723,13 +723,13 @@
 },
 "G 103 Twin 3 18m": {
 "key": "g103",
-"exact": true,
+"exact": false,
 "cls": "twoseat",
 "grp": "low"
 },
 "G 103 Twin 3 SL 18m": {
 "key": "g103",
-"exact": true,
+"exact": false,
 "cls": "twoseat",
 "grp": "low"
 },
@@ -873,37 +873,37 @@
 },
 "JS3 15m": {
 "key": "asg29_15",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "JS3 18m": {
 "key": "js1",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
 "JS3 RES 15m": {
 "key": "asg29_15",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "JS3 RES 18m": {
 "key": "js1",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
 "JS3 TJ 15m": {
 "key": "asg29_15",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "JS3 TJ 18m": {
 "key": "js1",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
@@ -957,7 +957,7 @@
 },
 "LAK-17A 18m": {
 "key": "ventus2c",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
@@ -969,7 +969,7 @@
 },
 "LAK-17A T 18m": {
 "key": "ventus2c",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
@@ -987,7 +987,7 @@
 },
 "LAK-17B FES 18m": {
 "key": "ventus2c",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
@@ -999,13 +999,13 @@
 },
 "LAK-17C FES 18m": {
 "key": "ventus2c",
-"exact": true,
+"exact": false,
 "cls": "18m",
 "grp": "high"
 },
 "LS 1-c": {
 "key": "stdcirrus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
@@ -1029,13 +1029,13 @@
 },
 "LS 3": {
 "key": "asw20",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "LS 3a": {
 "key": "asw20",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
@@ -1119,7 +1119,7 @@
 },
 "Mini Nimbus": {
 "key": "asw20",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
@@ -1449,25 +1449,25 @@
 },
 "Std. Libelle": {
 "key": "stdcirrus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
 "Std. Libelle 17m": {
 "key": "stdcirrus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
 "Std. Libelle 201 B": {
 "key": "stdcirrus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
 "Std. Libelle WL": {
 "key": "stdcirrus",
-"exact": true,
+"exact": false,
 "cls": "club",
 "grp": "high"
 },
@@ -1479,31 +1479,31 @@
 },
 "Ventus 2a": {
 "key": "asw27",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus 2ax": {
 "key": "asw27",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus 2b": {
 "key": "asw27",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus 2bx": {
 "key": "asw27",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus 2c 15m": {
 "key": "asw27",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
@@ -1545,7 +1545,7 @@
 },
 "Ventus 2cxa 15m": {
 "key": "asw27",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
@@ -1580,9 +1580,9 @@
 "grp": "high"
 },
 "Ventus 3F 15m": {
-"key": "ventus3",
-"exact": true,
-"cls": "18m",
+"key": "asg29_15",
+"exact": false,
+"cls": "15m",
 "grp": "high"
 },
 "Ventus 3F 18m": {
@@ -1605,55 +1605,55 @@
 },
 "Ventus a 15m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus a 16.6m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus b 15m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus b 16.6m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus bT 15m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus c 15m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus c 17.6m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus cM 17.6m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
 "Ventus cT 17.6m": {
 "key": "ls6",
-"exact": true,
+"exact": false,
 "cls": "15m",
 "grp": "high"
 },
