@@ -427,7 +427,7 @@ def build_command(day: str, B: dict, out: str, model: str, workers: int, work: s
         cmd += ['--lead', str(lead)] + (['--area', common.macro_of(B['region'])] if script == 'build_lead.py' else [])
     if script == 'build_eu.py':
         import build_eu
-        if not build_eu.covers(model, B['bbox']):
+        if not build_eu.covers(base, B['bbox']):
             return None
         cmd += ['--cache', os.path.join(work, 'eu-cache')]
     return cmd
@@ -487,6 +487,8 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
             gdir = os.path.join(grids, key, f'{model}-box{bi}')
             why = grids_usable(gdir, B['bbox'], model)
             if why == 'missing' and model in common.SAMPLED and (not _was_built(rec, model, bi)):
+                continue
+            if why == 'missing' and common.is_lead(model) and (not _was_built(rec, model, bi)):
                 continue
             if why and common.is_lead(model):
                 res['lead_v'] = None

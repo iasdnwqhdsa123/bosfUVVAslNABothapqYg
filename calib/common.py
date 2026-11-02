@@ -36,7 +36,8 @@ EU_START = '2024-03-01'
 LEADS = {m: tuple((int(x) for x in ns.split('+') if x.strip().isdigit())) for m, _, ns in (p.partition(':') for p in os.environ.get('CALIB_LEADS', 'hrrr:1,gfs:1+3+5+7,ecmwf:1+3+5+7').split(',') if ':' in p)}
 LEAD_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_LEAD_SHARE', '1') or 0)))
 LEAD_EXTRA = {'EU': ('gfs',)}
-ECMWF_RUNS_FIRST = '2026-07-31'
+RUNS_FIRST = {'ecmwf': '2026-07-31'}
+ECMWF_RUNS_FIRST = RUNS_FIRST['ecmwf']
 LEAD_RUN_H = {'US': {'hrrr': 12, 'gfs': 12}, 'EU': {'gfs': 0, 'ecmwf': 0}}
 
 def base_model(model: str) -> str:
@@ -67,7 +68,7 @@ def lead_models(macro: str, day: str | None) -> list[str]:
             continue
         ns = ((0,) if m in LEAD_EXTRA.get(macro, ()) else ()) + LEADS.get(m, ())
         for n in ns:
-            if m == 'ecmwf' and (d - timedelta(days=n)).isoformat() < ECMWF_RUNS_FIRST:
+            if m in RUNS_FIRST and (d - timedelta(days=n)).isoformat() < RUNS_FIRST[m]:
                 continue
             out.append(f'{m}@{n}')
     return out
