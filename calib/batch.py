@@ -77,6 +77,11 @@ def plan(a) -> int:
     state = common.read_json(sp) if os.path.exists(sp) else workq.new_state(list(seed_by))
     for d in workq.spread([d for d in seed_by if d not in set(state['seed_days'])]):
         state['seed_days'].append(d)
+    if not state.get('tries_reset_lost'):
+        for x in state['done'].values():
+            for k in ('redo_tries', 'lv_tries', 'rs_tries'):
+                x.pop(k, None)
+        state['tries_reset_lost'] = 1
     aircraft = common.load_aircraft()
     ac = common.aircraft_version(aircraft)
     today = _today()
@@ -262,9 +267,11 @@ def _fetch_grids(month: str, dest: str) -> bool:
     except Exception as e:
         common.note(f'grids {month}: not fetched: {e!r}')
         return False
+LEAD_GRACE = 10
 
 def build(a) -> int:
     t0 = time.time()
+    dayrun.LEAD_DEADLINE = t0 + (a.minutes + LEAD_GRACE) * 60
     todo = common.read_json(f'{a.plan}/todo.json')
     mine = [j for j in todo['days'] if j['shard'] == a.shard]
     os.makedirs(f'{a.out}/days', exist_ok=True)
@@ -295,7 +302,7 @@ def build(a) -> int:
                 common.write_json(f'{a.out}/days/{d}.json.gz', res)
                 status['built'].append(d)
                 lb = res.get('lead_boxes') or {}
-                common.log(f"day {i + 1}/{len(mine)} (earlier runs): {lb.get('ok', 0)}/{lb.get('all', 0)} boxes")
+                common.log(f"day {i + 1}/{len(mine)} (earlier runs): {res.get('lead_new', 0)} built, {lb.get('ok', 0)}/{lb.get('all', 0)} boxes" + ('' if res.get('lead_v') else '; the rest in a later run'))
             elif j['src'] == 'rescore':
                 m = month_of(d)
                 if m not in fetched:
@@ -390,7 +397,8 @@ def merge(a) -> int:
                 run['left'] += 1
                 continue
             else:
-                prev['redo_tries'] = prev.get('redo_tries', 0) + 1
+                if how != 'lost':
+                    prev['redo_tries'] = prev.get('redo_tries', 0) + 1
                 run['failed' if how == 'error' else 'lost'] += 1
             run['days'] += 1
             continue
@@ -458,15 +466,16 @@ def _merge_lead(data: str, d: str, how: str, fn, state: dict, run: dict, months:
         return
     run['days'] += 1
     res = common.read_json(fn) if how == 'built' else None
-    if res and res.get('lead_v'):
+    if res and (res.get('lead_v') or res.get('lead_new')):
         shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
-        prev['lv'] = res['lead_v']
+        prev['lv'] = res.get('lead_v')
         prev.pop('lv_tries', None)
-        run['leads_ok'] = run.get('leads_ok', 0) + 1
+        run['leads_ok' if res.get('lead_v') else 'leads_part'] = run.get('leads_ok' if res.get('lead_v') else 'leads_part', 0) + 1
         if any((b.get('saved') for b in res['boxes'] if common.is_lead(b.get('model')))):
             months.add(month_of(d))
         return
-    prev['lv_tries'] = prev.get('lv_tries', 0) + 1
+    if how != 'lost':
+        prev['lv_tries'] = prev.get('lv_tries', 0) + 1
     run['failed' if how in ('built', 'error') else 'lost'] += 1
 
 def _merge_rescore(data: str, d: str, how: str, fn, state: dict, run: dict, months: set) -> None:
@@ -476,7 +485,8 @@ def _merge_rescore(data: str, d: str, how: str, fn, state: dict, run: dict, mont
         return
     run['days'] += 1
     if how != 'built':
-        prev['rs_tries'] = prev.get('rs_tries', 0) + 1
+        if how != 'lost':
+            prev['rs_tries'] = prev.get('rs_tries', 0) + 1
         run['failed' if how == 'error' else 'lost'] += 1
         return
     res = common.read_json(fn)

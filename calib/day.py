@@ -280,26 +280,25 @@ def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corre
     macro = rec.get('macro') or common.macro_of_items(rec.get('flights') or [])
     key = rec.get('key') or common.day_key(day, macro)
     leads = common.lead_models(macro, day)
+    prev = rec.get('leads_built') or {}
+    keep = {m for m in leads if prev.get(m) == common.LEAD_VERSION}
     res = copy.deepcopy(rec)
-    res['boxes'] = [b for b in res.get('boxes') or [] if not common.is_lead(b.get('model'))]
+    res['macro'], res['key'] = (macro, key)
+    res['boxes'] = [b for b in res.get('boxes') or [] if not common.is_lead(b.get('model')) or b.get('model') in keep]
     res['models'] = [m for m in res.get('models') or [res.get('model') or 'hrrr'] if not common.is_lead(m)] + leads
     items = (res.get('flights') or []) + (res.get('short') or []) + (res.get('obs') or [])
-    for f in items:
-        for k in [k for k in f if k.startswith(('model_', 'model_c_')) and common.is_lead(k.split('_', 2)[-1] if k.startswith('model_c_') else k[6:])]:
-            f.pop(k)
-        for pk in ('probe_m', 'probe_mc'):
-            for m in [m for m in f.get(pk) or {} if common.is_lead(m)]:
-                f[pk].pop(m)
-        for x in (f.get('legs') or []) + (f.get('climbs') or []):
-            for mk in ('models', 'models_c'):
-                for m in [m for m in x.get(mk) or {} if common.is_lead(m)]:
-                    x[mk].pop(m)
+    for m in {m for f in items for k in f if k.startswith('model_') for m in [k.split('_', 2)[-1] if k.startswith('model_c_') else k[6:]] if common.is_lead(m) and m not in keep} | {m for f in items for x in (f.get('legs') or []) + (f.get('climbs') or []) for m in x.get('models') or {} if common.is_lead(m) and m not in keep}:
+        _drop_model(res, m, items)
     os.makedirs(work, exist_ok=True)
-    for model in leads:
-        _run_model(res, day, items, work, model, workers, grids, corrections)
+    built, new = ({m: prev[m] for m in keep}, 0)
+    for model in [m for m in leads if m not in keep]:
+        if not _run_model(res, day, items, work, model, workers, grids, corrections):
+            break
+        built[model], new = (common.LEAD_VERSION, new + 1)
+    _finish_leads(res, key, built)
     lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
-    res['lead_v'] = common.lead_version(key) if lb and any((b.get('ok') for b in lb)) else None
     res['lead_boxes'] = {'ok': sum((b.get('ok', False) for b in lb)), 'all': len(lb)}
+    res['lead_new'] = new
     return res
 
 def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None, grids: str | None=None, corrections: str | None=None) -> dict:
@@ -308,11 +307,12 @@ def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers:
     res = {'version': common.DAY_VERSION, 'date': day, 'macro': macro, 'key': common.day_key(day, macro), 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short or [], 'obs': obs or [], 'physics_v': common.physics_version(macro), 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': False}
     os.makedirs(work, exist_ok=True)
     items = flights + res['short'] + res['obs']
+    built = {}
     for model in models:
-        _run_model(res, day, items, work, model, workers, grids, corrections)
+        if _run_model(res, day, items, work, model, workers, grids, corrections) and common.is_lead(model):
+            built[model] = common.LEAD_VERSION
     res['grids'] = bool(grids) and any((b.get('saved') for b in res['boxes'] if not common.is_lead(b.get('model'))))
-    lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
-    res['lead_v'] = common.lead_version(res['key']) if lb and any((b.get('ok') for b in lb)) else None
+    _finish_leads(res, res['key'], built)
     _categorize(res)
     return res
 
@@ -431,11 +431,18 @@ def build_command(day: str, B: dict, out: str, model: str, workers: int, work: s
             return None
         cmd += ['--cache', os.path.join(work, 'eu-cache')]
     return cmd
+LEAD_DEADLINE = None
 
-def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int, grids: str | None=None, corrections: str | None=None) -> None:
+def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int, grids: str | None=None, corrections: str | None=None) -> bool:
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
     key = res.get('key') or day
+    n0 = len(res['boxes'])
     for bi, B in enumerate(boxes(flights)):
+        if common.is_lead(model) and LEAD_DEADLINE is not None and (time.time() > LEAD_DEADLINE):
+            common.note(f"{day} {model}: the shard's time for earlier runs is up; left for a later run")
+            del res['boxes'][n0:]
+            _drop_model(res, model, flights)
+            return False
         out = os.path.join(work, f'{model}-box{bi}')
         shutil.rmtree(out, ignore_errors=True)
         info = {'model': model, 'box': bi, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False}
@@ -464,6 +471,25 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             info['ok'] = True
         res['boxes'].append(info)
         shutil.rmtree(out, ignore_errors=True)
+    return True
+
+def _drop_model(res: dict, model: str, items=None) -> None:
+    items = items if items is not None else (res.get('flights') or []) + (res.get('short') or []) + (res.get('obs') or [])
+    for f in items:
+        f.pop(f'model_{model}', None)
+        f.pop(f'model_c_{model}', None)
+        for pk in ('probe_m', 'probe_mc'):
+            (f.get(pk) or {}).pop(model, None)
+        for x in (f.get('legs') or []) + (f.get('climbs') or []):
+            for mk in ('models', 'models_c'):
+                (x.get(mk) or {}).pop(model, None)
+
+def _finish_leads(res: dict, key: str, built: dict) -> None:
+    want = common.lead_models(res.get('macro') or common.macro_of_key(key), res.get('date') or common.day_of(key))
+    res['leads_built'] = {m: v for m, v in built.items() if m in want}
+    lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
+    done = bool(want) and all((res['leads_built'].get(m) == common.LEAD_VERSION for m in want))
+    res['lead_v'] = common.lead_version(key) if done and any((b.get('ok') for b in lb)) else None
 
 def _was_built(rec: dict, model: str, bi: int) -> bool:
     bs = [b for b in rec.get('boxes') or [] if b.get('model') == model]
@@ -492,6 +518,8 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
                 continue
             if why and common.is_lead(model):
                 res['lead_v'] = None
+                res['leads_built'] = {k: v for k, v in (res.get('leads_built') or {}).items() if k != model}
+                res['boxes'] = [b for b in res['boxes'] if b.get('model') != model]
                 continue
             if why:
                 info['error'] = f'grids:{why}'
