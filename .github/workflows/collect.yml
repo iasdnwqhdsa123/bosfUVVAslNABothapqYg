@@ -415,8 +415,12 @@ jobs:
             python3 calib/state.py unpack "$f" "/tmp/built/$d" || { echo "::warning::a shard's grids couldn't be read"; continue; }
             for day in "/tmp/built/$d/grids/$MONTH"-*; do
               [ -d "$day" ] || continue
-              rm -rf "/tmp/grids/$(basename "$day")"
-              cp -r "$day" /tmp/grids/
+              mkdir -p "/tmp/grids/$(basename "$day")"
+              for box in "$day"/*; do
+                [ -d "$box" ] || continue
+                rm -rf "/tmp/grids/$(basename "$day")/$(basename "$box")"
+                cp -r "$box" "/tmp/grids/$(basename "$day")/"
+              done
               n=$((n + 1))
             done
           done

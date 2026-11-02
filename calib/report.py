@@ -247,7 +247,53 @@ def _log_ratio(r):
 def compare_section(days: list[dict], models: list[str], pilots: dict) -> list[str]:
     out = []
     for m in models[1:]:
-        out += _compare_pair(days, [models[0], m], pilots)
+        if not common.is_lead(m):
+            out += _compare_pair(days, [models[0], m], pilots)
+    return out
+LEAD_MIN = 20
+
+def lead_section(days: list[dict], models: list[str], pilots: dict) -> list[str]:
+    by_base = defaultdict(dict)
+    for m in models:
+        if common.is_lead(m) or common.LEADS.get(common.base_model(m)):
+            by_base[common.base_model(m)][common.lead_of(m) or 0] = m
+    by_base = {b: v for b, v in by_base.items() if len(v) > 1}
+    if not by_base:
+        return []
+    lab = common.model_label
+    ids = sorted({m for v in by_base.values() for m in v.values()})
+    per = {m: rows.tables(days, m, pilots=pilots) for m in ids}
+    lk = lambda r: (r['fid'], r['leg'])
+    ck = lambda r: (r['fid'], r['leg'], r['dur'], r['gain'])
+    lv = {m: {lk(r): leg_ratio(r) for r in per[m][0] if usable_leg(r)} for m in ids}
+    cv = {m: {ck(r): climb_ratio(r) for r in per[m][1] if r['paired'] and (not r['engon']) and ((r['rate'] or 0) > 0)} for m in ids}
+    lv = {m: {k: v for k, v in d.items() if v} for m, d in lv.items()}
+    cv = {m: {k: v for k, v in d.items() if v} for m, d in cv.items()}
+    mae = lambda xs: f'{sum((abs(math.log(x)) for x in xs)) / len(xs):.3f}' if xs else '–'
+    out = ['## Days ahead: which model is nearer at each lead', '', f"Each box-day also built from the runs 1, 2, 3 and 5 days before (HRRR: 1; ECMWF's from {common.ECMWF_RUNS_FIRST}; GFS beside ECMWF in Europe, its 0 the same day's 00Z), evaluated as the site would have shown it then. Error: MAE of log(flown / model) (0.10 ~ 10 %; the bias a constant fixes is in the ratio). Usable thermal legs (XC speed) and circling climbs.", '']
+    for kind, vals in (('Legs (XC speed)', lv), ('Climbs', cv)):
+        out += [f'### {kind}: each model by lead', '', '| Model | Lead (days) | n | flown / model | error |', '|---|---|---|---|---|']
+        for b, leads in sorted(by_base.items()):
+            common_keys = set.intersection(*(set(vals[m]) for m in leads.values()))
+            for n in sorted(leads):
+                xs = [vals[leads[n]][k] for k in common_keys]
+                if len(xs) >= LEAD_MIN:
+                    out.append(f'| {lab(b)} | {n} | {len(xs)} | {mmed(xs)} | {mae(xs)} |')
+        out += ['']
+        bases = sorted(by_base)
+        if len(bases) > 1:
+            out += [f'### {kind}: head to head at each lead', '', '| Lead (days) | n | ' + ' | '.join((f'{lab(b)} error | {lab(b)} nearer' for b in bases)) + ' |', '|---|---|' + '---|---|' * len(bases)]
+            for n in sorted({n for v in by_base.values() for n in v}):
+                ms = {b: by_base[b].get(n) for b in bases}
+                if any((m is None for m in ms.values())):
+                    continue
+                keys = set.intersection(*(set(vals[m]) for m in ms.values()))
+                if len(keys) < LEAD_MIN:
+                    continue
+                err = {b: [abs(math.log(vals[m][k])) for k in keys] for b, m in ms.items()}
+                near = Counter((min(bases, key=lambda b: abs(math.log(vals[ms[b]][k]))) for k in keys))
+                out.append(f'| {n} | {len(keys)} | ' + ' | '.join((f'{sum(err[b]) / len(keys):.3f} | {near[b] / len(keys):.0%}' for b in bases)) + ' |')
+            out += ['']
     return out
 
 def _compare_pair(days: list[dict], models: list[str], pilots: dict) -> list[str]:
@@ -301,7 +347,7 @@ def build(data: str, days_csv: str | None=None, model: str | None=None) -> str:
     out = [f"# Calibration data report ({', '.join((f'{common.MACRO_LABEL.get(m, m)}: {lab(prim[m])}' for m in macros))})", '', f'Built {date.today().isoformat()}. Review this before training (train runs only when started by hand).', 'Models built: ' + '; '.join((f"{common.MACRO_LABEL.get(m, m)} {', '.join((lab(x) for x in models_in(by_macro[m])))}" for m in macros)) + f" (each area's report is its primary's; the models side by side at each area's end). Code: physics {common.PHYSICS_VERSION} (US), {common.PHYSICS_VERSION_EU} (Europe), scoring {common.SCORE_VERSION}" + (f", corrections {state['corr_v']}" if state.get('corr_v') else '') + '.', '']
     pr = workq.progress(state, date.today())
     L_all, C_all, F_all = rows.tables(days, None, pilots=pilots)
-    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}; by area: {', '.join((f'{common.MACRO_LABEL.get(k, k)} {v}' for k, v in sorted(pr.get('by_macro', {}).items())))}); seed days left: {pr['seed_left']} of {pr['seed_days']}; to build again (an older file or physics): {pr['redo_left']}; to score again (other site code): {pr.get('rescore_left', 0)}; with their grids saved: {pr.get('grids', 0)}; to choose from again (glider types mapped since, or more flights to the cap of {weglide.MAX_PER_DAY}): {pr.get('revisit_left', 0)}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F_all)} (seed {sum((f['src'] == 'seed' for f in F_all))}), legs {len(L_all)} (usable thermal legs: {sum((usable_leg(r) for r in L_all))}), circling climbs {len(C_all)}.", f"- Europe's share of the new days {common.EU_SHARE:.0%} (CALIB_EU_SHARE)" + (f', all of them until it has {common.EU_FIRST} days (now {n_eu}; CALIB_EU_FIRST, the revisits waiting meanwhile)' if (n_eu := sum((1 for d in state['done'] if common.macro_of_key(d) == 'EU'))) < common.EU_FIRST else '') + f'; its days also built with ICON / ICON-D2: {common.EU_ICON_SHARE:.0%} (CALIB_EU_ICON_SHARE), from {common.ICON_FIRST} on.', '']
+    out += ['## Progress', '', f"- Days done: {pr['days_done']} ({', '.join((f'{k} {v}' for k, v in sorted(pr['by_status'].items(), key=str)))}; by area: {', '.join((f'{common.MACRO_LABEL.get(k, k)} {v}' for k, v in sorted(pr.get('by_macro', {}).items())))}); seed days left: {pr['seed_left']} of {pr['seed_days']}; to build again (an older file or physics): {pr['redo_left']}; to score again (other site code): {pr.get('rescore_left', 0)}; with their grids saved: {pr.get('grids', 0)}; to choose from again (glider types mapped since, or more flights to the cap of {weglide.MAX_PER_DAY}): {pr.get('revisit_left', 0)}; to build their earlier runs for (days ahead: {', '.join((f'{common.model_label(m)} {chr(43)}{chr(43).join(map(str, ns))} d' for m, ns in common.LEADS.items()))}): {pr.get('lead_left', 0)}.", f"- WeGlide requests so far: {state['weglide'].get('requests', 0)}; answers: {dict(sorted(state['weglide'].get('status', {}).items()))}.", f"- Runs: {len(state.get('runs', []))}; last: {(state['runs'][-1] if state.get('runs') else '–')}.", f"- Flights {len(F_all)} (seed {sum((f['src'] == 'seed' for f in F_all))}), legs {len(L_all)} (usable thermal legs: {sum((usable_leg(r) for r in L_all))}), circling climbs {len(C_all)}.", f"- Europe's share of the new days {common.EU_SHARE:.0%} (CALIB_EU_SHARE)" + (f', all of them until it has {common.EU_FIRST} days (now {n_eu}; CALIB_EU_FIRST, the revisits waiting meanwhile)' if (n_eu := sum((1 for d in state['done'] if common.macro_of_key(d) == 'EU'))) < common.EU_FIRST else '') + f'; its days also built with ICON / ICON-D2: {common.EU_ICON_SHARE:.0%} (CALIB_EU_ICON_SHARE), from {common.ICON_FIRST} on.', '']
     known = common.load_aircraft()
     um = {k: v for k, v in (state.get('unmapped') or {}).items() if k not in known}
     out += ['### Aircraft types not in aircraft.json (skipped; add them there)', '', (', '.join((f"{k or '(none)'} {v}" for k, v in sorted(um.items(), key=lambda kv: -kv[1]))) or 'none') + '.', '']
@@ -378,6 +424,7 @@ def _area_sections(days: list[dict], state: dict, pilots: dict, model: str, mode
     pf = [ratio(f['pfd'], f['free_km']) for f in F if f['paired']]
     out += ['## Potential Flight Distance (Std, at the takeoff, storm cut 2 %) / km flown', '', dist(pf) + ' (typical flights: PFD reads above them by design).', '']
     out += compare_section(days, models, pilots)
+    out += lead_section(days, models, pilots)
     return (out, day_checks(days, L, C))
 if __name__ == '__main__':
     if len(sys.argv) not in (3, 4):

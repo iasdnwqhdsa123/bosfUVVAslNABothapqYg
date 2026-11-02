@@ -274,6 +274,34 @@ def categorize(L: dict) -> str:
         return 'wave'
     return 'thermal'
 
+def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corrections: str | None=None) -> dict:
+    import copy
+    day = rec['date']
+    macro = rec.get('macro') or common.macro_of_items(rec.get('flights') or [])
+    key = rec.get('key') or common.day_key(day, macro)
+    leads = common.lead_models(macro, day)
+    res = copy.deepcopy(rec)
+    res['boxes'] = [b for b in res.get('boxes') or [] if not common.is_lead(b.get('model'))]
+    res['models'] = [m for m in res.get('models') or [res.get('model') or 'hrrr'] if not common.is_lead(m)] + leads
+    items = (res.get('flights') or []) + (res.get('short') or []) + (res.get('obs') or [])
+    for f in items:
+        for k in [k for k in f if k.startswith(('model_', 'model_c_')) and common.is_lead(k.split('_', 2)[-1] if k.startswith('model_c_') else k[6:])]:
+            f.pop(k)
+        for pk in ('probe_m', 'probe_mc'):
+            for m in [m for m in f.get(pk) or {} if common.is_lead(m)]:
+                f[pk].pop(m)
+        for x in (f.get('legs') or []) + (f.get('climbs') or []):
+            for mk in ('models', 'models_c'):
+                for m in [m for m in x.get(mk) or {} if common.is_lead(m)]:
+                    x[mk].pop(m)
+    os.makedirs(work, exist_ok=True)
+    for model in leads:
+        _run_model(res, day, items, work, model, workers, grids, corrections)
+    lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
+    res['lead_v'] = common.lead_version(key) if lb and any((b.get('ok') for b in lb)) else None
+    res['lead_boxes'] = {'ok': sum((b.get('ok', False) for b in lb)), 'all': len(lb)}
+    return res
+
 def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None, grids: str | None=None, corrections: str | None=None) -> dict:
     models = tuple(models)
     macro = common.macro_of_items(flights + list(short or []))
@@ -282,7 +310,9 @@ def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers:
     items = flights + res['short'] + res['obs']
     for model in models:
         _run_model(res, day, items, work, model, workers, grids, corrections)
-    res['grids'] = bool(grids) and any((b.get('saved') for b in res['boxes']))
+    res['grids'] = bool(grids) and any((b.get('saved') for b in res['boxes'] if not common.is_lead(b.get('model'))))
+    lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
+    res['lead_v'] = common.lead_version(res['key']) if lb and any((b.get('ok') for b in lb)) else None
     _categorize(res)
     return res
 
@@ -323,7 +353,7 @@ def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours:
             names.update(arrays)
             np.savez_compressed(os.path.join(dest, '_hours', f'{stamp}.npz'), **arrays)
     shutil.copyfile(f'{base}/latest.json', os.path.join(dest, 'latest.json'))
-    out = {**meta, 'physics_v': common.physics_version(common.MODEL_MACRO.get(meta.get('model'), 'US')), 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
+    out = {**meta, 'physics_v': common.model_physics(meta.get('model')), 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
     common.write_json(os.path.join(dest, 'meta.json'), out, indent=1)
     return out
 
@@ -332,7 +362,7 @@ def grids_usable(gdir: str, bbox: list, model: str) -> str | None:
     if not os.path.exists(mp) or not os.path.exists(os.path.join(gdir, 'latest.json')) or (not glob.glob(os.path.join(gdir, '_hours', '*.npz'))):
         return 'missing'
     m = common.read_json(mp)
-    if m.get('physics_v') != common.physics_version(common.MODEL_MACRO.get(model, 'US')):
+    if m.get('physics_v') != common.model_physics(model):
         return 'physics'
     if m.get('model') != model or [round(float(v), 2) for v in m.get('bbox') or []] != [round(float(v), 2) for v in bbox]:
         return 'box'
@@ -357,7 +387,7 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
     inputs = [eval_input(f, refs[id(f)]) for f in B['flights']]
     with open(fin, 'w') as fh:
         json.dump(inputs, fh)
-    env = {**os.environ, 'CALIB_PUB': common.PUB, 'CALIB_MODEL': model}
+    env = {**os.environ, 'CALIB_PUB': common.PUB, 'CALIB_MODEL': common.base_model(model)}
     if corrections and os.path.exists(corrections):
         env['CALIB_CORRECTIONS'] = corrections
     else:
@@ -384,11 +414,17 @@ def _merge_eval(results: list, B: dict, inputs: list, model: str, bi: int, suffi
             c.setdefault('models' + suffix, {})[model] = e.get('own')
         f.setdefault('probe_m' + ('c' if suffix else ''), {})[model] = {str(p['t']): None if e is None else {k: e.get(k) for k in track.PROBE_KEYS} for p, e in zip(inputs[r['ref']]['probes'], r.get('probes') or [])}
 BUILDER = {'hrrr': 'build_day.py', 'gfs': 'build_day.py', 'ecmwf': 'build_eu.py', 'icon': 'build_eu.py', 'icond2': 'build_eu.py'}
+LEAD_GRIDS = ('gfs', 'ecmwf')
 
 def build_command(day: str, B: dict, out: str, model: str, workers: int, work: str) -> list[str] | None:
     bbox = ','.join((f'{v:.2f}' for v in B['bbox']))
-    script = BUILDER.get(model, 'build_day.py')
-    cmd = ['python3', os.path.join(common.HERE, script), '--day', day, '--tz', B['tz'], f'--bbox={bbox}', '--out', out, '--model', model, '--workers', str(workers)]
+    base, lead = (common.base_model(model), common.lead_of(model))
+    script = BUILDER.get(base, 'build_day.py')
+    if lead is not None and script == 'build_day.py':
+        script = 'build_lead.py'
+    cmd = ['python3', os.path.join(common.HERE, script), '--day', day, '--tz', B['tz'], f'--bbox={bbox}', '--out', out, '--model', base, '--workers', str(workers)]
+    if lead is not None:
+        cmd += ['--lead', str(lead)] + (['--area', common.macro_of(B['region'])] if script == 'build_lead.py' else [])
     if script == 'build_eu.py':
         import build_eu
         if not build_eu.covers(model, B['bbox']):
@@ -409,13 +445,13 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             continue
         common.note(f"{day} {model} box {B['region']} {cmd[6]} flights {len(B['flights'])}")
         built = _run(cmd, common.PIPELINE, BUILD_TIMEOUT, logf)
-        base = os.path.join(out, model)
+        base = os.path.join(out, common.base_model(model))
         if not built or not os.path.exists(f'{base}/latest.json'):
             info['error'] = 'build'
             res['boxes'].append(info)
             shutil.rmtree(out, ignore_errors=True)
             continue
-        if grids:
+        if grids and (not common.is_lead(model) or common.base_model(model) in LEAD_GRIDS):
             try:
                 gdir = os.path.join(grids, key, f'{model}-box{bi}')
                 shutil.rmtree(gdir, ignore_errors=True)
@@ -451,6 +487,9 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
             gdir = os.path.join(grids, key, f'{model}-box{bi}')
             why = grids_usable(gdir, B['bbox'], model)
             if why == 'missing' and model in common.SAMPLED and (not _was_built(rec, model, bi)):
+                continue
+            if why and common.is_lead(model):
+                res['lead_v'] = None
                 continue
             if why:
                 info['error'] = f'grids:{why}'

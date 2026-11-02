@@ -100,7 +100,7 @@ def plan(a) -> int:
     for d, src in wg:
         _plan_day(P, d, src)
     free = [x for x in doable(workq.free_days(state, a.days, pend, corr_v), pend, new_ok) if x[0] not in P['seen']][:max(0, a.days - len(P['costs']))]
-    common.log(f"{len(free)} days without a request to plan ({sum((s == 'seed' for _, s in free))} from the seed, {sum((s == 'redo' for _, s in free))} built again, {sum((s == 'rescore' for _, s in free))} scored again, {sum((d in pend for d, _ in free))} waiting)")
+    common.log(f"{len(free)} days without a request to plan ({sum((s == 'seed' for _, s in free))} from the seed, {sum((s == 'redo' for _, s in free))} built again, {sum((s == 'rescore' for _, s in free))} scored again, {sum((s == 'lead' for _, s in free))} for their earlier runs, {sum((d in pend for d, _ in free))} waiting)")
     for d, src in free:
         _plan_day(P, d, src)
     costs, srcs = (P['costs'], P['srcs'])
@@ -153,6 +153,19 @@ def _plan_day(P: dict, d: str, src: str) -> None:
         P['costs'][d] = RESCORE_COST * max(1, len({f.get('region') for f in items})) * len(rec.get('models') or runmod.models_of(items, d))
         P['srcs'][d] = src
         run['rescored'] += 1
+        return
+    elif src == 'lead':
+        fn = f'{data}/days/{d}.json.gz'
+        if not os.path.exists(fn):
+            prev['lv_tries'] = workq.MAX_TRIES
+            run['skipped'] += 1
+            return
+        rec = common.read_json(fn)
+        common.write_json(f'{out}/in/{d}.json.gz', {'day': d, 'src': src, 'flights': rec.get('flights') or [], 'short': rec.get('short') or [], 'obs': rec.get('obs') or [], 'rec': rec})
+        items = (rec.get('flights') or []) + (rec.get('short') or [])
+        P['costs'][d] = max(1, len({f.get('region') for f in items})) * max(1, len(common.lead_models(common.macro_of_key(d), common.day_of(d))))
+        P['srcs'][d] = src
+        run['leads'] = run.get('leads', 0) + 1
         return
     elif src == 'redo':
         fn = f'{data}/days/{d}.json.gz'
@@ -277,7 +290,13 @@ def build(a) -> int:
         work = os.path.join(a.work, f'd{i}')
         try:
             short = inp.get('short') or []
-            if j['src'] == 'rescore':
+            if j['src'] == 'lead':
+                res = dayrun.lead_day(inp['rec'], work, a.workers, grids_out, corr)
+                common.write_json(f'{a.out}/days/{d}.json.gz', res)
+                status['built'].append(d)
+                lb = res.get('lead_boxes') or {}
+                common.log(f"day {i + 1}/{len(mine)} (earlier runs): {lb.get('ok', 0)}/{lb.get('all', 0)} boxes")
+            elif j['src'] == 'rescore':
                 m = month_of(d)
                 if m not in fetched:
                     fetched[m] = _fetch_grids(m, grids_in)
@@ -295,7 +314,7 @@ def build(a) -> int:
                     kind = 'scored again'
                 common.write_json(f'{a.out}/days/{d}.json.gz', res)
                 status['built'].append(d)
-                okb = sum((b.get('ok', False) for b in res['boxes']))
+                okb = sum((b.get('ok', False) for b in runmod.own(res)))
                 common.log(f"day {i + 1}/{len(mine)} ({kind}): {len(inp['flights'])} flights, {okb}/{len(res['boxes'])} boxes")
             else:
                 obs = inp.get('obs') or runmod._observations(obs_client, d, inp['flights'] + short, a.out)
@@ -304,7 +323,7 @@ def build(a) -> int:
                 res = dayrun.run_day(common.day_of(d), inp['flights'], work, models=runmod.models_of(inp['flights'] + short, d), workers=a.workers, short=short, obs=obs, grids=grids_out, corrections=corr)
                 common.write_json(f'{a.out}/days/{d}.json.gz', res)
                 status['built'].append(d)
-                okb = sum((b.get('ok', False) for b in res['boxes']))
+                okb = sum((b.get('ok', False) for b in runmod.own(res)))
                 common.log(f"day {i + 1}/{len(mine)} ({j['src']}): {len(inp['flights'])} flights, {len(short)} short, {len(obs)} stations, {okb}/{len(res['boxes'])} boxes built")
         except Exception as e:
             common.note(f'{d}: build failed: {e!r}')
@@ -351,13 +370,16 @@ def merge(a) -> int:
         if src == 'rescore':
             _merge_rescore(data, d, how, fn, state, run, months)
             continue
+        if src == 'lead':
+            _merge_lead(data, d, how, fn, state, run, months)
+            continue
         if src == 'redo':
             if how == 'built':
                 res = common.read_json(fn)
-                okb = sum((b.get('ok', False) for b in res['boxes']))
+                okb = sum((b.get('ok', False) for b in runmod.own(res)))
                 if okb:
                     shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
-                    prev.update({'status': 'ok' if okb == len(res['boxes']) else 'partial', 'boxes': len(res['boxes']), 'flights': len(res['flights']), **runmod.stamps(res)})
+                    prev.update({'status': 'ok' if okb == len(runmod.own(res)) else 'partial', 'boxes': len(runmod.own(res)), 'flights': len(res['flights']), **runmod.stamps(res)})
                     if res.get('grids'):
                         months.add(month_of(d))
                     run['ok'] += 1
@@ -378,14 +400,14 @@ def merge(a) -> int:
             continue
         if how == 'built':
             res = common.read_json(fn)
-            okb = sum((b.get('ok', False) for b in res['boxes']))
-            status = 'ok' if okb == len(res['boxes']) else 'partial' if okb else 'failed'
+            okb = sum((b.get('ok', False) for b in runmod.own(res)))
+            status = 'ok' if okb == len(runmod.own(res)) else 'partial' if okb else 'failed'
             if status != 'failed':
                 shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
                 stored = True
                 if res.get('grids'):
                     months.add(month_of(d))
-            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(res['boxes']), 'flights': len(inp['flights']), **runmod.stamps(res), **({'ac': inp['ac'], 'cap': weglide.MAX_PER_DAY} if inp.get('ac') else {})}
+            state['done'][d] = {'status': status, 'src': src, 'tries': prev.get('tries', 0) + 1, 'boxes': len(runmod.own(res)), 'flights': len(inp['flights']), **runmod.stamps(res), **({'ac': inp['ac'], 'cap': weglide.MAX_PER_DAY} if inp.get('ac') else {})}
             run[status if status != 'partial' else 'ok'] += 1
             run['days'] += 1
         elif how == 'left':
@@ -421,13 +443,31 @@ def merge(a) -> int:
     run['grid_months'] = sorted(months)
     common.write_json(f'{data}/state.json', state)
     pr = workq.progress(state, _today())
-    common.log(f"merged: {run['days']} days ({run['ok']} built, {run.get('rescored_ok', 0)} scored again, {run['empty']} empty, {run['failed']} failed, {run['lost']} lost, {run['left']} waiting, {run['skipped']} left for later; {run.get('revisited', 0)} chosen from again, {run.get('stored_more', 0)} flights more stored), {run.get('requests', 0)} WeGlide requests; {pr['days_done']} days in all ({pr['grids']} with their grids saved), {pr['seed_left']} seed days left, {pr['redo_left']} to build again, {pr['rescore_left']} to score again, {pr['revisit_left']} to choose from again")
+    common.log(f"merged: {run['days']} days ({run['ok']} built, {run.get('rescored_ok', 0)} scored again, {run['empty']} empty, {run['failed']} failed, {run['lost']} lost, {run['left']} waiting, {run['skipped']} left for later; {run.get('revisited', 0)} chosen from again, {run.get('stored_more', 0)} flights more stored), {run.get('requests', 0)} WeGlide requests; {pr['days_done']} days in all ({pr['grids']} with their grids saved), {pr['seed_left']} seed days left, {pr['redo_left']} to build again, {pr['rescore_left']} to score again, {pr['revisit_left']} to choose from again, {pr.get('lead_left', 0)} for their earlier runs ({run.get('leads_ok', 0)} done this run)")
     more, why = chain(state, data, a.daily, todo.get('no_new', False))
     common.log(f"next run: {('yes' if more else 'no')} ({why})")
     _output('more', 'yes' if more else 'no')
     keep = set(json.loads(getattr(a, 'keep_months', None) or '[]'))
     _output('months', json.dumps(sorted(months | keep)))
     return 0
+
+def _merge_lead(data: str, d: str, how: str, fn, state: dict, run: dict, months: set) -> None:
+    prev = state['done'][d]
+    if how == 'left':
+        run['left'] += 1
+        return
+    run['days'] += 1
+    res = common.read_json(fn) if how == 'built' else None
+    if res and res.get('lead_v'):
+        shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
+        prev['lv'] = res['lead_v']
+        prev.pop('lv_tries', None)
+        run['leads_ok'] = run.get('leads_ok', 0) + 1
+        if any((b.get('saved') for b in res['boxes'] if common.is_lead(b.get('model')))):
+            months.add(month_of(d))
+        return
+    prev['lv_tries'] = prev.get('lv_tries', 0) + 1
+    run['failed' if how in ('built', 'error') else 'lost'] += 1
 
 def _merge_rescore(data: str, d: str, how: str, fn, state: dict, run: dict, months: set) -> None:
     prev = state['done'][d]
@@ -440,10 +480,10 @@ def _merge_rescore(data: str, d: str, how: str, fn, state: dict, run: dict, mont
         run['failed' if how == 'error' else 'lost'] += 1
         return
     res = common.read_json(fn)
-    okb = sum((b.get('ok', False) for b in res['boxes']))
-    if res['boxes'] and okb == len(res['boxes']):
+    okb = sum((b.get('ok', False) for b in runmod.own(res)))
+    if runmod.own(res) and okb == len(runmod.own(res)):
         shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
-        prev.update({'status': 'ok', 'boxes': len(res['boxes']), 'flights': len(res['flights']), **runmod.stamps(res)})
+        prev.update({'status': 'ok', 'boxes': len(runmod.own(res)), 'flights': len(res['flights']), **runmod.stamps(res)})
         prev.pop('rs_tries', None)
         if res.get('rescored_at'):
             run['rescored_ok'] = run.get('rescored_ok', 0) + 1
@@ -465,10 +505,10 @@ def _merge_revisit(data: str, d: str, how: str, fn, inp: dict, state: dict, run:
     stored = False
     if how == 'built':
         res = common.read_json(fn)
-        okb = sum((b.get('ok', False) for b in res['boxes']))
+        okb = sum((b.get('ok', False) for b in runmod.own(res)))
         if okb:
             shutil.copyfile(fn, f'{data}/days/{d}.json.gz')
-            prev.update({'status': 'ok' if okb == len(res['boxes']) else 'partial', 'boxes': len(res['boxes']), 'flights': len(inp['flights']), **runmod.stamps(res)})
+            prev.update({'status': 'ok' if okb == len(runmod.own(res)) else 'partial', 'boxes': len(runmod.own(res)), 'flights': len(inp['flights']), **runmod.stamps(res)})
             if inp.get('ac'):
                 prev.update(ac=inp['ac'], cap=weglide.MAX_PER_DAY)
             prev.pop('rv_tries', None)
@@ -530,11 +570,11 @@ def rescore(a) -> int:
             continue
         res = dayrun.rescore_day(common.read_json(fn), a.grids, os.path.join(a.work, f'd{i}'), corr)
         shutil.rmtree(os.path.join(a.work, f'd{i}'), ignore_errors=True)
-        okb = sum((b.get('ok', False) for b in res['boxes']))
-        if res['boxes'] and okb == len(res['boxes']):
+        okb = sum((b.get('ok', False) for b in runmod.own(res)))
+        if runmod.own(res) and okb == len(runmod.own(res)):
             common.write_json(fn, res)
             x = state['done'].setdefault(d, {'status': 'ok', 'src': 'new'})
-            x.update({'boxes': len(res['boxes']), **runmod.stamps(res)})
+            x.update({'boxes': len(runmod.own(res)), **runmod.stamps(res)})
             n_ok += 1
             common.log(f'day {i + 1}/{len(days)}: scored again ({okb} boxes)')
         else:

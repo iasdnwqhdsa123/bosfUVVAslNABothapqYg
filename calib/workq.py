@@ -43,6 +43,15 @@ def _rescore(state: dict, d: str, cv: str | None=None) -> bool:
         return False
     return x.get('sv') != common.SCORE_VERSION or x.get('cv') != cv
 
+def _lead(state: dict, d: str) -> bool:
+    x = state['done'].get(d)
+    if x is None or x.get('status') not in ('ok', 'partial') or x.get('lv_tries', 0) >= MAX_TRIES:
+        return False
+    if x.get('v', 1) < common.DAY_VERSION or x.get('pv') != common.physics_version(common.macro_of_key(d)):
+        return False
+    want = common.lead_version(d)
+    return want is not None and x.get('lv') != want
+
 def _revisit(state: dict, d: str, ac: str) -> bool:
     x = state['done'].get(d)
     if x is None or x.get('src') != 'new' or x.get('rv_tries', 0) >= MAX_TRIES:
@@ -83,6 +92,11 @@ def free_days(state: dict, n: int, pending=(), cv: str | None=None) -> list[tupl
             return out
         if _rescore(state, d, cv):
             out.append((d, 'rescore'))
+    for d in sorted(state['done'], reverse=True):
+        if len(out) >= n:
+            return out
+        if _lead(state, d) and (not _rescore(state, d, cv)):
+            out.append((d, 'lead'))
     for d in state['seed_days']:
         if len(out) >= n:
             break
@@ -175,8 +189,9 @@ def progress(state: dict, today: date) -> dict:
     rescore = sum((1 for d in done if _rescore(state, d, state.get('corr_v'))))
     ac = common.aircraft_version()
     revisit = sum((1 for d in done if _revisit(state, d, ac)))
+    lead = sum((1 for d in done if _lead(state, d)))
     by_macro = {}
     for d in done:
         m = common.macro_of_key(d)
         by_macro[m] = by_macro.get(m, 0) + 1
-    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo, 'rescore_left': rescore, 'revisit_left': revisit, 'grids': sum((1 for x in done.values() if x.get('grids'))), 'by_macro': by_macro}
+    return {'seed_days': len(state['seed_days']), 'seed_left': seed_left, 'days_done': len(done), 'by_status': by, 'redo_left': redo, 'rescore_left': rescore, 'revisit_left': revisit, 'lead_left': lead, 'grids': sum((1 for x in done.values() if x.get('grids'))), 'by_macro': by_macro}

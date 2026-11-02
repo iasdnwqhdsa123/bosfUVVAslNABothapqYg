@@ -268,12 +268,26 @@ def compare_models(D: dict, models: list[str]) -> dict:
 
 def compare_by_macro(D: dict, models: list[str]) -> dict:
     out = {}
+    models = [m for m in models if not common.is_lead(m)]
     for macro in sorted({common.MODEL_MACRO.get(m, 'US') for m in models}):
         ms = [m for m in models if common.MODEL_MACRO.get(m, 'US') == macro]
         if len(ms) > 1:
             cmp_ = compare_models(D, ms)
             if cmp_:
                 out[macro] = cmp_
+    return out
+
+def compare_leads(D: dict) -> dict:
+    days = D.get('days') or []
+    out = {}
+    for macro in sorted({d.get('macro') or 'US' for d in days}):
+        sub = [d for d in days if (d.get('macro') or 'US') == macro]
+        ids = sorted({m for d in sub for m in d.get('models') or [] if common.is_lead(m) or common.LEADS.get(m)})
+        if not any((common.is_lead(m) for m in ids)):
+            continue
+        cmp_ = compare_models({**D, 'days': sub, 'model': None}, ids)
+        if cmp_:
+            out[macro] = cmp_
     return out
 
 def corrections_blob(fits: dict) -> dict:
@@ -338,12 +352,28 @@ def run(D: dict, out: str) -> dict:
                         cells.append(f'**{s}**' if v and m == best else s)
                     md.append(f'| {g} | ' + ' | '.join(cells) + ' |')
                 md.append('')
-    else:
+    by_lead = compare_leads(D) if D.get('days') else {}
+    if by_lead:
+        md += ['## Days ahead: which model is nearer at each lead', '', "The same observations of the air against each model's run of the day (lead 0) and its runs 1, 2, 3 and 5 days before (common.LEADS): n, median ratio (cb: shift in m), MAE; all rows of each.", '']
+        for macro, cmp_m in by_lead.items():
+            for t, by_m in cmp_m.items():
+                bases = sorted({common.base_model(m) for m in by_m})
+                leads = sorted({common.lead_of(m) or 0 for m in by_m})
+                md += [f'### {t} ({common.MACRO_LABEL.get(macro, macro)})', '', '| Lead (days) | ' + ' | '.join((f'{common.model_label(b)}: n, median, MAE' for b in bases)) + ' |', '|---|' + '---|' * len(bases)]
+                for n in leads:
+                    cells = []
+                    for b in bases:
+                        m = next((x for x in by_m if common.base_model(x) == b and (common.lead_of(x) or 0) == n), None)
+                        v = (by_m.get(m) or {}).get('all') if m else None
+                        cells.append(f"{v['n']}, {v['median']:.2f}, {v['mae']:.3f}" if v else '–')
+                    md.append(f'| {n} | ' + ' | '.join(cells) + ' |')
+                md.append('')
+    if not by_macro:
         md += [f'## Which model is nearer where and when', '', f"One model in the data ({', '.join(models)}): the comparison needs the data job to store a second one (models[<model>] per leg and climb).", '']
     md += [f"corrections.json: version {corr['version']}, fields {', '.join(corr['fields']) or 'none'}; clamps {json.dumps(CLAMPS)}.", '']
     with open(os.path.join(out, 'report-air.md'), 'w') as f:
         f.write('\n'.join(md) + '\n')
-    res = {'rows': sum((f['rows'] for f in fits.values() if f)), 'targets': {t: {k: v for k, v in f.items() if k != 'export'} if f else None for t, f in fits.items()}, 'tables': {t: f['table'] for t, f in fits.items() if f}, 'models_compared': cmp_, 'models_compared_by_area': by_macro, 'version': corr['version'], 'models': models, 'cv': {t: {'rows': f['rows'], 'days': f['days'], 'table': f['table']} for t, f in fits.items() if f}}
+    res = {'rows': sum((f['rows'] for f in fits.values() if f)), 'targets': {t: {k: v for k, v in f.items() if k != 'export'} if f else None for t, f in fits.items()}, 'tables': {t: f['table'] for t, f in fits.items() if f}, 'models_compared': cmp_, 'models_compared_by_area': by_macro, 'models_compared_by_lead': by_lead, 'version': corr['version'], 'models': models, 'cv': {t: {'rows': f['rows'], 'days': f['days'], 'table': f['table']} for t, f in fits.items() if f}}
     with open(os.path.join(out, 'layer1.json'), 'w') as f:
         json.dump(res, f, indent=1)
     return res

@@ -33,6 +33,40 @@ EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '0
 SAMPLED = {'icon', 'icond2'}
 ICON_FIRST = '2025-01-17'
 EU_START = '2024-03-01'
+LEADS = {m: tuple((int(x) for x in ns.split('+') if x.strip().isdigit())) for m, _, ns in (p.partition(':') for p in os.environ.get('CALIB_LEADS', 'hrrr:1,gfs:1+2+3+5,ecmwf:1+2+3+5').split(',') if ':' in p)}
+LEAD_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_LEAD_SHARE', '1') or 0)))
+LEAD_EXTRA = {'EU': ('gfs',)}
+ECMWF_RUNS_FIRST = '2026-07-31'
+LEAD_RUN_H = {'US': {'hrrr': 12, 'gfs': 12}, 'EU': {'gfs': 0, 'ecmwf': 0}}
+
+def base_model(model: str) -> str:
+    return (model or '').split('@')[0]
+
+def lead_of(model: str) -> int | None:
+    return int(model.split('@')[1]) if model and '@' in model else None
+
+def model_macro(model: str) -> str:
+    return MODEL_MACRO.get(base_model(model), 'US')
+
+def lead_sampled(day: str) -> bool:
+    if not day or LEAD_SHARE <= 0:
+        return False
+    return int(hashlib.sha256(f'lead-sample:{day}'.encode()).hexdigest()[:8], 16) / 2 ** 32 < LEAD_SHARE
+
+def lead_models(macro: str, day: str | None) -> list[str]:
+    if not day or not lead_sampled(day):
+        return []
+    from datetime import date, timedelta
+    out, d = ([], date.fromisoformat(day))
+    for m in tuple(MACRO[macro]['models']) + LEAD_EXTRA.get(macro, ()):
+        if m not in LEAD_RUN_H.get(macro, {}):
+            continue
+        ns = ((0,) if m in LEAD_EXTRA.get(macro, ()) else ()) + LEADS.get(m, ())
+        for n in ns:
+            if m == 'ecmwf' and (d - timedelta(days=n)).isoformat() < ECMWF_RUNS_FIRST:
+                continue
+            out.append(f'{m}@{n}')
+    return out
 
 def macro_of(region: str | None) -> str:
     return REGION_MACRO.get(region, 'US')
@@ -46,17 +80,23 @@ def icon_sampled(day: str) -> bool:
     h = int(hashlib.sha256(f'icon-sample:{day}'.encode()).hexdigest()[:8], 16) / 2 ** 32
     return h < EU_ICON_SHARE
 
-def models_for(regions, day: str | None=None) -> tuple:
+def models_for(regions, day: str | None=None, lead: bool=True) -> tuple:
     out = []
     for a in sorted({macro_of(r) for r in regions} or {'US'}):
         for m in MACRO[a]['models']:
             if m in out or (m in SAMPLED and (not (day and icon_sampled(day)))):
                 continue
             out.append(m)
+    if day and lead:
+        for a in sorted({macro_of(r) for r in regions} or {'US'}):
+            out += [m for m in lead_models(a, day) if m not in out]
     return tuple(out)
 
 def primary_model(regions=()) -> str:
     return models_for(regions)[0]
+
+def is_lead(model: str) -> bool:
+    return '@' in (model or '')
 
 def day_key(day: str, macro: str='US') -> str:
     return day if macro == 'US' else f'{day}_{macro}'
@@ -163,6 +203,15 @@ PHYSICS_FILES = _PIPELINE_FILES + [os.path.join(HERE, 'build_day.py')]
 PHYSICS_FILES_EU = _PIPELINE_FILES + [os.path.join(PIPELINE, 'om.py'), os.path.join(PIPELINE, 'replay.py'), os.path.join(HERE, 'build_eu.py')]
 PHYSICS_VERSION = _version_of(PHYSICS_FILES)
 PHYSICS_VERSION_EU = _version_of(PHYSICS_FILES_EU)
+PHYSICS_FILES_LEAD = PHYSICS_FILES_EU + [os.path.join(HERE, 'build_lead.py')]
+LEAD_VERSION = _version_of(PHYSICS_FILES_LEAD)
+
+def model_physics(model: str) -> str:
+    return globals()['LEAD_VERSION'] if is_lead(model) else physics_version(model_macro(model))
+
+def lead_version(key: str) -> str | None:
+    ms = lead_models(macro_of_key(key), day_of(key))
+    return f"{globals()['LEAD_VERSION']}:{','.join(ms)}" if ms else None
 
 def physics_version(macro: str='US') -> str:
     return globals()['PHYSICS_VERSION_EU'] if macro == 'EU' else globals()['PHYSICS_VERSION']

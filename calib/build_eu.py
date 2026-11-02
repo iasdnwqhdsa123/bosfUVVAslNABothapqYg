@@ -1,7 +1,10 @@
 from __future__ import annotations
 import argparse
+import json
 import math
 import os
+import time
+import urllib.request
 import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -12,6 +15,7 @@ GRID = {'ecmwf': (-170.0, -54.9, 0.1), 'icon': (-170.0, -54.875, 0.125), 'icond2
 DOMAIN = {'icond2': (-3.94, 43.18, 20.34, 58.08)}
 ECMWF_025_FIRST = '2024-03-01'
 OM_DOMAIN, OM_CHUNK = ('ecmwf_ifs', 504)
+OM_RUN_BASE = 'https://openmeteo.s3.amazonaws.com/data_run/ecmwf_ifs'
 OM_LATE = {'convective_inhibition': '2025-09-18', 'showers': '2025-09-18', 'visibility': '2025-09-18'}
 MISSING = ('tcc', 'lcc', 'mcc', 'hcc', 'cprate', 'tclw')
 BANDS = {'tcc': ('cloud_cover', None), 'lcc': ('cloud_cover_low', None), 'mcc': ('cloud_cover_mid', None), 'hcc': ('cloud_cover_high', None)}
@@ -40,6 +44,16 @@ def forecast_hours(day: str, hours: list[datetime], model: str) -> tuple[datetim
     run = datetime(d.year, d.month, d.day, RUN_H[model], tzinfo=timezone.utc)
     return (run, [f for f in (int((t - run).total_seconds() // 3600) for t in hours) if f >= 1])
 
+def run_meta(run: datetime) -> dict:
+    for k in range(4):
+        try:
+            with urllib.request.urlopen(f'{OM_RUN_BASE}/{run:%Y/%m/%d/%H%M}Z/meta.json', timeout=60) as r:
+                return json.load(r)
+        except Exception:
+            if k == 3:
+                raise
+            time.sleep(5 * 2 ** k)
+
 def om_names(src, day: str) -> set:
     _, extra = src.om_extra
     names = set(extra.values()) | {v for v, _ in src.om_hourly.values()} | {v for v, _ in src.om_between.values()} | {v for v, _ in BANDS.values()}
@@ -58,6 +72,14 @@ def _ecmwf(a, hours: list[datetime]) -> int:
         return 2
     run, fhs = forecast_hours(a.day, hours, 'ecmwf')
     orig = sources.SOURCES['ecmwf']
+    if a.lead:
+        run -= timedelta(days=a.lead)
+        fhs = [f for f in (int((t - run).total_seconds() // 3600) for t in hours) if f >= 1 and orig.builds(f) and (f <= orig.max_fhour)]
+        hours = [run + timedelta(hours=f) for f in fhs]
+    per_run = f'{run:%Y-%m-%d}' >= common.ECMWF_RUNS_FIRST
+    if a.lead and (not per_run):
+        print(f'ecmwf: run {run:%Y-%m-%d %HZ}: Open-Meteo keeps runs from {common.ECMWF_RUNS_FIRST} only', flush=True)
+        return 2
 
     class IFS025(sources.IFS):
         MIRRORS = MIRRORS
@@ -91,10 +113,16 @@ def _ecmwf(a, hours: list[datetime]) -> int:
     rows = om.gaussian_rows()
     box = om.gaussian_index(np.arange(n + 0.2, s - 0.21, -0.05), np.arange(w - 0.2, e + 0.21, 0.05), rows)
     lo, hi = (int(box.min()), int(box.max()) + 1)
-    idx = [int((t - replay.EPOCH).total_seconds() // 3600) for t in hours]
-    cache = os.path.join(a.cache, f'{OM_DOMAIN}-{a.day}-{lo}-{hi}')
+    if per_run:
+        meta = run_meta(run)
+        steps = {datetime.strptime(v, '%Y-%m-%dT%H:%MZ').replace(tzinfo=timezone.utc): i for i, v in enumerate(meta['valid_times'])}
+        tidx = [steps.get(t) for t in hours]
+        cache = os.path.join(a.cache, f'{OM_DOMAIN}-run{run:%Y%m%d%H}-{a.day}-{lo}-{hi}')
+    else:
+        idx = [int((t - replay.EPOCH).total_seconds() // 3600) for t in hours]
+        cache = os.path.join(a.cache, f'{OM_DOMAIN}-{a.day}-{lo}-{hi}')
     os.makedirs(cache, exist_ok=True)
-    print(f"ecmwf: run {run:%Y-%m-%d %HZ}, {len(fhs)} hours; caching {len(names)} fields of Open-Meteo's archive, {hi - lo} cells", flush=True)
+    print(f"ecmwf: run {run:%Y-%m-%d %HZ}{(f' (+{a.lead} d)' if a.lead else '')}, {len(fhs)} hours; caching {len(names)} fields of Open-Meteo's {('copy of the run' if per_run else 'archive')}, {hi - lo} cells", flush=True)
 
     def si(name, arr):
         if name.startswith(('temperature_', 'dew_point_', 'surface_temperature')):
@@ -106,7 +134,17 @@ def _ecmwf(a, hours: list[datetime]) -> int:
     def one(name):
         f = os.path.join(cache, f'{name}.npy')
         try:
-            if not os.path.exists(f):
+            if not os.path.exists(f) and per_run:
+                arr = np.full((len(hours), hi - lo), np.nan, np.float32)
+                have = [(k, i) for k, i in enumerate(tidx) if i is not None]
+                if have:
+                    t0, t1 = (min((i for _, i in have)), max((i for _, i in have)) + 1)
+                    arr_r = replay._read(f'{OM_RUN_BASE}/{run:%Y/%m/%d/%H%M}Z/{name}.om', slice(0, 1), slice(lo, hi), slice(t0, t1))[0]
+                    for k, i in have:
+                        arr[k] = arr_r[:, i - t0]
+                np.save(f + '.tmp.npy', si(name, arr))
+                os.replace(f + '.tmp.npy', f)
+            elif not os.path.exists(f):
                 arr = np.full((len(hours), hi - lo), np.nan, np.float32)
                 for chunk in sorted({i // OM_CHUNK for i in idx}):
                     want = [(k, i % OM_CHUNK) for k, i in enumerate(idx) if i // OM_CHUNK == chunk]
@@ -169,8 +207,12 @@ def main() -> int:
     ap.add_argument('--from-local', type=int, default=6)
     ap.add_argument('--to-local', type=int, default=21)
     ap.add_argument('--workers', type=int, default=2)
+    ap.add_argument('--lead', type=int, default=0, help='ECMWF: the run this many days before (common.LEADS)')
     a = ap.parse_args()
     sys.path.insert(0, os.getcwd())
+    if a.lead and a.model != 'ecmwf':
+        print(f'{a.model}: no lead runs read', flush=True)
+        return 2
     hours = utc_hours(a.day, a.tz, a.from_local, a.to_local)
     return _ecmwf(a, hours) if a.model == 'ecmwf' else _icon(a, hours)
 if __name__ == '__main__':
