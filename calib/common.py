@@ -28,6 +28,7 @@ MODEL_MACRO = {'hrrr': 'US', 'gfs': 'US', 'ecmwf': 'EU', 'icon': 'EU', 'icond2':
 MODEL_LABEL = {'hrrr': 'HRRR', 'gfs': 'GFS', 'ecmwf': 'ECMWF', 'icon': 'ICON', 'icond2': 'ICON-D2'}
 MACRO_LABEL = {'US': 'United States', 'EU': 'Europe'}
 EU_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_SHARE', '0.4') or 0.4)))
+EU_FIRST = max(0, int(os.environ.get('CALIB_EU_FIRST', '120') or 0))
 EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '0.25') or 0.25)))
 SAMPLED = {'icon', 'icond2'}
 ICON_FIRST = '2025-01-17'

@@ -117,6 +117,9 @@ def _new_keys(state: dict, today: date, seed: set, eu_share: float | None=None):
         n_eu += common.macro_of_key(d) == 'EU'
         yield d
 
+def eu_first(state: dict) -> bool:
+    return common.EU_FIRST > 0 and sum((1 for d in state['done'] if common.macro_of_key(d) == 'EU')) < common.EU_FIRST
+
 def weglide_days(state: dict, n: int, today: date, pending=(), ac: str | None=None, listed=(), eu_share: float | None=None) -> list[tuple[str, str]]:
     out = []
     seed = set(state['seed_days'])
@@ -132,8 +135,9 @@ def weglide_days(state: dict, n: int, today: date, pending=(), ac: str | None=No
     rv = [d for d in sorted(state['done']) if d not in pending and _revisit(state, d, ac)]
     rv.sort(key=lambda d: (d not in listed, d))
     rv = iter(rv)
-    new = _new_keys(state, today, seed, eu_share)
-    every = max(2, round(1 / REVISIT_SHARE))
+    first = eu_share is None and eu_first(state)
+    new = _new_keys(state, today, seed, 1.0 if first else eu_share)
+    every = 10 ** 9 if first else max(2, round(1 / REVISIT_SHARE))
     k = 0
     while len(out) < n:
         k += 1
