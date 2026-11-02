@@ -87,17 +87,22 @@ def run(D: dict, out: str, which: str='all') -> dict:
         w = train.weights(rs, per)
         p_ml, p_c = train.crossval(X, y, pg, wg, w)
         dropped = train.crossval.dropped
+        p_nd = train.no_day_check(X, y, names, pg, wg, w)
         zero = np.zeros_like(y)
-        tab = train.metric_table(rs, y, {'physics': zero, 'constant': p_c, 'ml': p_ml}, train.groups_of(rs))
+        preds = {'physics': zero, 'constant': p_c, 'ml': p_ml, **({'ml_noday': p_nd} if p_nd is not None else {})}
+        tab = train.metric_table(rs, y, preds, train.groups_of(rs))
         if S:
-            tab += train.metric_table(rs, y, {'physics': zero, 'constant': p_c, 'ml': p_ml}, {f'pilot {s}': (lambda s: lambda r: r.get('strength') == s)(s) for s in ('low', 'mid', 'high')})
+            tab += train.metric_table(rs, y, preds, {f'pilot {s}': (lambda s: lambda r: r.get('strength') == s)(s) for s in ('low', 'mid', 'high')})
         m = train.model().fit(X, y, sample_weight=w)
         e = train.export(m, names)
         chk = train.export_check(e, m, X)
         models[target] = e
         res[target] = {'rows': int(len(y)), 'days': int(len(set(g))), 'groups': int(len(set(pg))), 'train_dropped': dropped, 'table': tab, 'export_check': float(chk), 'suspicious_dropped': skipped}
         md += [f"## {target} ({len(y)} rows, {len(set(g))} days, {len(set(pg))} pilot groups; {skipped} rows of suspicious days left out; each fold's training {dropped:.0%} smaller for the test rows' weather)", '']
-        md += train.md_table(tab, ['physics', 'constant', 'ml'])
+        if p_nd is not None:
+            md += train.md_table(tab, ['physics', 'constant', 'ml', 'ml_noday'], train.HEAD_NODAY)
+        else:
+            md += train.md_table(tab, ['physics', 'constant', 'ml'])
         md += ['', train.splits_md(e), f'Export check (max |trees − sklearn|): {chk:.2e}.', '']
     tables = strength_tables(H, S) if H else {}
     if tables:

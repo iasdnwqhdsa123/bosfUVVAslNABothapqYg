@@ -423,13 +423,14 @@ def fit(F: list[dict]) -> dict | None:
     X = X[:, keep]
     g = np.array([r['date'] for r in F])
     p_ml, _ = train.crossval(X, y, g, g, None, PARAMS, train.classifier)
+    p_nd = train.no_day_check(X, y, names, g, g, None, PARAMS, train.classifier)
     m = train.classifier(PARAMS).fit(X, y)
     e = train.export(m, names)
     e['kind'] = 'logit'
     e['version'] = date.today().isoformat()
     chk = train.export_check(e, m, X)
     trig = np.array([r['trig'] for r in F])
-    return {'export': e, 'rows': int(len(y)), 'days': int(len(set(g))), 'check': chk, 'auc_ml': auc(p_ml, y), 'auc_trig': auc(trig, y), 'top_ml': top_decile(p_ml, y), 'top_trig': top_decile(trig, y), 'train_dropped': train.crossval.dropped}
+    return {'export': e, 'rows': int(len(y)), 'days': int(len(set(g))), 'check': chk, 'auc_ml': auc(p_ml, y), 'auc_trig': auc(trig, y), 'top_ml': top_decile(p_ml, y), 'top_trig': top_decile(trig, y), 'train_dropped': train.crossval.dropped, 'auc_noday': None if p_nd is None else auc(p_nd, y), 'top_noday': None if p_nd is None else top_decile(p_nd, y)}
 
 def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None) -> dict:
     md = [f"Each climb traced down the wind to its trigger point (the 3D thermals' lean at the height the glider met it); negatives along the glides between climbs (every {NEG_KM:g} km, over {LOW_AGL} m up), traced the same way: ground flown over without circling. The site's Thermal Triggers score (its terrain part: hill, sunlit slope, windward slope, flat land; no land cover or airflow here) scored against them: AUC (0.5 = chance) and the top decile's hit rate against the base rate (lift). Then a tree model P(climb | cell, hour) on the same terrain and the layer-1 air, cross-validated by day. Layer 3 sees the planner on that air, not where the thermals were: nothing here is counted again there.", '']
@@ -475,7 +476,7 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
     else:
         with open(os.path.join(out, 'triggers.json'), 'w') as fh:
             json.dump(f['export'], fh, separators=(',', ':'))
-        md += [f"{f['rows']} points, {f['days']} days; each fold's training {f['train_dropped']:.0%} smaller for the test rows' days. AUC: the site's score {f['auc_trig']:.3f}, the trees {f['auc_ml']:.3f} (out of fold); top decile lift: {f['top_trig']['lift']:.2f} against {f['top_ml']['lift']:.2f}.", '', train.splits_md(f['export']), f"Export check (max |trees − sklearn|): {f['check']:.2e}. triggers.json: features {', '.join(f['export']['features'])}.", '']
+        md += [f"{f['rows']} points, {f['days']} days; each fold's training {f['train_dropped']:.0%} smaller for the test rows' days. AUC: the site's score {f['auc_trig']:.3f}, the trees {f['auc_ml']:.3f} (out of fold); top decile lift: {f['top_trig']['lift']:.2f} against {f['top_ml']['lift']:.2f}." + (f" Without the day of year: AUC {f['auc_noday']:.3f}, top decile lift {f['top_noday']['lift']:.2f}." if f.get('auc_noday') is not None else ''), '', train.splits_md(f['export']), f"Export check (max |trees − sklearn|): {f['check']:.2e}. triggers.json: features {', '.join(f['export']['features'])}.", '']
         res['cv'] = {k: v for k, v in f.items() if k != 'export'}
     return _finish(out, md, res)
 

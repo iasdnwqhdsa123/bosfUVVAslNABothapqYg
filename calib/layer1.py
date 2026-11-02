@@ -214,6 +214,7 @@ def fit_target(target: str, obs: list[dict]) -> dict | None:
     names = [FEATURES[j] for j in keep]
     X = X[:, keep]
     p_ml, p_c = train.crossval(X, y, g, g, w, _params(target), _make(target))
+    p_nd = train.no_day_check(X, y, names, g, g, w, _params(target), _make(target))
     if target == 'cu':
         r = float(np.clip(np.average(y, weights=w), 0.01, 0.99))
         p_c = np.full_like(y, math.log(r / (1 - r)))
@@ -231,12 +232,13 @@ def fit_target(target: str, obs: list[dict]) -> dict | None:
             row['physics'] = _metrics_cu(y[idx], None, 'physics', fc[idx])
             row['constant'] = _metrics_cu(y[idx], p_c[idx], 'constant')
             row['ml'] = _metrics_cu(y[idx], p_ml[idx], 'ml')
-        elif target == 'cb':
-            for lab, p in (('physics', zero), ('constant', p_c), ('ml', p_ml)):
-                row[lab] = _metrics_add(y[idx], p[idx], lab)
+            if p_nd is not None:
+                row['ml_noday'] = _metrics_cu(y[idx], p_nd[idx], 'ml_noday')
         else:
-            for lab, p in (('physics', zero), ('constant', p_c), ('ml', p_ml)):
-                row[lab] = train.metrics(y[idx], p[idx], None, lab)
+            put = _metrics_add if target == 'cb' else lambda yy, pp, lab: train.metrics(yy, pp, None, lab)
+            for lab, p in (('physics', zero), ('constant', p_c), ('ml', p_ml), ('ml_noday', p_nd)):
+                if p is not None:
+                    row[lab] = put(y[idx], p[idx], lab)
         tab.append(row)
     m = _make(target)(_params(target)).fit(X, y, sample_weight=w)
     e = train.export(m, names)
@@ -303,15 +305,19 @@ def run(D: dict, out: str) -> dict:
             continue
         md += [f"## {t} ({f['rows']} rows, {f['days']} days; " + ', '.join((f'{k} {v}' for k, v in f['kinds'].items())) + f"; each fold's training {f['train_dropped']:.0%} smaller for the test rows' days)", '']
         if t == 'cu':
-            md += ['| Group | n | Forecast: Brier, hit rate, AUC | Constant | ML |', '|---|---|---|---|---|']
+            nd = any(('ml_noday' in row for row in f['table']))
+            md += ['| Group | n | Forecast: Brier, hit rate, AUC | Constant | ML |' + (' ML without the day of year |' if nd else ''), '|---|---|---|---|---|' + ('---|' if nd else '')]
             for row in f['table']:
-                c = lambda k: f"{row[k]['brier']:.3f}, {row[k]['hit']:.2f}, {(row[k]['auc'] if row[k]['auc'] is None else round(row[k]['auc'], 2))}"
-                md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |")
+                c = lambda k: f"{row[k]['brier']:.3f}, {row[k]['hit']:.2f}, {(row[k]['auc'] if row[k]['auc'] is None else round(row[k]['auc'], 2))}" if k in row else '–'
+                md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |" + (f" {c('ml_noday')} |" if nd else ''))
         elif t == 'cb':
-            md += ['| Group | n | Physics: median shift (m), MAE (m) | Constant | ML |', '|---|---|---|---|---|']
+            nd = any(('ml_noday' in row for row in f['table']))
+            md += ['| Group | n | Physics: median shift (m), MAE (m) | Constant | ML |' + (' ML without the day of year |' if nd else ''), '|---|---|---|---|---|' + ('---|' if nd else '')]
             for row in f['table']:
-                c = lambda k: f"{row[k]['median_m']:.0f}, {row[k]['mae_m']:.0f}"
-                md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |")
+                c = lambda k: f"{row[k]['median_m']:.0f}, {row[k]['mae_m']:.0f}" if k in row else '–'
+                md.append(f"| {row['group']} | {row['n']} | {c('physics')} | {c('constant')} | {c('ml')} |" + (f" {c('ml_noday')} |" if nd else ''))
+        elif any(('ml_noday' in row for row in f['table'])):
+            md += train.md_table(f['table'], ['physics', 'constant', 'ml', 'ml_noday'], train.HEAD_NODAY)
         else:
             md += train.md_table(f['table'], ['physics', 'constant', 'ml'])
         md += ['', train.splits_md(f['export']), f"Export check (max |trees − sklearn|): {f['check']:.2e}.", '']

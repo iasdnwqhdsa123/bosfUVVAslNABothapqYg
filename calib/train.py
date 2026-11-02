@@ -126,6 +126,16 @@ def crossval(X, y, pg, wg=None, w=None, params: dict | None=None, make=None):
         p_const[te] = wmedian(y[tr], w[tr])
     crossval.dropped = float(np.mean(dropped)) if dropped else 0.0
     return (p_ml, p_const)
+NO_DAY = ('doy_s', 'doy_c')
+
+def no_day_check(X, y, names, pg, wg=None, w=None, params: dict | None=None, make=None):
+    keep = [j for j, n in enumerate(names) if n not in NO_DAY]
+    if len(keep) == len(names):
+        return None
+    dropped = crossval.dropped
+    p, _ = crossval(X[:, keep], y, pg, wg, w, params, make)
+    crossval.dropped = dropped
+    return p
 
 def raw_predict(m, X):
     return m.decision_function(X) if hasattr(m, 'decision_function') else m.predict(X)
@@ -184,6 +194,7 @@ def metric_table(rs, y, preds: dict, groups: dict, min_n: int=15) -> list[dict]:
             row[lab] = metrics(y[idx], p[idx], None, lab)
         tab.append(row)
     return tab
+HEAD_NODAY = 'Physics: median ratio, MAE | Constant | ML | ML without the day of year'
 
 def md_table(tab: list[dict], labels: list[str], head: str='Physics: median ratio, MAE | Constant | ML') -> list[str]:
     out = ['| Group | n | ' + head + ' |', '|---|---|' + '---|' * len(labels)]
