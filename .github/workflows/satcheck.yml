@@ -1,0 +1,50 @@
+name: Satellite check
+on:
+  push:
+    branches: [main]
+    paths: ["calib/satcheck.request"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: calib-sat
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r pipeline/requirements.txt h5py
+      - name: Check, a month at a time
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          mkdir -p /tmp/sat /tmp/prev /tmp/out
+          python3 calib/state.py fetch calib-sat /tmp/prev 2>> /tmp/sat/fetch.err || echo "no results before"
+          [ -f /tmp/prev/results.jsonl ] && cp /tmp/prev/results.jsonl /tmp/sat/results.jsonl
+          months="$(python3 calib/state.py list calib-grids- | python3 -c 'import json, sys; print(" ".join(sorted((k[len("calib-grids-"):] for k in json.load(sys.stdin)), reverse=True)))')"
+          start=$(date +%s)
+          for m in $months; do
+            left=$(( 290 - ($(date +%s) - start) / 60 ))
+            [ "$left" -gt 15 ] || { echo "out of time: the rest next run"; break; }
+            rm -rf /tmp/grids && mkdir -p /tmp/grids
+            python3 calib/state.py fetch "calib-grids-$m" /tmp/grids 2>> /tmp/sat/fetch.err || { echo "a month not fetched"; continue; }
+            python3 calib/satcheck.py run --grids /tmp/grids --out /tmp/sat --budget "$((left - 10))" --done /tmp/sat/results.jsonl 2>> /tmp/sat/stderr.log \
+              || echo "::warning::a month's check failed (details in the encrypted log)"
+          done
+          python3 calib/satcheck.py report --out /tmp/sat
+          python3 calib/state.py pack /tmp/sat /tmp/out/calib-sat.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-sat
+          path: /tmp/out/calib-sat.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
