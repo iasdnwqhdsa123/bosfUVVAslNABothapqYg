@@ -278,8 +278,123 @@ def wind_axis(u: float, v: float) -> float:
 def axis_diff(a: float, b: float) -> float:
     d = abs(a - b) % 180
     return min(d, 180 - d)
+CHUNK_Z = 10
+PLACED_GRID = 3
+FSS_KM = (2.25, 6.0, 12.0)
+ENV_FIELDS = ['elevation', 'wstar', 'depth', 'twidth', 'blapse', 'sinkth', 'u_blavg', 'v_blavg', 'cubase', 'cudepth', 'heat', 'soilm', 'bs', 'overdev', 'rain', 'cloudlow', 'ceil', 'ctop', 'cucover', 'u_cuw', 'v_cuw', 'curh', 'zi', 'thml', 'thx'] + [f'{k}_m{dz}' for dz in (200, 500, 1000, 1800, 3000) for k in ('dth', 'q')]
 
-def box_day(gdir: str, log=print) -> dict | None:
+def tile_at(lat: float, lon: float) -> tuple[int, int]:
+    n, s = (2 ** CHUNK_Z, math.sin(math.radians(lat)))
+    return (int((lon + 180) / 360 * n), int((0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n))
+
+def tile_centre(X: int, Y: int) -> tuple[float, float, float]:
+    n = 2 ** CHUNK_Z
+    lon = (X + 0.5) / n * 360 - 180
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (Y + 0.5) / n))))
+    return (lat, lon, math.pi * 6371008.8 * math.cos(math.radians(lat)) / n / 1000)
+
+def box_tiles(bbox) -> list:
+    w, s, e, n = bbox
+    out = []
+    for j in range(PLACED_GRID):
+        for i in range(PLACED_GRID):
+            la = s + 0.6 + (n - s - 1.2) * (j + 0.5) / PLACED_GRID
+            lo = w + 0.6 + (e - w - 1.2) * (i + 0.5) / PLACED_GRID
+            t = tile_at(la, lo)
+            if t not in out:
+                out.append(t)
+    return out
+
+def fss(f: np.ndarray, o: np.ndarray, k: int) -> float | None:
+
+    def frac(a):
+        c = np.pad(a, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        return (c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]) / (k * k)
+    if f.shape[0] <= k:
+        return None
+    pf, po = (frac(f.astype(np.float64)), frac(o.astype(np.float64)))
+    ref = (pf ** 2).mean() + (po ** 2).mean()
+    return None if ref <= 0 else float(1 - ((pf - po) ** 2).mean() / ref)
+
+def run_placed(gdir: str, m: dict, hours: list, work: str, log=print) -> dict | None:
+    import subprocess
+    meta = json.load(open(os.path.join(gdir, 'meta.json')))
+    names, planes = ([], [])
+    zs = {os.path.basename(f)[:-4]: f for f in glob.glob(os.path.join(gdir, '_hours', '*.npz'))}
+    stamps = [f'{t:%Y%m%d%H}' for t, *_ in hours if f'{t:%Y%m%d%H}' in zs]
+    if not stamps:
+        return None
+    zl = [np.load(zs[st]) for st in stamps]
+    for name in ENV_FIELDS:
+        vs = [decode(m, z, name) for z in zl]
+        if all((v is None for v in vs)):
+            continue
+        names.append(name)
+        planes.append(vs)
+    ny, nx = (m['grid']['ny'], m['grid']['nx'])
+    os.makedirs(work, exist_ok=True)
+    with open(os.path.join(work, 'env.bin'), 'wb') as f:
+        for k in range(len(stamps)):
+            for vs in planes:
+                v = vs[k]
+                f.write((v if v is not None else np.full((ny, nx), np.nan, np.float32)).astype(np.float32).tobytes())
+    tiles = box_tiles([float(x) for x in meta['bbox']])
+    with open(os.path.join(work, 'env.json'), 'w') as f:
+        json.dump({'grid': m['grid'], 'stamps': stamps, 'fields': names, 'tiles': tiles, 'px': PIX_KM}, f)
+    script = next(iter(sorted(glob.glob(os.path.join(HERE, 'cuplace_eval.*')))), None)
+    out = os.path.join(work, 'placed.bin')
+    r = subprocess.run(['node', script, work, out], capture_output=True, text=True, timeout=1800)
+    if r.returncode or not os.path.exists(out):
+        log(f'  placing failed: {r.stderr[-300:]}')
+        return None
+    with open(out, 'rb') as f:
+        blob = f.read()
+    nl = blob.index(b'\n')
+    head = json.loads(blob[:nl])
+    res, off = ({}, nl + 1)
+    for t in head['tiles']:
+        sz = t['n'] * t['n']
+        res[t['stamp'], t['X'], t['Y']] = (t, np.frombuffer(blob[off:off + sz], np.uint8).reshape(t['n'], t['n']))
+        off += sz
+    return res
+
+def placed_rows(placed: dict, hours: list, masks: list, lat, lon, m: dict) -> list:
+    g = m['grid']
+    rows = []
+    for (t, fc, _), (cloud, ok) in zip(hours, masks):
+        st = f'{t:%Y%m%d%H}'
+        for (s_, X, Y), (meta, a) in placed.items():
+            if s_ != st:
+                continue
+            la, lo, half = (meta['lat'], meta['lon'], meta['half'])
+            j, i = (int(round((g['north'] - la) / g['step'])), int(round((lo - g['west']) / g['step'])))
+            if not (0 <= j < g['ny'] and 0 <= i < g['nx']) or not fc['clear_above'][j, i]:
+                continue
+            dlat, dlon = (half / 111.32 * 1.2, half / (111.32 * math.cos(math.radians(la))) * 1.2)
+            near = (np.abs(lat - la) < dlat) & (np.abs(lon - lo) < dlon)
+            sat = regular_patch(cloud[near], ok[near], lat[near], lon[near], la, lo, half_km=half, px=meta['px'])
+            if sat.shape != a.shape or np.isfinite(sat).mean() < 0.8:
+                continue
+            have = np.isfinite(sat)
+            o, f = (np.where(have, sat, 0).astype(np.uint8), np.where(have, a, 0))
+            row = {'h': f'{t:%H}', 'sat': round(float(o[have].mean()), 3), 'placed': round(float(f[have].mean()), 3), 'fc_cover': round(float(fc['cover'][j, i]), 3), 'fc_streets': bool(fc['streets'][j, i]), 'clouds': meta['clouds']}
+            for km in FSS_KM:
+                v = fss(f, o, max(1, int(round(km / meta['px']))))
+                row[f'fss{km:g}'] = None if v is None else round(v, 3)
+            c = a.shape[0] // 2
+            w = int(round(STREET_KM / 2 / meta['px']))
+            if c - w >= 0:
+                ss, sp = (street_stats(np.where(have, sat, np.nan)[c - w:c + w, c - w:c + w], meta['px']), street_stats(f[c - w:c + w, c - w:c + w].astype(np.float32), meta['px']))
+                u, v_ = (float(fc['u'][j, i]), float(fc['v'][j, i]))
+                row['wind_axis'] = round(wind_axis(u, v_), 1)
+                row['wind'] = round(math.hypot(u, v_), 1)
+                for k, s2 in (('s', ss), ('p', sp)):
+                    if s2 and 'aniso' in s2:
+                        row[f'{k}_aniso'], row[f'{k}_axis'], row[f'{k}_spacing'] = (s2['aniso'], s2['axis'], s2['spacing'])
+            rows.append(row)
+    return rows
+
+def box_day(gdir: str, log=print, work: str | None=None) -> dict | None:
     meta = json.load(open(os.path.join(gdir, 'meta.json')))
     m = json.load(open(os.path.join(gdir, 'latest.json')))
     bbox = [float(x) for x in meta['bbox']]
@@ -315,7 +430,14 @@ def box_day(gdir: str, log=print) -> dict | None:
     inside = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny) & np.isfinite(lat)
     cell = np.where(inside, iy * nx + ix, -1)
     nb = len(COVER_BINS) - 1
-    out = {'model': meta.get('model'), 'day': meta.get('day'), 'tz': meta.get('tz'), 'region': meta.get('region'), 'bins': {'fc': [0.0] * nb, 'obs': [0.0] * nb, 'n': [0] * nb}, 'by_hour': {}, 'blocks': [], 'cells': 0}
+    out = {'model': meta.get('model'), 'day': meta.get('day'), 'tz': meta.get('tz'), 'region': meta.get('region'), 'bins': {'fc': [0.0] * nb, 'obs': [0.0] * nb, 'n': [0] * nb}, 'by_hour': {}, 'blocks': [], 'cells': 0, 'placed': []}
+    if work:
+        try:
+            placed = run_placed(gdir, m, hours, work, log)
+            if placed:
+                out['placed'] = placed_rows(placed, hours, masks, lat, lon, m)
+        except Exception as e:
+            log(f'  placed cumulus not compared: {type(e).__name__}: {e}')
     for (t, fc, _), (cloud, ok) in zip(hours, masks):
         use = inside & ok
         cnt = np.bincount(cell[use], minlength=nx * ny).astype(np.float64)
@@ -411,7 +533,34 @@ def report(results: list[dict]) -> str:
             wn = [b['wind'] for b in B if b['aniso'] < ANISO]
             if wl and wn:
                 L.append(f"Layer wind: {np.median(wl):.1f} m/s median under lines, {np.median(wn):.1f} without (the forecast's rule: ≥ {STREET_WIND}).")
+        L += placed_section(model, [p for r in rs for p in r.get('placed') or []])
     return '\n'.join(L) + '\n'
+
+def placed_section(model: str, P: list) -> list:
+    if not P:
+        return []
+    sat, pl, fc = (np.array([p[k] for p in P]) for k in ('sat', 'placed', 'fc_cover'))
+    L = ['', f'## {model}: the placed cumulus (as the map draws them zoomed in)', '', f"{len(P)} tile-hours ({PLACED_GRID}x{PLACED_GRID} tiles a box, ~30 km; no ground cover: the site's comes from imagery).", '', f"Cover: placed {pl.mean():.3f}, satellite {sat.mean():.3f}, the forecast's cover at the tile's centre {fc.mean():.3f}."]
+    if len(P) > 2 and sat.std() > 0 and (pl.std() > 0):
+        L.append(f'Tile by tile: correlation {np.corrcoef(pl, sat)[0, 1]:.2f}; mean error {np.abs(pl - sat).mean():.3f}.')
+    L += ['', '| scale | FSS mean | useful (over 0.5 + share/2) |', '|---|---|---|']
+    for km in FSS_KM:
+        v = [(p[f'fss{km:g}'], p['sat']) for p in P if p.get(f'fss{km:g}') is not None]
+        if v:
+            L.append(f'| {km:g} km | {np.mean([x for x, _ in v]):.2f} | {np.mean([x >= 0.5 + o / 2 for x, o in v]):.0%} |')
+    S = [p for p in P if p.get('s_aniso') is not None]
+    if S:
+        lines = [p for p in S if p['s_aniso'] >= ANISO]
+        both = [p for p in lines if (p.get('p_aniso') or 0) >= ANISO]
+        fake = [p for p in S if p['s_aniso'] < ANISO and (p.get('p_aniso') or 0) >= ANISO]
+        L += ['', f"Streets (the tile's centre {STREET_KM:g} km): the satellite's lines in {len(lines)} of {len(S)}; the placed clouds lined up in {len(both)} of those, and in {len(fake)} where the satellite had none."]
+        ad = [axis_diff(p['p_axis'], p['s_axis']) for p in both if p.get('p_axis') is not None]
+        if ad:
+            L.append(f"Their axes {np.median(ad):.0f}° apart (median); the satellite's against the wind {np.median([axis_diff(p['s_axis'], p['wind_axis']) for p in both]):.0f}°.")
+        sr = [p['p_spacing'] / p['s_spacing'] for p in both if p.get('p_spacing') and p.get('s_spacing')]
+        if sr:
+            L.append(f'Spacing placed over seen: median {np.median(sr):.2f} (quartiles {np.percentile(sr, 25):.2f}–{np.percentile(sr, 75):.2f}).')
+    return L
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
@@ -449,7 +598,7 @@ def main(argv=None):
                     break
                 log(key)
                 try:
-                    rec = box_day(gdir, log)
+                    rec = box_day(gdir, log, work=os.path.join(a.out, '_work'))
                 except Exception as e:
                     log(f'  failed: {type(e).__name__}: {e}')
                     continue
