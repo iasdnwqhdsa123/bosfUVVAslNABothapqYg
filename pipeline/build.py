@@ -396,7 +396,7 @@ def cumulus_forms(ws, zi, lcl, cover=None):
     return (reach | near) & (c >= CU_MIN_LOW_CLOUD)
 LOW_AGL, MID_AGL = (2000.0, 7000.0)
 
-def bands_agl(bands, cc, h_agl, ps, tops, cc_levels=P.CC_LEVELS):
+def bands_agl(bands, cc, h_agl, ps, tops, cc_levels=P.CC_LEVELS, rh=None):
     lcc, mcc = bands[:2]
     hcc = bands[2] if len(bands) > 2 else None
     if lcc is None or mcc is None:
@@ -404,6 +404,9 @@ def bands_agl(bands, cc, h_agl, ps, tops, cc_levels=P.CC_LEVELS):
     lo_t, mid_t = P.band_tops(tops, ps)
     p = np.asarray(cc_levels, np.float32)[:, None, None]
     ok = np.isfinite(cc) & np.isfinite(h_agl)
+    if rh is not None:
+        with np.errstate(invalid='ignore'):
+            ok &= ~((h_agl < P.CEIL_NEAR_GROUND) & (np.nan_to_num(rh, nan=0) < P.CEIL_NEAR_RH))
     ccz = np.where(ok, cc, 0)
 
     def peak_height(inband):
@@ -415,7 +418,7 @@ def bands_agl(bands, cc, h_agl, ps, tops, cc_levels=P.CC_LEVELS):
     h_mid = peak_height((p < lo_t[None]) & (p >= mid_t[None]))
     L, M = (np.nan_to_num(lcc, nan=0), np.nan_to_num(mcc, nan=0))
     H = np.zeros_like(L) if hcc is None else np.nan_to_num(hcc, nan=0)
-    low_is_low = ~(h_low >= LOW_AGL)
+    low_is_low = ~(h_low >= LOW_AGL) & ~(np.isnan(h_low) & (h_mid >= LOW_AGL) & (h_mid < MID_AGL))
     mid_is_low = h_mid < LOW_AGL
     mid_is_high = h_mid >= MID_AGL
     within = lambda lo, hi: np.where(ok & (h_agl >= lo) & (h_agl < hi) & (p >= mid_t[None]), ccz, 0).max(axis=0)
@@ -553,7 +556,8 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
         thm += P.theta(t, p)
     t_ml = thm / n * (s['ps'] / 1000.0) ** P.KAPPA - P.K0
     tops = lv.get('cover_tops', P.COVER_TOPS_NCEP)
-    ccl = cloud_levels(s, lv, levels, tops)
+    ccl_rh = []
+    ccl = cloud_levels(s, lv, levels, tops, rh_out=ccl_rh)
     p_base = prof.at(zs + 2 + lcl, 'lnp')
     cu_cover = cumulus_cover(p_base, s['ps'], tops, [s.get('lcc'), s.get('mcc'), s.get('hcc')], np.stack([ccl[f'cc{p}'] for p in P.CC_LEVELS]))
     has_cu = cumulus_forms(ws, zi, lcl, cu_cover)
@@ -626,7 +630,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     out['u_cuw'], out['v_cuw'] = (np.where(has_cu, a, np.nan) for a in prof.at(zs + 2 + lcl + cud_w / 2, 'u', 'v'))
     rh = [P.rh_from_td(*prof.at(zs + 2 + lcl + f * np.maximum(np.nan_to_num(cudepth_out, nan=0), CU_FLAT), 't', 'td')) for f in (0.2, 0.5, 0.8)]
     out['curh'] = np.where(has_cu, (rh[0] + rh[1] + rh[2]) / 300, np.nan)
-    agl = bands_agl([s.get('lcc'), s.get('mcc'), s.get('hcc')], np.stack([ccl[f'cc{p}'] for p in P.CC_LEVELS]), P.level_heights(levels, lv['z']) - zs[None], s['ps'], tops)
+    agl = bands_agl([s.get('lcc'), s.get('mcc'), s.get('hcc')], np.stack([ccl[f'cc{p}'] for p in P.CC_LEVELS]), P.level_heights(levels, lv['z']) - zs[None], s['ps'], tops, rh=ccl_rh[0] if ccl_rh else None)
     if agl is not None:
         out['cloudlow'], out['cloudmid'], out['cloudhigh'] = agl
     out['accas'] = accas_score(lv, levels, zs, s['t2'])
@@ -752,7 +756,7 @@ def accas_score(lv, levels, zs, t2):
         score = np.where(ok, np.maximum(score, sc), score)
     return np.where(np.isfinite(t2), score, np.nan).astype(np.float32)
 
-def cloud_levels(s, lv, levels, tops=P.COVER_TOPS_NCEP):
+def cloud_levels(s, lv, levels, tops=P.COVER_TOPS_NCEP, rh_out=None):
     ps = np.where(np.isfinite(s['t2']), s['ps'], np.nan)
     if lv.get('cloud') is not None:
         levels, rh, clw, own = lv['cloud']
@@ -771,6 +775,8 @@ def cloud_levels(s, lv, levels, tops=P.COVER_TOPS_NCEP):
         cc = P.cloud_cover_levels(levels, rh, ps, P.rh_cloud(s['t2'], s['td2']), clw, rh_out=rh_t)
     if rh_t is not None and any((s.get(k) is not None for k in ('lcc', 'mcc', 'hcc'))):
         cc = P.calibrate_cover(cc, np.stack(rh_t), ps, [s.get('lcc'), s.get('mcc'), s.get('hcc')], tops)
+    if rh_out is not None and rh_t:
+        rh_out.append(np.stack(rh_t))
     return {f'cc{p}': a for p, a in zip(P.CC_LEVELS, cc)}
 RADAR_BLUR_KM = 4.0
 
