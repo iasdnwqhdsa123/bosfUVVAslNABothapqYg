@@ -10,6 +10,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.parse
+import re
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -65,16 +66,38 @@ def dump(base: str) -> dict:
     with open(f'{base}/fields.json', 'w') as f:
         json.dump(info, f)
     return info
+LAST_FAIL = {'why': None}
+
+def fail_kind(why: str | None) -> str:
+    if not why:
+        return 'other'
+    if why == 'timeout' or why.startswith('exit'):
+        return why.split()[0]
+    m = re.match('\\s*([A-Za-z_][\\w.]*(?:Error|Exception|Exit|Interrupt|Expired|Killed))\\b', why)
+    return m[1].rsplit('.', 1)[-1] if m else 'other'
 
 def _run(cmd, cwd, timeout, logf, env=None) -> bool:
     os.makedirs(os.path.dirname(os.path.abspath(logf)), exist_ok=True)
+    start = os.path.getsize(logf) if os.path.exists(logf) else 0
     with open(logf, 'a') as lf:
         try:
             r = subprocess.run(cmd, cwd=cwd, stdout=lf, stderr=subprocess.STDOUT, timeout=timeout, env=env)
-            return r.returncode == 0
+            ok = r.returncode == 0
+            why = None if ok else f'exit {r.returncode}'
         except subprocess.TimeoutExpired:
             lf.write(f'timed out after {timeout} s\n')
-            return False
+            ok, why = (False, 'timeout')
+    if not ok and why != 'timeout':
+        try:
+            with open(logf, encoding='utf-8', errors='replace') as f:
+                f.seek(start)
+                lines = [x.strip() for x in f.read().splitlines() if x.strip()]
+            err = [x for x in lines if re.match('[A-Za-z_][\\w.]*(Error|Exception|Exit|Interrupt|Killed)\\b', x)]
+            why = (err[-1] if err else lines[-1] if lines else why)[:300]
+        except OSError:
+            pass
+    LAST_FAIL['why'] = why
+    return ok
 
 def local_hours(day: str, tz: str, a: int | None=None, b: int | None=None) -> list[int]:
     a, b = (OBS_FROM if a is None else a, OBS_TO if b is None else b)
@@ -281,7 +304,7 @@ def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corre
     key = rec.get('key') or common.day_key(day, macro)
     leads = common.lead_models(macro, day)
     prev = rec.get('leads_built') or {}
-    keep = {m for m in leads if prev.get(m) == common.LEAD_VERSION}
+    keep = {m for m in leads if common.lead_matches(prev.get(m))}
     res = copy.deepcopy(rec)
     res['macro'], res['key'] = (macro, key)
     res['boxes'] = [b for b in res.get('boxes') or [] if not common.is_lead(b.get('model')) or b.get('model') in keep]
@@ -362,7 +385,7 @@ def grids_usable(gdir: str, bbox: list, model: str) -> str | None:
     if not os.path.exists(mp) or not os.path.exists(os.path.join(gdir, 'latest.json')) or (not glob.glob(os.path.join(gdir, '_hours', '*.npz'))):
         return 'missing'
     m = common.read_json(mp)
-    if m.get('physics_v') != common.model_physics(model):
+    if not common.model_physics_matches(m.get('physics_v'), model):
         return 'physics'
     if m.get('model') != model or [round(float(v), 2) for v in m.get('bbox') or []] != [round(float(v), 2) for v in bbox]:
         return 'box'
@@ -395,6 +418,7 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
     ok = _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, EVAL_TIMEOUT, logf, env)
     if not ok or not os.path.exists(fout):
         info['error'] = 'evaluate'
+        info['why'] = LAST_FAIL['why']
         return False
     ev = common.read_json(fout)
     _merge_eval(ev['flights'], B, inputs, model, bi, '')
@@ -455,6 +479,7 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
         base = os.path.join(out, common.base_model(model))
         if not built or not os.path.exists(f'{base}/latest.json'):
             info['error'] = 'build'
+            info['why'] = LAST_FAIL['why'] if not built else 'no latest.json'
             res['boxes'].append(info)
             shutil.rmtree(out, ignore_errors=True)
             continue
@@ -488,7 +513,7 @@ def _finish_leads(res: dict, key: str, built: dict) -> None:
     want = common.lead_models(res.get('macro') or common.macro_of_key(key), res.get('date') or common.day_of(key))
     res['leads_built'] = {m: v for m, v in built.items() if m in want}
     lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
-    done = bool(want) and all((res['leads_built'].get(m) == common.LEAD_VERSION for m in want))
+    done = bool(want) and all((common.lead_matches(res['leads_built'].get(m)) for m in want))
     res['lead_v'] = common.lead_version(key) if done and any((b.get('ok') for b in lb)) else None
 
 def _was_built(rec: dict, model: str, bi: int) -> bool:

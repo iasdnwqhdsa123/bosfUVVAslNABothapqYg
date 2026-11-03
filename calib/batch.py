@@ -335,6 +335,7 @@ def build(a) -> int:
         except Exception as e:
             common.note(f'{d}: build failed: {e!r}')
             status['errors'].append(d)
+            status.setdefault('why', {})[d] = f'{type(e).__name__}: {e}'[:300]
             common.log(f'day {i + 1}/{len(mine)}: failed')
         shutil.rmtree(work, ignore_errors=True)
         common.write_json(sp, status)
@@ -342,6 +343,18 @@ def build(a) -> int:
     common.write_json(sp, status)
     shutil.rmtree(grids_in, ignore_errors=True) if grids_in.startswith(a.work) else None
     return 0
+WHY: dict = {}
+
+def fail_reasons(d: str, how: str, fn: str | None) -> list[str]:
+    if how == 'error':
+        return [WHY.get(d) or 'shard error']
+    if how == 'built' and fn:
+        try:
+            res = common.read_json(fn)
+        except Exception:
+            return ['unreadable day file']
+        return [f"{b.get('model')} {b.get('error')}: {b.get('why') or '?'}" for b in res.get('boxes') or [] if not b.get('ok') and b.get('error')] or ['no box built']
+    return [how]
 
 def _shards(built: str) -> dict:
     got = {}
@@ -353,6 +366,8 @@ def _shards(built: str) -> dict:
                 got[d] = ('built', f'{base}/days/{d}.json.gz')
         for d in st.get('errors') or []:
             got[d] = ('error', None)
+            if (st.get('why') or {}).get(d):
+                WHY[d] = st['why'][d]
         for d in st.get('left') or []:
             got[d] = ('left', None)
     return got
@@ -443,6 +458,24 @@ def merge(a) -> int:
         os.makedirs(f'{data}/obs', exist_ok=True)
         shutil.copyfile(p, f'{data}/obs/{os.path.basename(p)}')
     run['obs_requests'] = sum((common.read_json(p).get('obs_requests', 0) for p in glob.glob(f'{a.built}/*/status.json')))
+    fails = []
+    for j in todo['days']:
+        d = j['day']
+        how, fn = got.get(d, ('lost', None))
+        x = state['done'].get(d, {})
+        bad = how == 'error' or (how == 'built' and fn and (not any((b.get('ok') for b in runmod.own(common.read_json(fn))))))
+        if bad:
+            fails.append({'day': d, 'src': j['src'], 'at': run.get('at'), 'why': fail_reasons(d, how, fn)})
+    if fails:
+        fp = f'{data}/failures.json'
+        old = common.read_json(fp) if os.path.exists(fp) else []
+        common.write_json(fp, (old + fails)[-500:])
+        kinds = {}
+        for f in fails:
+            for w in f['why']:
+                k = dayrun.fail_kind(w.split(': ', 1)[1] if ': ' in w and ' ' in w.split(': ', 1)[0] else w)
+                kinds[k] = kinds.get(k, 0) + 1
+        common.log(f'failures by kind: {dict(sorted(kinds.items()))}')
     for p in glob.glob(f'{a.plan}/logs/*') + glob.glob(f'{a.built}/*/logs/*'):
         shutil.copyfile(p, f'{data}/logs/{os.path.basename(p)}')
     for old in sorted(glob.glob(f'{data}/logs/*'), key=os.path.getmtime)[:-KEEP_LOGS]:

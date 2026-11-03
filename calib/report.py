@@ -1,6 +1,7 @@
 from __future__ import annotations
 import csv
 import math
+import os
 import re
 import statistics as st
 import sys
@@ -358,6 +359,13 @@ def build(data: str, days_csv: str | None=None, model: str | None=None) -> str:
         sec, per = _area_sections(by_macro[m], state, pilots, prim[m], models_in(by_macro[m]))
         out += sec
         per_all += per
+    fp = os.path.join(data, 'failures.json')
+    if os.path.exists(fp):
+        fl = common.read_json(fp)
+        kinds = Counter((w.split(': ', 1)[1].split(':')[0] if ': ' in w else w for f in fl for w in f.get('why') or []))
+        out += ['## Failures', '', f"The last {len(fl)} failed days' reasons (a day can have several boxes). By kind: {dict(kinds.most_common(12))}.", '', '| Day | Work | Run | Why |', '|---|---|---|---|']
+        out += [f"| {f['day']} | {f['src']} | {f.get('at') or ''} | {'; '.join(f.get('why') or [])[:400].replace('|', '/')} |" for f in fl[-60:]]
+        out.append('')
     sus = [p for p in per_all if p['flags']]
     out += ['## Suspicious days', '', f'{len(sus)} of {len(per_all)} days flagged (all days: the CSV beside this report).', '']
     if sus:

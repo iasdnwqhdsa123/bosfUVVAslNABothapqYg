@@ -156,8 +156,9 @@ def load_aircraft() -> dict:
 def aircraft_version(types: dict | None=None) -> str:
     return hashlib.sha256(json.dumps(types if types is not None else load_aircraft(), sort_keys=True).encode()).hexdigest()[:12]
 DAY_VERSION = 3
+DAY_BUILD_SKIP = {'build.py': {'write_free', '_free_soundings', '_publish_open', 'free_ahead', 'hour_token'}}
 
-def _stripped(path: str) -> str:
+def _stripped(path: str, skip: bool=True) -> str:
     with open(path, encoding='utf-8') as f:
         text = f.read()
     if path.endswith('.py'):
@@ -165,6 +166,9 @@ def _stripped(path: str) -> str:
             tree = ast.parse(text)
         except SyntaxError:
             return text
+        drop = DAY_BUILD_SKIP.get(os.path.basename(path), set()) if skip else set()
+        if drop:
+            tree.body = [x for x in tree.body if not (isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)) and x.name in drop)]
         for node in ast.walk(tree):
             body = getattr(node, 'body', None)
             if isinstance(body, list) and body and all((isinstance(x, ast.stmt) for x in body)):
@@ -195,21 +199,23 @@ def _stripped(path: str) -> str:
         return '\n'.join((line.rstrip() for line in ''.join(out).splitlines() if line.strip())) + '\n'
     return text
 
-def _version_of(paths: list[str]) -> str:
+def _version_of(paths: list[str], skip: bool=True) -> str:
     h = hashlib.sha256()
     found = False
     for p in sorted(set(paths)):
         if os.path.isfile(p):
             found = True
-            h.update(os.path.basename(p).encode() + b'\x00' + _stripped(p).encode() + b'\x00')
+            h.update(os.path.basename(p).encode() + b'\x00' + _stripped(p, skip).encode() + b'\x00')
     return h.hexdigest()[:12] if found else 'none'
 _PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
 PHYSICS_FILES = _PIPELINE_FILES + [os.path.join(HERE, 'build_day.py')]
 PHYSICS_FILES_EU = _PIPELINE_FILES + [os.path.join(PIPELINE, 'om.py'), os.path.join(PIPELINE, 'replay.py'), os.path.join(HERE, 'build_eu.py')]
 PHYSICS_VERSION = _version_of(PHYSICS_FILES)
 PHYSICS_VERSION_EU = _version_of(PHYSICS_FILES_EU)
+_WHOLE = {'US': _version_of(PHYSICS_FILES, skip=False), 'EU': _version_of(PHYSICS_FILES_EU, skip=False)}
 PHYSICS_FILES_LEAD = PHYSICS_FILES_EU + [os.path.join(HERE, 'build_lead.py')]
 LEAD_VERSION = _version_of(PHYSICS_FILES_LEAD)
+_WHOLE_LEAD = _version_of(PHYSICS_FILES_LEAD, skip=False)
 
 def model_physics(model: str) -> str:
     return globals()['LEAD_VERSION'] if is_lead(model) else physics_version(model_macro(model))
@@ -217,6 +223,23 @@ def model_physics(model: str) -> str:
 def lead_version(key: str) -> str | None:
     ms = lead_models(macro_of_key(key), day_of(key))
     return f"{globals()['LEAD_VERSION']}:{','.join(ms)}" if ms else None
+
+def lead_matches(stamp: str | None) -> bool:
+    return stamp is not None and stamp in (globals()['LEAD_VERSION'], _WHOLE_LEAD)
+
+def lead_version_matches(lv: str | None, key: str) -> bool:
+    want = lead_version(key)
+    if want is None or lv is None:
+        return lv == want
+    return lv == want or lv == f"{_WHOLE_LEAD}:{want.split(':', 1)[1]}"
+
+def physics_matches(stamp: str | None, macro: str='US') -> bool:
+    return stamp is not None and stamp in (physics_version(macro), _WHOLE.get(macro))
+
+def model_physics_matches(stamp: str | None, model: str) -> bool:
+    if is_lead(model):
+        return stamp is not None and stamp in (globals()['LEAD_VERSION'], _WHOLE_LEAD)
+    return physics_matches(stamp, model_macro(model))
 
 def physics_version(macro: str='US') -> str:
     return globals()['PHYSICS_VERSION_EU'] if macro == 'EU' else globals()['PHYSICS_VERSION']

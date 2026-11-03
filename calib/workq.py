@@ -33,13 +33,13 @@ def _redo(state: dict, d: str) -> bool:
     x = state['done'].get(d)
     if x is None or x.get('status') not in ('ok', 'partial') or x.get('redo_tries', 0) >= MAX_TRIES:
         return False
-    return x.get('v', 1) < common.DAY_VERSION or (bool(x.get('grids')) and x.get('pv') != common.physics_version(common.macro_of_key(d)))
+    return x.get('v', 1) < common.DAY_VERSION or (bool(x.get('grids')) and (not common.physics_matches(x.get('pv'), common.macro_of_key(d))))
 
 def _rescore(state: dict, d: str, cv: str | None=None) -> bool:
     x = state['done'].get(d)
     if x is None or x.get('status') not in ('ok', 'partial') or (not x.get('grids')) or (x.get('rs_tries', 0) >= MAX_TRIES):
         return False
-    if x.get('v', 1) < common.DAY_VERSION or x.get('pv') != common.physics_version(common.macro_of_key(d)):
+    if x.get('v', 1) < common.DAY_VERSION or not common.physics_matches(x.get('pv'), common.macro_of_key(d)):
         return False
     return x.get('sv') != common.SCORE_VERSION or x.get('cv') != cv
 
@@ -47,10 +47,10 @@ def _lead(state: dict, d: str) -> bool:
     x = state['done'].get(d)
     if x is None or x.get('status') not in ('ok', 'partial') or x.get('lv_tries', 0) >= MAX_TRIES:
         return False
-    if x.get('v', 1) < common.DAY_VERSION or x.get('pv') != common.physics_version(common.macro_of_key(d)):
+    if x.get('v', 1) < common.DAY_VERSION or not common.physics_matches(x.get('pv'), common.macro_of_key(d)):
         return False
     want = common.lead_version(d)
-    return want is not None and x.get('lv') != want
+    return want is not None and (not common.lead_version_matches(x.get('lv'), d))
 
 def _revisit(state: dict, d: str, ac: str) -> bool:
     x = state['done'].get(d)
