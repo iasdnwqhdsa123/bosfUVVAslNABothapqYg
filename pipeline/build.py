@@ -2080,6 +2080,28 @@ def write_free(out, model, now=None, workers=1):
         log(f"{model}: 3D window: {len(now_times)} hours, {len(nm['fields'])} fields")
     return manifest
 
+def _free_soundings(rdir, run_dir, snd, times):
+    if not snd or not snd.get('days'):
+        return None
+    from archive import trim_rows
+    want = {f'{t:%Y%m%d%H}' for t in times}
+    days = {}
+    for d, e in snd['days'].items():
+        src = os.path.join(run_dir, 'snd', f'{d}.pack')
+        if not isinstance(e, dict) or not e.get('stamps') or (not os.path.exists(src)):
+            continue
+        rows = [k for k, st in enumerate(e['stamps']) if st in want]
+        if not rows:
+            continue
+        os.makedirs(os.path.join(rdir, 'snd'), exist_ok=True)
+        try:
+            trim_rows(src, os.path.join(rdir, 'snd', f'{d}.pack'), rows, snd['block'] + 1, workers=2)
+        except Exception as ex:
+            log(f'free soundings: {d} not cut ({ex})')
+            continue
+        days[d] = {**e, 'stamps': [e['stamps'][k] for k in rows]}
+    return {**snd, 'days': days} if days else None
+
 def _publish_open(out, fbase, model, full, times, fields, cutoff, workers, points=False, hourly=()):
     base = os.path.join(out, model)
     hours_dir = os.path.join(base, '_hours')
@@ -2119,7 +2141,7 @@ def _publish_open(out, fbase, model, full, times, fields, cutoff, workers, point
     last_open = max(daily) if daily else times[0] - timedelta(hours=1)
     qtimes = [q for q in stored_quarters(os.path.join(base, '_quarters'), times[0], cutoff) if q <= last_open] if model == 'hrrr' else []
     qdays, qpresent = write_quarters(rdir, os.path.join(base, '_quarters'), qtimes, tile, only=fields, workers=workers) if qtimes else ({}, {})
-    manifest = {**full, 'runId': free_id, 'tier': 'free', 'freeUntil': cutoff.isoformat(), 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'days': days, 'fields': {**{k: {**full['fields'][k], 'tiles': sorted(v)} for k, v in sorted(present.items()) if k in full['fields']}, **quarter_manifest(qdays, qpresent)}, 'quarters': qdays, 'levels': [{**lv, 'tiles': {k: sorted(v) for k, v in sorted(lpresent[lv['k']].items()) if k in full['fields']}} for lv in full.get('levels', [])], 'waveAltsFt': full.get('waveAltsFt', []) if any((k.startswith('wv') for k in present)) else [], 'points': pts, 'sounding': None, 'hours': hours, 'hourPoints': hpts, 'fronts': 1 if has_fronts else 0, 'pack': 1}
+    manifest = {**full, 'runId': free_id, 'tier': 'free', 'freeUntil': cutoff.isoformat(), 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'days': days, 'fields': {**{k: {**full['fields'][k], 'tiles': sorted(v)} for k, v in sorted(present.items()) if k in full['fields']}, **quarter_manifest(qdays, qpresent)}, 'quarters': qdays, 'levels': [{**lv, 'tiles': {k: sorted(v) for k, v in sorted(lpresent[lv['k']].items()) if k in full['fields']}} for lv in full.get('levels', [])], 'waveAltsFt': full.get('waveAltsFt', []) if any((k.startswith('wv') for k in present)) else [], 'points': pts, 'sounding': _free_soundings(rdir, os.path.join(base, full['runId']), full.get('sounding'), daily) if points else None, 'hours': hours, 'hourPoints': hpts, 'fronts': 1 if has_fronts else 0, 'pack': 1}
     with open(os.path.join(fbase, 'latest.json'), 'w') as f:
         json.dump(manifest, f, separators=(',', ':'))
     for old in os.listdir(fbase):
