@@ -28,7 +28,7 @@ SPACING_KM = (2.0, 12.0)
 COVER_BINS = [0, 0.05, 0.15, 0.25, 0.35, 0.5, 0.7, 1.01]
 STREET_WIND, STREET_W, STREET_RATIO = (5.5, 1.0, 0.25)
 KIND_RAIN, KIND_OVERDEV, KIND_OVERCAST = (0.5, 30.0, 90.0)
-STREET_ZI = 2.5
+STREET_ZI = (3.0, 5.5)
 FIELDS = ['wstar', 'cudepth', 'overdev', 'zi', 'cubase', 'depth', 'cloudlow', 'cloudmid', 'cloudhigh', 'rain', 'u_blavg', 'v_blavg']
 
 def bucket(day: str) -> str:
@@ -528,7 +528,7 @@ def report(results: list[dict]) -> str:
                 L.append(f"Lines against the layer's wind (≥ 3 m/s): median {np.median(al):.0f}° apart, {np.mean(np.array(al) <= 20):.0%} within 20°.")
             sp = [b['spacing'] / (b['zi'] / 1000) for b in obs_st if b['spacing'] and b['zi'] and (b['zi'] > 300) and (axis_diff(b['axis'], b['wind_axis']) <= 30)]
             if sp:
-                L.append(f'Spacing over zi where they lie along the wind: median {np.median(sp):.2f} (the placed cumulus: {STREET_ZI}), quartiles {np.percentile(sp, 25):.2f}–{np.percentile(sp, 75):.2f}, {len(sp)} blocks.')
+                L.append(f'Spacing over zi where they lie along the wind: median {np.median(sp):.2f} (the placed cumulus: {STREET_ZI[0]:g}–{STREET_ZI[1]:g}), quartiles {np.percentile(sp, 25):.2f}–{np.percentile(sp, 75):.2f}, {len(sp)} blocks.')
             wl = [b['wind'] for b in obs_st]
             wn = [b['wind'] for b in B if b['aniso'] < ANISO]
             if wl and wn:
