@@ -1052,13 +1052,16 @@ def cloud_top_from_olr(olr, t, z, t_hi, p_lv, p_hi):
     inside = z0 + f * (z1 - z0)
     above = Z[-1] + np.minimum(np.maximum(T[-1] - tb, 0) / 0.0065, 3000)
     return (np.where(found, inside, above).astype(np.float32), tb)
-CONTRAILS = os.environ.get('CONTRAILS', '0') == '1'
+CONTRAILS = os.environ.get('CONTRAILS', '1') != '0'
 
 def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d):
     if not CONTRAILS or valid is None or lv.get('cloud') is None or (s.get('hcc') is None):
         return
     try:
         import contrails
+        fix = contrails.ISSR_FIX.get(src.id)
+        if fix is None:
+            return
         have, rh_c = (list(lv['cloud'][0]), lv['cloud'][1])
         lev = list(src.levels)
         if 300 not in lev or 400 not in lev or lv.get('u') is None or (lv.get('z') is None):
@@ -1076,7 +1079,7 @@ def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d):
         if r is None:
             return
         mu = np.sin(np.radians(np.maximum(sun_elevation(valid, lat2d, lon2d), 0)))
-        contrails.fold(s, r[0], r[1], mu)
+        contrails.fold_issr(s, contrails.issr_mask(t, rhi), r[0], r[1], mu, fix)
     except Exception as e:
         log(f'  contrails skipped: {e!r}')
 
