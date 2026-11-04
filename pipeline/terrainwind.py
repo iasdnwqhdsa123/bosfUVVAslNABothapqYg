@@ -24,7 +24,8 @@ NO_COVER = 80
 FOREST = (10, 95)
 MAX_SLOPE, LEE_SLOPE, SHAPE, DECAY, RELIEF_LO, RELIEF_HI, BLOCK_MIN = (0.7, 0.4, 0.65, 2.5, 20.0, 50.0, 0.05)
 RELIEF_R_M, SLOPE_M = (750.0, 125.0)
-RIDGE_LEAN, RIDGE_SPREAD = (1 / math.sqrt(3), 0.4)
+RIDGE_LEAN, RIDGE_SPREAD = (0.0, 0.4)
+LEE_SHARE = 0.5
 
 def build_windninja(src: str, prefix: str) -> str:
     b = os.path.join(prefix, 'build')
@@ -268,7 +269,7 @@ class Domain:
         R = np.asarray(u)[..., None] * F(E) + np.asarray(v)[..., None] * F(N)
         return (R[:, 0], R[:, 1], R[:, 2])
 
-    def layer(self, x, y, agl, u, v, n=None, lean=None, spread=None, shape=None, decay=None, lee=1.0):
+    def layer(self, x, y, agl, u, v, n=None, lean=None, spread=None, shape=None, decay=None, lee=None):
         x, y, agl = (np.atleast_1d(x).astype(np.float64), np.atleast_1d(y).astype(np.float64), np.atleast_1d(agl).astype(np.float64))
         u, v = (np.broadcast_to(np.asarray(u, np.float64), x.shape), np.broadcast_to(np.asarray(v, np.float64), x.shape))
         sp = np.maximum(np.hypot(u, v), 1e-06)
@@ -293,7 +294,7 @@ class Domain:
             open_ = np.where(blk, np.clip(w0 / np.maximum(s, 1e-09) / np.maximum(nn * relief, 1e-09), BLOCK_MIN, 1), 1.0)
         L = (SHAPE if shape is None else shape) * np.maximum(relief, 0.001) * open_ / np.maximum(s * k, 1e-06)
         out = w0 * k * fr / (1 + h / L) ** (DECAY if decay is None else decay)
-        out = np.where(out < 0, out * lee, out)
+        out = np.where(out < 0, out * (LEE_SHARE if lee is None else lee), out)
         return np.where(np.isfinite(out) & (s > 0), out, np.nan)
 
 def main(argv=None):

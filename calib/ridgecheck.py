@@ -233,7 +233,7 @@ def report(args, log=print) -> None:
     with open(os.path.join(args.out, 'report.md'), 'w') as f:
         f.write(summary(R) + sweep_summary(S))
     log(f'{len(R)} pieces in the report')
-SWEEP = {'lee': (1.0, 0.5, 0.25, 0.0), 'decay': (2.5, 2.0, 3.0), 'shape': (0.65, 0.45, 0.9), 'lean': (1 / math.sqrt(3), 0.0, 1.0)}
+SWEEP = {'lee': (0.5, 1.0, 0.25, 0.0), 'decay': (2.5, 2.0, 3.0), 'shape': (0.65, 0.45, 0.9), 'lean': (0.0, 1 / math.sqrt(3), 0.3)}
 
 def variants() -> list[dict]:
     import itertools
