@@ -1052,6 +1052,33 @@ def cloud_top_from_olr(olr, t, z, t_hi, p_lv, p_hi):
     inside = z0 + f * (z1 - z0)
     above = Z[-1] + np.minimum(np.maximum(T[-1] - tb, 0) / 0.0065, 3000)
     return (np.where(found, inside, above).astype(np.float32), tb)
+CONTRAILS = os.environ.get('CONTRAILS', '1') != '0'
+
+def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d):
+    if not CONTRAILS or valid is None or lv.get('cloud') is None or (s.get('hcc') is None):
+        return
+    try:
+        import contrails
+        have, rh_c = (list(lv['cloud'][0]), lv['cloud'][1])
+        lev = list(src.levels)
+        if 300 not in lev or 400 not in lev or lv.get('u') is None or (lv.get('z') is None):
+            return
+        i3, i4 = (lev.index(300), lev.index(400))
+        hi_t = {src.cloud_levels[j]: hi['t'][j] - 273.15 for j in hi_ok} if 't' in hi else {}
+        nanf = np.full(lat2d.shape, np.nan, np.float32)
+        t = np.stack([lv['t'][i3] if p == 300 else hi_t.get(p, nanf) for p in contrails.LEVELS])
+        rhi = np.stack([rh_c[have.index(float(p))] if float(p) in have else nanf for p in contrails.LEVELS])
+        u = np.stack([lv['u'][i3]] * len(contrails.LEVELS))
+        v = np.stack([lv['v'][i3]] * len(contrails.LEVELS))
+        dz = np.maximum(lv['z'][i3] - lv['z'][i4], 500)
+        shear = np.hypot(lv['u'][i3] - lv['u'][i4], lv['v'][i3] - lv['v'][i4]) / dz
+        r = contrails.at_grid(lat2d, lon2d, (t, rhi, u, v, shear), valid, None)
+        if r is None:
+            return
+        mu = np.sin(np.radians(np.maximum(sun_elevation(valid, lat2d, lon2d), 0)))
+        contrails.fold(s, r[0], r[1], mu)
+    except Exception as e:
+        log(f'  contrails skipped: {e!r}')
 
 def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=None):
     raw = fetch_hour(src, run, fh) if raw is None else raw
@@ -1235,6 +1262,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
             z_olr, tb = cloud_top_from_olr(-olr, lv['t'], lv['z'], t_hi, list(src.levels), [src.cloud_levels[j] for j in hi_ok] if t_hi else [])
             cold = (np.nan_to_num(s.get('tcc', 0), nan=0) >= OLR_TOP_COVER) & (tb <= s['t2'] - OLR_TOP_COLDER)
             s['ctop_olr'] = np.where(cold, z_olr, np.nan).astype(np.float32)
+        add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d)
         s['hub_m'] = src.hub_m
         s['hpbl_season'] = src.hpbl_season
         if src.derive:
