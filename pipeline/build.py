@@ -1052,7 +1052,7 @@ def cloud_top_from_olr(olr, t, z, t_hi, p_lv, p_hi):
     inside = z0 + f * (z1 - z0)
     above = Z[-1] + np.minimum(np.maximum(T[-1] - tb, 0) / 0.0065, 3000)
     return (np.where(found, inside, above).astype(np.float32), tb)
-CONTRAILS = os.environ.get('CONTRAILS', '1') != '0'
+CONTRAILS = os.environ.get('CONTRAILS', '0') == '1'
 
 def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d):
     if not CONTRAILS or valid is None or lv.get('cloud') is None or (s.get('hcc') is None):
