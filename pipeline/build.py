@@ -939,7 +939,8 @@ def resolve_windows(src, run, fh, native, earlier):
     return native
 
 def snd_hour(src, fh):
-    return bool(src.snd_levels) and fh <= SND_AHEAD_H.get(src.id, 10 ** 6) and bool(src.fstep(fh))
+    after, every = SND_EVERY.get(src.id, (10 ** 6, 1))
+    return bool(src.snd_levels) and bool(src.fstep(fh)) and (fh <= after or fh % every == 0)
 STEPS_KEPT = 2
 _STEPS: dict = {}
 _STEPS_LOCK = threading.Lock()
@@ -1274,9 +1275,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         if s.get('shf') is None and rnsw is not None and (rnlw is not None):
             s['shf'] = heat_from_net_radiation(rnsw + rnlw, s['t2'], s['td2'], s.get('soilm9'), s.get('lsm'))
         if snd_hour(src, fh):
-            if windows is not None and src.snd_step != 1:
-                raise ValueError('snd_step > 1 needs the whole grid (no KEEP windows)')
-            s['_snd'] = sounding_column(src, s, lv, levels, {c: [x[i] for x in v] for c, v in sndp.items()}, snd_extra, lon2d, rot)
+            s['_snd'] = sounding_column(src, s, lv, levels, {c: [x[i] for x in v] for c, v in sndp.items()}, snd_extra, lon2d, rot, origin=(0, 0) if windows is None else (windows[i][0][0], windows[i][0][2]))
         out.append((s, lv, levels))
     if fbox:
         try:
@@ -1320,7 +1319,7 @@ SND_VARS = ('t', 'dpd', 'u', 'v', 'z', 'w')
 SND_SFC = {'ps': (400.0, 1100.0), 'sw': (0.0, 1270.0)}
 SND_MAP = ('elevation', 't2', 'td2', 'mslp', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'rain', 'showers', 'cape', 'zi', 'heat', 'u_sfc', 'v_sfc', 'gust', 'vis', *(f'cc{p}' for p in P.CC_LEVELS))
 SND_BLOCK = 8
-SND_AHEAD_H = {'gfs': 48, 'ecmwf': 360}
+SND_EVERY = {'gfs': (48, 3)}
 
 def snd_enc(p):
     h = 44330.8 * (1 - (p / 1013.25) ** 0.190263)
@@ -1332,9 +1331,10 @@ def snd_quantize(a, lo, hi):
     q = np.clip(np.rint((a - lo) / (hi - lo) * 254), 0, 254)
     return np.where(np.isfinite(a), q, 255).astype(np.uint8)
 
-def sounding_column(src, s, lv, levels, extra, extra_levels, lon2d, rot):
+def sounding_column(src, s, lv, levels, extra, extra_levels, lon2d, rot, origin=(0, 0)):
     S = src.snd_step
-    thin = lambda a: None if a is None else np.ascontiguousarray(np.asarray(a, np.float32)[..., ::S, ::S])
+    oy, ox = (-origin[0] % S, -origin[1] % S)
+    thin = lambda a: None if a is None else np.ascontiguousarray(np.asarray(a, np.float32)[..., oy::S, ox::S])
     lev = [float(x) for x in levels]
     rows = {}
     for j, p in enumerate(extra_levels):
@@ -1370,6 +1370,20 @@ def sounding_column(src, s, lv, levels, extra, extra_levels, lon2d, rot):
     col['ps'], col['sw'] = (thin(s['ps']), thin(s.get('sw')))
     return col
 
+def paste_thin(windows, grids, shape, S):
+    if windows is None or S == 1:
+        return paste(windows, grids, shape)
+    up = lambda a: -(-a // S)
+    out = None
+    for ((y0, y1, x0, x1), (iy0, iy1, ix0, ix1)), v in zip(windows, grids):
+        if v is None:
+            continue
+        if out is None:
+            out = np.full((up(shape[0]), up(shape[1])), np.nan, np.float32)
+        gy0, gy1, gx0, gx1 = (up(y0 + iy0), up(y0 + iy1), up(x0 + ix0), up(x0 + ix1))
+        out[gy0:gy1, gx0:gx1] = v[gy0 - up(y0):gy1 - up(y0), gx0 - up(x0):gx1 - up(x0)]
+    return out
+
 def sounding_grid(src, parts, windows, shape, q):
     S = src.snd_step
     cols = [s.get('_snd') for s, _, _ in parts]
@@ -1379,9 +1393,9 @@ def sounding_grid(src, parts, windows, shape, q):
     for k, p in enumerate(src.snd_levels):
         enc = snd_enc(p)
         for c in SND_VARS:
-            out.append(snd_quantize(paste(windows, [col[c][k] for col in cols], shape), *enc[c]))
+            out.append(snd_quantize(paste_thin(windows, [col[c][k] for col in cols], shape, S), *enc[c]))
     for c, (lo, hi) in SND_SFC.items():
-        g = paste(windows, [col[c] for col in cols], shape)
+        g = paste_thin(windows, [col[c] for col in cols], shape, S)
         out.append(np.full(out[0].shape, 255, np.uint8) if g is None else snd_quantize(g, lo, hi))
     for n in SND_MAP:
         out.append(np.ascontiguousarray(q[n][::S, ::S]) if n in q else np.full(out[0].shape, 255, np.uint8))
