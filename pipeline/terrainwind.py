@@ -26,6 +26,8 @@ MAX_SLOPE, LEE_SLOPE, SHAPE, DECAY, RELIEF_LO, RELIEF_HI, BLOCK_MIN = (0.7, 0.4,
 RELIEF_R_M, SLOPE_M = (750.0, 125.0)
 RIDGE_LEAN, RIDGE_SPREAD = (0.0, 0.4)
 LEE_SHARE = 0.5
+CONV_DEPTH = 500.0
+SLOPE_FLOW, SLOPE_FULL, SLOPE_SIGMA_M, SLOPE_DEPTH, SLOPE_DEPTH_MAX = (0.5, 0.15, 1000.0, 0.3, 600.0)
 
 def build_windninja(src: str, prefix: str) -> str:
     b = os.path.join(prefix, 'build')
@@ -268,6 +270,34 @@ class Domain:
         F = lambda A: A[k, :, idx] * (1 - t)[:, None] + A[k + 1, :, idx] * t[:, None]
         R = np.asarray(u)[..., None] * F(E) + np.asarray(v)[..., None] * F(N)
         return (R[:, 0], R[:, 1], R[:, 2])
+
+    def _div(self, F, res):
+        du = np.full(F.shape[:2], np.nan)
+        dv = np.full(F.shape[:2], np.nan)
+        du[:, 1:-1] = (F[:, 2:, 0] - F[:, :-2, 0]) / (2 * res)
+        dv[1:-1, :] = (F[:-2, :, 1] - F[2:, :, 1]) / (2 * res)
+        return du + dv
+
+    def convergence(self, x, y, u, v, ws, zi):
+        from scipy import ndimage
+        x, y = (np.atleast_1d(x).astype(np.float64), np.atleast_1d(y).astype(np.float64))
+        if not hasattr(self, '_dE'):
+            k = HEIGHTS.index(150)
+            self._dE = self._div(self.E[k, :2].transpose(1, 2, 0), self.wres)
+            self._dN = self._div(self.N[k, :2].transpose(1, 2, 0), self.wres)
+            es = ndimage.gaussian_filter(self.e.astype(np.float64), SLOPE_SIGMA_M / self.res)
+            gy, gx = np.gradient(es, self.res)
+            gy = -gy
+            sl = np.hypot(gx, gy)
+            f = np.minimum(1.0, sl / SLOPE_FULL) / np.maximum(sl, 1e-06)
+            self._dS = self._div(np.stack([gx * f, gy * f], axis=-1), self.res)
+        dE = _bilinear(self._dE, self.wx0, self.wy0, self.wres, x, y)
+        dN = _bilinear(self._dN, self.wx0, self.wy0, self.wres, x, y)
+        dS = _bilinear(self._dS, self.x0, self.y0, self.res, x, y)
+        u, v, ws, zi = (np.broadcast_to(np.asarray(a, np.float64), x.shape) for a in (u, v, ws, zi))
+        wn = -(u * dE + v * dN) * CONV_DEPTH
+        slope = -SLOPE_FLOW * np.maximum(ws, 0) * dS * np.minimum(SLOPE_DEPTH * np.maximum(zi, 0), SLOPE_DEPTH_MAX)
+        return {'wn': wn, 'slope': slope}
 
     def layer(self, x, y, agl, u, v, n=None, lean=None, spread=None, shape=None, decay=None, lee=None):
         x, y, agl = (np.atleast_1d(x).astype(np.float64), np.atleast_1d(y).astype(np.float64), np.atleast_1d(agl).astype(np.float64))
