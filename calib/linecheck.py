@@ -25,6 +25,7 @@ TOP_PAD = 200.0
 RIDGE_MAX = 0.3
 EDGE_S, CLIMB_PAD, ENGINE_ON = (300.0, 30.0, 500.0)
 CONV_LINE = (0.15, 0.3)
+CONV_SCALE = {'icon': 0.5, 'icond2': 0.5, 'ecmwf': 0.5}
 SEARCH_KM = 40.0
 NEAR_KM = (2, 5, 10, 20)
 FIELDS = ('conv', 'u_blavg', 'v_blavg', 'zi', 'elevation', 'ridge', 'wstar', 't2')
@@ -191,7 +192,8 @@ def runs(f: dict, B, cls: str) -> list[dict]:
         i = j + 1
     return out
 
-def judge(r: dict, B) -> dict:
+def judge(r: dict, B, model: str | None=None) -> dict:
+    sc = CONV_SCALE.get(model, 1.0)
     t = (r['t0'] + r['t1']) / 2
     h = hour(B, t)
     out = {k: v for k, v in r.items() if k != 'pts'}
@@ -210,7 +212,7 @@ def judge(r: dict, B) -> dict:
             hh = None if h is None else h + dh
             if hh is None or not 0 <= hh < len(B['stamps']):
                 continue
-            d = nearest_line(B, hh, pts, thr)
+            d = nearest_line(B, hh, pts, thr * sc)
             if dh == 0:
                 out[f'd{thr}'] = d
             if d is not None and (best is None or d < best[0] - 0.5):
@@ -246,7 +248,7 @@ def run(args, log=print) -> None:
                     continue
                 n_fl += 1
                 for r in rs:
-                    j = judge(r, B)
+                    j = judge(r, B, m)
                     j.update(day=gkey, model=m, fid=f.get('id'), region=f.get('region'), tz=f.get('tz'))
                     out.write(json.dumps(j) + '\n')
                     n[j['kind']] += 1
@@ -261,14 +263,14 @@ def summary(R: list, meta: dict | None=None) -> str:
     L = [r for r in R if r['kind'] == 'line']
     S = [r for r in R if r['kind'] == 'sink']
     thr = CONV_LINE[0]
-    md = ['# Lines check', '', f"{len(L)} rising runs (straight flight, {NETTO_MIN} m/s or more up for {LINE_S:.0f} s and more, inside the thermal layer, {AGL_MIN:.0f} m or more up, no ridge lift) in {len({r['fid'] for r in L})} flights on {len({r['day'] for r in L})} days; {len(S)} sink runs as controls.", '', (f"Forecast boxes read: {meta['boxes']}; {meta['boxes_no_conv']} saved without the convergence (before 4 Nov 2026: their days come in as they're built again).\n\n" if meta else '') + f"A forecast line: convergence {thr} m/s or more (build.py conv). The nearest at the run's hour, and at the best of the hours either side.", '']
+    md = ['# Lines check', '', f"{len(L)} rising runs (straight flight, {NETTO_MIN} m/s or more up for {LINE_S:.0f} s and more, inside the thermal layer, {AGL_MIN:.0f} m or more up, no ridge lift) in {len({r['fid'] for r in L})} flights on {len({r['day'] for r in L})} days; {len(S)} sink runs as controls.", '', (f"Forecast boxes read: {meta['boxes']}; {meta['boxes_no_conv']} saved without the convergence (before 4 Nov 2026: their days come in as they're built again).\n\n" if meta else '') + f'A forecast line: convergence {thr} m/s or more (build.py conv; ' + ', '.join((f'{m} {thr * s:g}' for m, s in sorted(CONV_SCALE.items()))) + "). The nearest at the run's hour, and at the best of the hours either side.", '']
     if not L:
         return '\n'.join(md) + '\n'
 
     def row(name, X):
         if not X:
             return f'| {name} | 0 |' + ' - |' * (len(NEAR_KM) + 4)
-        on = [r for r in X if (r.get('conv') or 0) >= thr]
+        on = [r for r in X if (r.get('conv') or 0) >= thr * CONV_SCALE.get(r.get('model'), 1.0)]
         none = sum((1 for r in X if r.get(f'd{thr}') is None)) / len(X)
         dd = [r[f'd{thr}'] for r in X if r.get(f'd{thr}') is not None]
         return f'| {name} | {len(X)} | {len(on) / len(X):.0%} | ' + ' | '.join((f"{_share(X, f'd{thr}', k):.0%}" for k in NEAR_KM)) + f" | {none:.0%} | {(np.median(dd) if dd else float('nan')):.1f} | {_share(X, f'best{thr}', 5):.0%} |"
@@ -289,6 +291,12 @@ def summary(R: list, meta: dict | None=None) -> str:
     md += ['', 'By region:', '', '| region | n | on a line | ' + ' | '.join((f'within {k} km' for k in NEAR_KM)) + ' | none | median km | ±1 h within 5 km |', '|---|---|---|' + '---|' * len(NEAR_KM) + '---|---|---|']
     for k in sorted(regs, key=lambda k: -len(regs[k])):
         md.append(row(k, regs[k]))
+    mods = defaultdict(list)
+    for r in L:
+        mods[r.get('model') or '?'].append(r)
+    md += ['', 'By model (its own cut):', '', '| model | n | on a line | ' + ' | '.join((f'within {k} km' for k in NEAR_KM)) + ' | none | median km | ±1 h within 5 km |', '|---|---|---|' + '---|' * len(NEAR_KM) + '---|---|---|']
+    for k in sorted(mods, key=lambda k: -len(mods[k])):
+        md.append(row(k, mods[k]))
     md += ['', "The forecast's convergence on the straight pieces, and what they found:", '']
     for lo, hi in ((-9, 0.0), (0.0, 0.15), (0.15, 0.3), (0.3, 9)):
         X = [r for r in T if r.get('conv') is not None and lo <= r['conv'] < hi]
