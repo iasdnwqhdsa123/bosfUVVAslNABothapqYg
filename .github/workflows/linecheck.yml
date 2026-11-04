@@ -1,0 +1,46 @@
+name: Lines check
+on:
+  push:
+    branches: [main]
+    paths: ["calib/linecheck.request"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: calib-lines
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r pipeline/requirements.txt
+      - name: Restore the data and the grids
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          mkdir -p /tmp/lines /tmp/out /tmp/grids
+          python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/lines/fetch.err || { echo "::error::no data"; exit 1; }
+          for m in $(python3 calib/state.py list calib-grids- | python3 -c 'import json, sys; print(" ".join(k[len("calib-grids-"):] for k in json.load(sys.stdin)))'); do
+            python3 calib/state.py fetch "calib-grids-$m" /tmp/grids 2>> /tmp/lines/fetch.err || echo "a month not fetched"
+          done
+      - name: Check
+        run: |
+          python3 calib/linecheck.py run --data /tmp/data --grids /tmp/grids --out /tmp/lines --budget 240 2>> /tmp/lines/stderr.log \
+            || echo "::warning::the check failed (details in the encrypted log)"
+          python3 calib/linecheck.py report --out /tmp/lines
+          python3 calib/state.py pack /tmp/lines /tmp/out/calib-lines.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-lines
+          path: /tmp/out/calib-lines.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error

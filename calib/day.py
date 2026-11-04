@@ -21,6 +21,7 @@ FIELDS = ['wstar', 'depth', 'cubase', 'cudepth', 'twidth', 'blapse', 'zi', 'dens
 PAD_LON, PAD_LAT = (1.5, 1.2)
 BUILD_TIMEOUT, EVAL_TIMEOUT = (25 * 60, 15 * 60)
 GRID_FIELDS = os.environ.get('CALIB_GRID_FIELDS', 'all')
+SAVE_ALSO = ('elevation', 'conv')
 GRID_HOURS = os.environ.get('CALIB_GRID_HOURS', 'all')
 
 def boxes(flights: list[dict]) -> list[dict]:
@@ -360,7 +361,7 @@ def local_hour_of(stamp: str, tz: str) -> int:
 def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours: str=GRID_HOURS) -> dict:
     os.makedirs(os.path.join(dest, '_hours'), exist_ok=True)
     lo, hi = (int(x) for x in hours.split('-')) if hours != 'all' else (0, 23)
-    keep_names = None if fields == 'all' else sorted(set(FIELDS) | {'elevation'})
+    keep_names = None if fields == 'all' else sorted(set(FIELDS) | set(SAVE_ALSO))
     names = set()
     for fn in sorted(glob.glob(f'{base}/_hours/*.npz')):
         stamp = os.path.basename(fn)[:-4]
