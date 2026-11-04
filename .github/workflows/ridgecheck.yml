@@ -25,11 +25,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q -r pipeline/requirements.txt
-      - name: Build WindNinja
+      - name: Which
+        run: |
+          mode="$(python3 -c 'import json; print(json.load(open("calib/ridgecheck.request")).get("mode", "check"))' 2> /dev/null || echo check)"
+          [ "$mode" = sweep ] || mode=check
+          echo "MODE=$mode" >> "$GITHUB_ENV"
+          echo "mode: $mode"
+      - name: GDAL and WindNinja's build tools
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake g++ pkg-config gdal-bin libgdal-dev libboost-program-options-dev \
             libboost-date-time-dev libboost-test-dev libshp-dev libnetcdf-dev libcurl4-openssl-dev > /dev/null
+      - name: Build WindNinja
+        if: env.MODE == 'check'
+        run: |
           git init -q /tmp/windninja && git -C /tmp/windninja fetch -q --depth 1 https://github.com/firelab/windninja "$WINDNINJA_SHA" && git -C /tmp/windninja checkout -q FETCH_HEAD
           (cd pipeline && python3 -c "import terrainwind as t; print(t.build_windninja('/tmp/windninja', '/tmp/windninja'))")
           echo "WINDNINJA=/tmp/windninja/build/src/cli/WindNinja_cli" >> "$GITHUB_ENV"
@@ -40,14 +49,14 @@ jobs:
           mkdir -p /tmp/ridge /tmp/prev /tmp/out /tmp/grids
           python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/ridge/fetch.err || { echo "::error::no data"; exit 1; }
           python3 calib/state.py fetch calib-ridge /tmp/prev 2>> /tmp/ridge/fetch.err || echo "no results before"
-          for f in results.jsonl done.json; do [ -f "/tmp/prev/$f" ] && cp "/tmp/prev/$f" /tmp/ridge/; done
+          for f in results.jsonl done.json sweep.jsonl sweep_done.json; do [ -f "/tmp/prev/$f" ] && cp "/tmp/prev/$f" /tmp/ridge/; done
           for m in $(python3 calib/state.py list calib-grids- | python3 -c 'import json, sys; print(" ".join(k[len("calib-grids-"):] for k in json.load(sys.stdin)))'); do
             python3 calib/state.py fetch "calib-grids-$m" /tmp/grids 2>> /tmp/ridge/fetch.err || echo "a month not fetched"
           done
       - name: Check
         run: |
-          python3 calib/ridgecheck.py run --data /tmp/data --grids /tmp/grids --out /tmp/ridge --budget 240 --cache /tmp/terrain 2>> /tmp/ridge/stderr.log \
-            || echo "::warning::the check failed (details in the encrypted log)"
+          python3 calib/ridgecheck.py "$MODE" --data /tmp/data --grids /tmp/grids --out /tmp/ridge --budget 240 --cache /tmp/terrain 2>> /tmp/ridge/stderr.log \
+            || echo "::warning::the $MODE failed (details in the encrypted log)"
           python3 calib/ridgecheck.py report --out /tmp/ridge
           rm -rf /tmp/ridge/_work
           python3 calib/state.py pack /tmp/ridge /tmp/out/calib-ridge.enc

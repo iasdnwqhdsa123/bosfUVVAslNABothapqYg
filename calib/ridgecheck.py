@@ -228,9 +228,83 @@ def summary(R: list) -> str:
 def report(args, log=print) -> None:
     fn = os.path.join(args.out, 'results.jsonl')
     R = [json.loads(x) for x in open(fn)] if os.path.exists(fn) else []
+    sw = os.path.join(args.out, 'sweep.jsonl')
+    S = [json.loads(x) for x in open(sw)] if os.path.exists(sw) else []
     with open(os.path.join(args.out, 'report.md'), 'w') as f:
-        f.write(summary(R))
+        f.write(summary(R) + sweep_summary(S))
     log(f'{len(R)} pieces in the report')
+SWEEP = {'lee': (1.0, 0.5, 0.25, 0.0), 'decay': (2.5, 2.0, 3.0), 'shape': (0.65, 0.45, 0.9), 'lean': (1 / math.sqrt(3), 0.0, 1.0)}
+
+def variants() -> list[dict]:
+    import itertools
+    ks = list(SWEEP)
+    return [dict(zip(ks, vs)) for vs in itertools.product(*(SWEEP[k] for k in ks))]
+
+def sweep(args, log=print) -> None:
+    import layer2
+    import rows as rowsmod
+    import terrainwind as tw
+    V = variants()
+    done = set((tuple(c) for c in common.read_json(os.path.join(args.out, 'done.json'))))
+    sdone_fn = os.path.join(args.out, 'sweep_done.json')
+    sdone = set((tuple(c) for c in (common.read_json(sdone_fn) if os.path.exists(sdone_fn) else [])))
+    by = gather(rowsmod.load_days(args.data), layer2.Grids(args.grids), classes(), log)
+    order = sorted((c for c in by if c in done and c not in sdone), key=lambda c: -len(by[c]))
+    start, n_ok, n_cells = (time.time(), 0, 0)
+    with open(os.path.join(args.out, 'sweep.jsonl'), 'a') as out:
+        for c in order:
+            if (time.time() - start) / 60 > args.budget:
+                log(f'out of time: {len(order) - n_cells} places left for the next sweep')
+                break
+            lat, lon = cell_centre(c)
+            try:
+                D = tw.Domain(lat, lon, os.path.join(args.out, '_work'), args.cache, solve=False, cover=False)
+            except Exception as e:
+                print(f'a place not solved: {e}', file=sys.stderr)
+                continue
+            for p in by[c]:
+                la, lo, al = line(p['fixes'])
+                x, y = D.xy(la, lo)
+                ge = tw._bilinear(D.e, D.x0, D.y0, D.res, x, y)
+                rel = tw._bilinear(D.relief, D.x0, D.y0, D.res, x, y)
+                if not (np.all(np.isfinite(ge)) and D.in_core(x, y).all()) or np.nanmax(rel) < MIN_RELIEF or np.min(al - ge) < 5:
+                    continue
+                vals = [float(np.mean(D.layer(x, y, al - ge, p['u'], p['v'], p.get('n'), **v))) for v in V]
+                if not all((math.isfinite(z) for z in vals)):
+                    continue
+                obs, _ = netto(p['fixes'], p['u'], p['v'], p['cls'])
+                out.write(json.dumps({'obs': round(obs, 3), 'wind': round(math.hypot(p['u'], p['v']), 1), 'ws': p.get('ws'), 'v': [round(z, 3) for z in vals]}) + '\n')
+                n_ok += 1
+            sdone.add(c)
+            n_cells += 1
+            out.flush()
+            common.write_json(sdone_fn, sorted(sdone))
+    log(f'{n_cells} places swept, {n_ok} pieces')
+
+def sweep_summary(S: list) -> str:
+    if not S:
+        return ''
+    V = variants()
+    o = np.array([s['obs'] for s in S])
+    X = np.array([s['v'] for s in S])
+    rs = []
+    for k, v in enumerate(V):
+        p = X[:, k]
+        if p.std() == 0:
+            continue
+        b, a = np.polyfit(p, o, 1)
+        pos, neg = (p >= 0.25, p <= -0.25)
+        rs.append((float(np.corrcoef(o, p)[0, 1]), v, float(a), float(b), float(np.sqrt(((o - p) ** 2).mean())), float((p - o).mean()), float(o[neg].mean()) if neg.any() else None, float(p[neg].mean()) if neg.any() else None))
+    rs.sort(key=lambda t: -t[0])
+    now = next((t for t in rs if t[1] == V[0]))
+    fmt = lambda v: ', '.join((f'{k} {x:.2f}' for k, x in v.items()))
+    md = ['', "## The layer's settings swept", '', f"{len(S)} pieces; {len(V)} combinations of {', '.join((f'{k} {SWEEP[k]}' for k in SWEEP))} (lee: the share of the lee sink kept). The layer now: " + fmt(V[0]) + f', r {now[0]:.3f}.', '', '| r | settings | fit (netto = a + b x) | rmse | bias | where it says sink (≤ −0.25): netto / it |', '|---|---|---|---|---|---|']
+    for t in rs[:12] + ([now] if now not in rs[:12] else []):
+        md.append(f'| {t[0]:.3f} | {fmt(t[1])} | {t[2]:+.2f} + {t[3]:.2f}x | {t[4]:.2f} | {t[5]:+.2f} | ' + ('-' if t[6] is None else f'{t[6]:+.2f} / {t[7]:+.2f}') + ' |')
+    md += ['', "Each setting's best r over the others:", '']
+    for k in SWEEP:
+        md.append(f'- {k}: ' + ', '.join((f'{x:g} → {max((t[0] for t in rs if t[1][k] == x)):.3f}' for x in SWEEP[k])))
+    return '\n'.join(md) + '\n'
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
@@ -241,9 +315,15 @@ def main(argv=None):
     r.add_argument('--out', required=True)
     r.add_argument('--budget', type=float, default=240)
     r.add_argument('--cache', default=None)
+    w = sub.add_parser('sweep')
+    w.add_argument('--data', required=True)
+    w.add_argument('--grids', required=True)
+    w.add_argument('--out', required=True)
+    w.add_argument('--budget', type=float, default=240)
+    w.add_argument('--cache', default=None)
     p = sub.add_parser('report')
     p.add_argument('--out', required=True)
     a = ap.parse_args(argv)
-    (run if a.cmd == 'run' else report)(a)
+    {'run': run, 'sweep': sweep, 'report': report}[a.cmd](a)
 if __name__ == '__main__':
     main()

@@ -268,14 +268,15 @@ class Domain:
         R = np.asarray(u)[..., None] * F(E) + np.asarray(v)[..., None] * F(N)
         return (R[:, 0], R[:, 1], R[:, 2])
 
-    def layer(self, x, y, agl, u, v, n=None):
+    def layer(self, x, y, agl, u, v, n=None, lean=None, spread=None, shape=None, decay=None, lee=1.0):
         x, y, agl = (np.atleast_1d(x).astype(np.float64), np.atleast_1d(y).astype(np.float64), np.atleast_1d(agl).astype(np.float64))
         u, v = (np.broadcast_to(np.asarray(u, np.float64), x.shape), np.broadcast_to(np.asarray(v, np.float64), x.shape))
         sp = np.maximum(np.hypot(u, v), 1e-06)
         ux, uy = (u / sp, v / sp)
         h = np.maximum(agl, 0)
-        bx, by = (x + ux * h * RIDGE_LEAN, y + uy * h * RIDGE_LEAN)
-        d = RIDGE_SPREAD * h
+        lean = RIDGE_LEAN if lean is None else lean
+        bx, by = (x + ux * h * lean, y + uy * h * lean)
+        d = (RIDGE_SPREAD if spread is None else spread) * h
         G = lambda F: np.nanmean([_bilinear(F, self.x0, self.y0, self.res, bx + ox * d * ux - oy * d * uy, by + ox * d * uy + oy * d * ux) for ox, oy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))], axis=0)
         gx, gy = (G(self.gx), G(self.gy))
         relief = _bilinear(self.relief, self.x0, self.y0, self.res, bx, by)
@@ -290,8 +291,9 @@ class Domain:
             nn = np.broadcast_to(np.asarray(n, np.float64), x.shape)
             blk = (nn > 0) & (relief > 0) & (s > 0) & up
             open_ = np.where(blk, np.clip(w0 / np.maximum(s, 1e-09) / np.maximum(nn * relief, 1e-09), BLOCK_MIN, 1), 1.0)
-        L = SHAPE * np.maximum(relief, 0.001) * open_ / np.maximum(s * k, 1e-06)
-        out = w0 * k * fr / (1 + h / L) ** DECAY
+        L = (SHAPE if shape is None else shape) * np.maximum(relief, 0.001) * open_ / np.maximum(s * k, 1e-06)
+        out = w0 * k * fr / (1 + h / L) ** (DECAY if decay is None else decay)
+        out = np.where(out < 0, out * lee, out)
         return np.where(np.isfinite(out) & (s > 0), out, np.nan)
 
 def main(argv=None):
