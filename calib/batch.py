@@ -82,6 +82,12 @@ def plan(a) -> int:
             for k in ('redo_tries', 'lv_tries', 'rs_tries'):
                 x.pop(k, None)
         state['tries_reset_lost'] = 1
+    if not state.get('refused_empty_recheck'):
+        back = [d for d, x in state['done'].items() if x.get('status') == 'empty' and x.get('src') == 'new' and (not (state.get('daylists') or {}).get(d))]
+        for d in back:
+            del state['done'][d]
+        common.log(f'{len(back)} empty days to be chosen again (a refused list read as empty)')
+        state['refused_empty_recheck'] = 1
     aircraft = common.load_aircraft()
     ac = common.aircraft_version(aircraft)
     today = _today()

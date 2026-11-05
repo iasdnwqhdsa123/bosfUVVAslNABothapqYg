@@ -59,6 +59,9 @@ class Client:
                 if e.code == 404:
                     self.fails = 0
                     return None
+                if e.code in (401, 403):
+                    self.stopped = f'http {e.code}'
+                    raise Stop(self.stopped)
                 if e.code == 429 or e.code >= 500:
                     self.fails += 1
                     if self.fails >= MAX_FAILS:
