@@ -1,0 +1,171 @@
+name: Verify move
+on:
+  push:
+    branches: [main]
+    paths: ["calib/verifymove.request"]
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "Carry the state over, or compare the two"
+        type: choice
+        options: [carry, compare]
+        default: compare
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: calib-verify
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      what: ${{ steps.what.outputs.what }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - id: what
+        env:
+          IN_WHAT: ${{ inputs.what }}
+        run: |
+          what="${IN_WHAT:-compare}"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -f calib/verifymove.request ]; then
+            what="$(python3 -c 'import json; print(json.load(open("calib/verifymove.request")).get("what", ""))' 2> /dev/null || true)"
+          fi
+          case "$what" in carry|compare) ;; *) echo "::error::unknown request: $what"; exit 1;; esac
+          echo "what: $what"
+          echo "what=$what" >> "$GITHUB_OUTPUT"
+  carry:
+    needs: plan
+    if: needs.plan.outputs.what == 'carry'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        key: [obs, hrrr, gfs, ecmwf-0, ecmwf-1, icon, icond2]
+    env:
+      KEY: ${{ matrix.key }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      VERIFY_CARRY_KEY: ${{ secrets.VERIFY_CARRY_KEY }}
+      VERIFY_READ_TOKEN: ${{ secrets.VERIFY_READ_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /calib/
+            /pipeline/verify.py
+            /pipeline/check.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -q "numpy>=1.26"
+      - name: Carry ${{ matrix.key }} over
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          src="$(python3 calib/verifyjob.py source)" || { echo "::error::the forecast repo wasn't found"; exit 1; }
+          echo "::add-mask::$src"
+          mkdir -p /tmp/counts
+          python3 calib/verifyjob.py carry --repo "$src" --key "$KEY" --work /tmp/v --out /tmp/out --counts "/tmp/counts/$KEY.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verify-carry-counts-${{ matrix.key }}
+          path: /tmp/counts/${{ matrix.key }}.json
+          retention-days: 1
+          if-no-files-found: ignore
+      - id: up
+        uses: actions/upload-artifact@v7
+        with:
+          name: calib-verify-${{ matrix.key }}
+          path: /tmp/out/calib-verify-${{ matrix.key }}.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: ignore
+      - if: steps.up.outputs.artifact-id != ''
+        continue-on-error: true
+        run: python3 calib/verifyjob.py prune "calib-verify-$KEY" --keep 3
+  carry_report:
+    needs: [plan, carry]
+    if: always() && needs.plan.outputs.what == 'carry'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: verify-carry-counts-*
+          path: /tmp/in
+          merge-multiple: true
+      - name: Report
+        run: |
+          mkdir -p /tmp/in /tmp/out
+          python3 calib/verifyjob.py carry-report /tmp/in /tmp/report
+          cp /tmp/in/*.json /tmp/report/ 2> /dev/null || true
+          echo "carry" > /tmp/report/what
+          python3 calib/state.py pack /tmp/report /tmp/out/calib-verify-report.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-verify-report
+          path: /tmp/out/calib-verify-report.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+  compare:
+    needs: plan
+    if: needs.plan.outputs.what == 'compare'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      VERIFY_CARRY_KEY: ${{ secrets.VERIFY_CARRY_KEY }}
+      VERIFY_READ_TOKEN: ${{ secrets.VERIFY_READ_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - run: pip install -q -r pipeline/requirements.txt
+      - name: Fetch both
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          src="$(python3 calib/verifyjob.py source)" || { echo "::error::the forecast repo wasn't found"; exit 1; }
+          echo "::add-mask::$src"
+          for k in obs hrrr gfs ecmwf-0 ecmwf-1 icon icond2; do
+            python3 calib/state.py fetch "calib-verify-$k" "/tmp/new/$k" 2> /dev/null || echo "calib-verify-$k: none here"
+            if [ -n "$VERIFY_CARRY_KEY" ]; then
+              python3 calib/verifyjob.py old "$src" "verify-$k" "/tmp/old/$k" || echo "verify-$k: none there"
+            fi
+          done
+          python3 calib/verifyjob.py old "$src" scores /tmp/old-scores || echo "scores: none there"
+          python3 calib/state.py fetch calib-verify-scores /tmp/new-scores 2> /dev/null || echo "scores: none here"
+      - name: Compare
+        run: |
+          mkdir -p /tmp/out
+          python3 calib/verifyjob.py compare --old /tmp/old --new /tmp/new --old-scores /tmp/old-scores/scores.json \
+            --new-scores /tmp/new-scores/scores.json --out /tmp/report
+          echo "compare" > /tmp/report/what
+          python3 calib/state.py pack /tmp/report /tmp/out/calib-verify-report.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-verify-report
+          path: /tmp/out/calib-verify-report.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error

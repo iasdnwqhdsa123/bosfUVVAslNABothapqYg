@@ -43,6 +43,7 @@ env:
   CALIB_EU_SHARE: "0.4"
   CALIB_EU_FIRST: "120"
   CALIB_EU_ICON_SHARE: "0.25"
+  CONTRAILS: "0"
 jobs:
   gate:
     runs-on: ubuntu-24.04

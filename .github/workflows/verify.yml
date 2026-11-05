@@ -1,0 +1,188 @@
+name: Verify
+on:
+  schedule:
+    - cron: "55 6,18 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: calib-verify
+  cancel-in-progress: false
+env:
+  WAIT_MINUTES: "100"
+  KEEP: "3"
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      go: ${{ steps.when.outputs.go }}
+      deadline: ${{ steps.when.outputs.deadline }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /calib/
+            /pipeline/check.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Between forecast runs?
+        id: when
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 calib/verifyjob.py gate --wait "$WAIT_MINUTES" >> "$GITHUB_OUTPUT"
+      - name: Keep the schedule on
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF: ${{ github.workflow_ref }}
+        run: |
+          self="${SELF#*/.github/workflows/}"; self="${self%%@*}"
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$self/enable" && echo "kept on"
+  obs:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      KEY: obs
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - run: pip install -q -r pipeline/requirements.txt
+      - name: Restore
+        id: restore
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          set +e
+          python3 calib/state.py fetch "calib-verify-$KEY" state 2> /tmp/fetch.err
+          rc=$?
+          set -e
+          if [ "$rc" = 3 ]; then echo "calib-verify-$KEY: none yet"; mkdir -p state
+          elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::calib-verify-$KEY didn't download (exit $rc)"; exit 1; fi
+          python3 calib/verifyjob.py check state "$KEY"
+      - name: Reports
+        continue-on-error: true
+        run: cd pipeline && python verify.py obs --state ../state --deadline "${{ needs.gate.outputs.deadline }}"
+      - name: Pack
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          python3 calib/verifyjob.py check state "$KEY"
+          mkdir -p /tmp/verify-out
+          python3 calib/state.py pack state "/tmp/verify-out/calib-verify-$KEY.enc"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.restore.outcome == 'success'
+        with:
+          name: calib-verify-${{ env.KEY }}
+          path: /tmp/verify-out/calib-verify-${{ env.KEY }}.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+      - if: always() && steps.restore.outcome == 'success'
+        continue-on-error: true
+        run: python3 calib/verifyjob.py prune "calib-verify-$KEY" --keep "$KEEP"
+  sample:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { model: hrrr, key: hrrr, part: "" }
+          - { model: gfs, key: gfs, part: "" }
+          - { model: ecmwf, key: ecmwf-0, part: "0/2" }
+          - { model: ecmwf, key: ecmwf-1, part: "1/2" }
+          - { model: icon, key: icon, part: "" }
+          - { model: icond2, key: icond2, part: "" }
+    env:
+      KEY: ${{ matrix.key }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - run: pip install -q -r pipeline/requirements.txt
+      - name: Restore
+        id: restore
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          set +e
+          python3 calib/state.py fetch "calib-verify-$KEY" state 2> /tmp/fetch.err
+          rc=$?
+          set -e
+          if [ "$rc" = 3 ]; then echo "calib-verify-$KEY: none yet"; mkdir -p state
+          elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::calib-verify-$KEY didn't download (exit $rc)"; exit 1; fi
+          python3 calib/verifyjob.py check state "$KEY"
+      - name: Rebuild and sample ${{ matrix.model }}'s runs
+        continue-on-error: true
+        run: cd pipeline && python verify.py sample --model "${{ matrix.model }}" --state ../state --deadline "${{ needs.gate.outputs.deadline }}" ${{ matrix.part && format('--part {0}', matrix.part) || '' }}
+      - name: Pack
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          python3 calib/verifyjob.py check state "$KEY"
+          mkdir -p /tmp/verify-out
+          python3 calib/state.py pack state "/tmp/verify-out/calib-verify-$KEY.enc"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.restore.outcome == 'success'
+        with:
+          name: calib-verify-${{ env.KEY }}
+          path: /tmp/verify-out/calib-verify-${{ env.KEY }}.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+      - if: always() && steps.restore.outcome == 'success'
+        continue-on-error: true
+        run: python3 calib/verifyjob.py prune "calib-verify-$KEY" --keep "$KEEP"
+  score:
+    needs: [gate, obs, sample]
+    if: always() && needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - run: pip install -q -r pipeline/requirements.txt
+      - name: Restore
+        run: |
+          for k in obs hrrr gfs ecmwf-0 ecmwf-1 icon icond2; do
+            python3 calib/state.py fetch "calib-verify-$k" "s/$k" 2> /dev/null || { echo "calib-verify-$k: none"; mkdir -p "s/$k"; }
+          done
+      - name: Score
+        run: |
+          mkdir -p /tmp/scores
+          cd pipeline && python verify.py score --samples ../s/hrrr ../s/gfs ../s/ecmwf-0 ../s/ecmwf-1 ../s/icon ../s/icond2 --obs ../s/obs --out /tmp/scores/scores.json
+      - name: Pack
+        run: |
+          mkdir -p /tmp/verify-out
+          python3 calib/state.py pack /tmp/scores /tmp/verify-out/calib-verify-scores.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-verify-scores
+          path: /tmp/verify-out/calib-verify-scores.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+      - continue-on-error: true
+        run: python3 calib/verifyjob.py prune calib-verify-scores --keep "$KEEP"
