@@ -22,6 +22,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
       - run: pip install -q -r pipeline/requirements.txt
       - name: Restore the data and the grids
         run: |
