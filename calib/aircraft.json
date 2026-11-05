@@ -2647,6 +2647,508 @@
 "TST-3 Alpin T": null,
 "Archaeopteryx": null,
 "Swift-Light E": null,
-"Swift 3 Electric": null
+"Swift 3 Electric": null,
+"ASK 18": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"ASW 20-J 16.6m": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"ASW 22 B": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASW 22E 24m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"ASW 28 B": {
+"key": "asw28",
+"exact": true,
+"cls": "standard",
+"grp": "high"
+},
+"Bergfalke II": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Bergfalke III": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Bergfalke IV": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Caudron C.800": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"DG 1000E neo 18m": {
+"key": "dg1000",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 1000M 18m": {
+"key": "dg1000",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 1000M neo 20m": {
+"key": "dg1000",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 1000T 18m": {
+"key": "dg1000",
+"exact": true,
+"cls": "twoseat",
+"grp": "high"
+},
+"DG 300G WL": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Diamant 16.5": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Diana 3": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Diana 4 ER": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Dimona": null,
+"Discus 2c DLR 18m": {
+"key": "discus2c",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"Discus bM": {
+"key": "discus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Discus bM WL": {
+"key": "discus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"EB 29D": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"Elfe 17m": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Elfe S4": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"fs 33": {
+"key": "duo",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"G 102 Astir CS Top": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"G 104 Speed Astir 2": {
+"key": "ls6",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"G 109": null,
+"Gö-1": {
+"key": "trainer",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Gö-4": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Hornet C": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"Janus CT FG": {
+"key": "duo",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"Janus CT RG": {
+"key": "duo",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"Ka 2": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Ka 2 b": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Kestrel 19m": {
+"key": "ventus2c",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"Kranich 2": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Kranich 3": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"L-13SE Vivat": null,
+"LAK-17A 15m": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LAK-17B T 15m": {
+"key": "asw27",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LAK-17B T 21m": {
+"key": "js1_21",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"LAK-20M 23m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"LAK-20T 23m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"LAK-20T 26m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"LF-109 Pionýr": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"LS 11": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"LS 3 neo": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"LS 3 Std": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"LS 8 Jet": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"LS 8 Jet neo": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"LS 8e 18m": {
+"key": "ls8_18",
+"exact": true,
+"cls": "18m",
+"grp": "high"
+},
+"LS 8T neo": {
+"key": "ls8_18",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"Moswey III": {
+"key": "trainer",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Nimbus 3D 24.6m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "twoseat",
+"grp": "high"
+},
+"Nimbus 3T 24.5m": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"NimEta X": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"Olympia Meise": {
+"key": "trainer",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Rubik R-11b Cimbora": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Schweizer SGS 1-21": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Schweizer SGS 1-23D": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SF 27 B": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SF 34 FG": {
+"key": "g103",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"Slingsby T.31 Tandem Tutor": {
+"key": "trainer",
+"exact": false,
+"cls": "twoseat",
+"grp": "vlow"
+},
+"Slingsby T.59D Kestrel 19m": {
+"key": "ventus2c",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"Slingsby T.65 Vega": {
+"key": "asw20",
+"exact": false,
+"cls": "15m",
+"grp": "high"
+},
+"Spatz 13m": {
+"key": "trainer",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Std. Austria": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Std. Cirrus 16m": {
+"key": "stdcirrus",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-12 Mucha 100": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SZD-22-Mucha Std.": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SZD-24 Foka 4": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SZD-32 Foka 5": {
+"key": "astir",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"SZD-38 Jantar 1": {
+"key": "ls6",
+"exact": false,
+"cls": "18m",
+"grp": "high"
+},
+"SZD-41 Jantar Std. T": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-41 Jantar Std. WL": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-42 Jantar 2": {
+"key": "nimbus4",
+"exact": false,
+"cls": "open",
+"grp": "high"
+},
+"SZD-48 Jantar Std. 2 WL": {
+"key": "ls4",
+"exact": false,
+"cls": "club",
+"grp": "high"
+},
+"SZD-52 Krokus": {
+"key": "ask21",
+"exact": false,
+"cls": "twoseat",
+"grp": "low"
+},
+"TST-10 Atlas M": null,
+"VT-16 Orlik": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Wassmer WA-26": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Wassmer WA-28": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Weihe 50": {
+"key": "trainer",
+"exact": false,
+"cls": "club",
+"grp": "vlow"
+},
+"Z-125 Šohaj 2": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Z-425 Šohaj 3": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+},
+"Zugvogel IIIa": {
+"key": "sgs126",
+"exact": false,
+"cls": "club",
+"grp": "low"
+}
 }
 }
