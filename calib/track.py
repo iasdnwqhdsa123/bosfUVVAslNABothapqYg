@@ -7,6 +7,13 @@ CIRC_DEG, CIRC_WIN, CIRC_GAP = (220.0, 30.0, 25.0)
 CLIMB_GAIN, CLIMB_DUR, CLIMB_TURN = (150.0, 60.0, 270.0)
 ENGINE_ON = 500.0
 ENGINE_SHARE = 0.2
+MOTOR_KINDS = ('MG', 'FG')
+GUESS_RATE, GUESS_WIN, GUESS_S, GUESS_VG, GUESS_SPREAD = (0.7, 10.0, 90.0, 20.0, 0.5)
+GUESS_TURN, GUESS_TURN_S, GUESS_GAP, GUESS_PAD = (90.0, 60.0, 10.0, 30.0)
+ENGINE_GUESS = 999.0
+LAUNCH_S = 300.0
+FES_SHARE, FES_MAX, FES_OVER, FES_RUN_S = (0.3, 300.0, 3.0, 30.0)
+ENGINE_LEG_S = 60.0
 SIMPLIFY_KM, MIN_PIECE_KM = (1.0, 5.0)
 TRACK_S = 20
 
@@ -48,20 +55,118 @@ def fixes(data: dict) -> list[dict]:
         out.append({'t': lerp(t), 'z': lerp(z), 'g': lerp(gz) if len(gz) == m else None, 'e': lerp(eng) if eng and len(eng) == m else None, 'p': coords[k][:2]})
     return [f for f in out if f['t'] is not None and f['z'] is not None]
 
-def climbs(fx: list[dict], legs: list[dict]) -> list[dict]:
-    if len(fx) < 10:
-        return []
+def _turns(fx: list[dict]) -> list[float]:
     turn = [0.0] * len(fx)
-    last_h, last_p = (None, fx[0]['p'])
+    last_h, last_p = (None, fx[0]['p'] if fx else None)
     for i in range(1, len(fx)):
         p = fx[i]['p']
         if dist_km(last_p, p) < 0.015:
             continue
         h = bearing(last_p, p)
         if last_h is not None:
-            d = (h - last_h + 540) % 360 - 180
-            turn[i] = d
+            turn[i] = (h - last_h + 540) % 360 - 180
         last_h, last_p = (h, p)
+    return turn
+
+def motor(kind) -> dict:
+    return {'mg': None if kind is None else kind in MOTOR_KINDS, 'fes': None if kind is None else kind == 'FG'}
+
+def engine_guess(fx: list[dict]) -> int:
+    n = len(fx)
+    if n < 10:
+        return 0
+    t = [f['t'] for f in fx]
+    turn = _turns(fx)
+    acc = [0.0]
+    for x in turn:
+        acc.append(acc[-1] + x)
+    vz, vg, net = ([None] * n, [None] * n, [0.0] * n)
+    a = b = a2 = b2 = 0
+    for i in range(n):
+        while t[a] < t[i] - GUESS_WIN / 2:
+            a += 1
+        while b + 1 < n and t[b + 1] <= t[i] + GUESS_WIN / 2:
+            b += 1
+        if t[b] > t[a]:
+            vz[i] = (fx[b]['z'] - fx[a]['z']) / (t[b] - t[a])
+            vg[i] = dist_km(fx[a]['p'], fx[b]['p']) * 1000 / (t[b] - t[a])
+        while t[a2] < t[i] - GUESS_TURN_S / 2:
+            a2 += 1
+        while b2 + 1 < n and t[b2 + 1] <= t[i] + GUESS_TURN_S / 2:
+            b2 += 1
+        net[i] = abs(acc[b2 + 1] - acc[a2 + 1])
+    up = [vz[i] is not None and vz[i] >= GUESS_RATE and (vg[i] >= GUESS_VG) and (net[i] < GUESS_TURN) for i in range(n)]
+    runs, i = ([], 0)
+    while i < n:
+        if not up[i]:
+            i += 1
+            continue
+        j = i
+        while True:
+            k = j + 1
+            while k < n and (not up[k]) and (t[k] - t[j] < GUESS_GAP):
+                k += 1
+            if k < n and up[k] and (t[k] - t[j] < GUESS_GAP):
+                j = k
+            else:
+                break
+        rs = [vz[k] for k in range(i, j + 1) if vz[k] is not None]
+        m = sum(rs) / len(rs)
+        if t[j] - t[i] >= GUESS_S and math.sqrt(sum(((r - m) ** 2 for r in rs)) / len(rs)) < GUESS_SPREAD:
+            runs.append((i, j))
+        i = j + 1
+    if not runs:
+        return 0
+    roll = next((t[i] for i in range(n) if vg[i] is not None and vg[i] >= GUESS_VG), t[0])
+    on = [False] * n
+    for i, j in runs:
+        if t[i] - roll < LAUNCH_S:
+            top = max(range(i, j + 1), key=lambda k: fx[k]['z'])
+            for k in range(top):
+                on[k] = True
+        else:
+            for k in range(n):
+                if t[i] - GUESS_PAD <= t[k] <= t[j] + GUESS_PAD:
+                    on[k] = True
+    for f, o in zip(fx, on):
+        f['e'] = ENGINE_GUESS if o else 0.0
+    return len(runs)
+
+def fes_on(fx: list[dict]) -> int:
+    es = sorted((f['e'] for f in fx if f['e'] is not None))
+    if not es or es[-1] < FES_MAX or es[-1] < FES_OVER * es[len(es) // 2]:
+        return 0
+    lim = FES_SHARE * es[-1]
+    runs, i = (0, 0)
+    while i < len(fx):
+        if fx[i]['e'] is None or fx[i]['e'] <= lim:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(fx) and fx[j + 1]['e'] is not None and (fx[j + 1]['e'] > lim):
+            j += 1
+        if fx[j]['t'] - fx[i]['t'] >= FES_RUN_S:
+            runs += 1
+            for k in range(i, j + 1):
+                fx[k]['e'] = max(fx[k]['e'], ENGINE_GUESS)
+        i = j + 1
+    return runs
+
+def mark_engine(fx: list[dict], mg, fes) -> None:
+    if not mg:
+        return
+    if not any((f['e'] is not None for f in fx)):
+        engine_guess(fx)
+    elif fes:
+        fes_on(fx)
+
+def engine_s(fx: list[dict], t0: float, t1: float) -> float:
+    return sum((b['t'] - a['t'] for a, b in zip(fx, fx[1:]) if t0 <= a['t'] < t1 and a['e'] is not None and (a['e'] > ENGINE_ON)))
+
+def climbs(fx: list[dict], legs: list[dict]) -> list[dict]:
+    if len(fx) < 10:
+        return []
+    turn = _turns(fx)
     circ = [False] * len(fx)
     j, s = (0, 0.0)
     for i in range(len(fx)):
@@ -207,21 +312,27 @@ def climbs_line(leg: dict, tops: list[dict]) -> list | None:
 def flight_from(item: dict, detail: dict, data: dict) -> dict:
     legs = free_legs(detail)
     fx = fixes(data)
+    es = [f['e'] for f in fx if f['e'] is not None]
+    mo = motor((detail.get('aircraft') or {}).get('kind'))
+    mark_engine(fx, mo['mg'], mo['fes'])
     cl = climbs(fx, [{'n': L['leg'], 't0': L['tstart'], 't1': L['tend']} for L in legs])
     for L in legs:
         L['line'] = leg_line(fx, L)
         L['line_src'] = 'track'
+        L['engine'] = engine_s(fx, ts(L['tstart']), ts(L['tend'])) >= ENGINE_LEG_S
+        if L['engine']:
+            L['ok'] = False
     tp = (detail.get('takeoff_point') or {}).get('coordinates') or (fx[0]['p'] if fx else None)
-    es = [f['e'] for f in fx if f['e'] is not None]
+    marked = any((f['e'] is not None for f in fx))
     thin, last = ([], -1000000000.0)
     for f in fx:
         if f['t'] - last >= TRACK_S:
             p = [round(f['t']), round(f['p'][0], 5), round(f['p'][1], 5), round(f['z']), None if f['g'] is None else round(f['g'])]
-            if es:
+            if marked:
                 p.append(None if f['e'] is None else round(f['e']))
             thin.append(p)
             last = f['t']
-    return {'legs': legs, 'climbs': cl, 'tp': tp, 'track': thin, 'zmax': max((f['z'] for f in fx), default=None), 'engine_max': max(es) if es else None, 'engine_med': sorted(es)[len(es) // 2] if es else None}
+    return {'legs': legs, 'climbs': cl, 'tp': tp, 'track': thin, 'zmax': max((f['z'] for f in fx), default=None), 'engine_max': max(es) if es else None, 'engine_med': sorted(es)[len(es) // 2] if es else None, **mo, 'sensor': bool(es)}
 HOME_KM = 3.0
 AFTER_TAKEOFF_S = 20 * 60
 WEAK_RATE = 0.5
@@ -363,10 +474,11 @@ def probes(f: dict) -> list[dict]:
 SHORT_CLIMB_S = 120
 RELEASE_UP, RELEASE_DROP, RELEASE_S = (100.0, 20.0, 60.0)
 
-def short_summary(data: dict) -> dict | None:
+def short_summary(data: dict, mg=None, fes=None) -> dict | None:
     fx = fixes(data)
     if len(fx) < 10:
         return None
+    mark_engine(fx, mg, fes)
     z0 = fx[0]['z']
     rel = None
     for i, f in enumerate(fx):

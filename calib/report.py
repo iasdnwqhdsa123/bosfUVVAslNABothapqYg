@@ -64,6 +64,8 @@ def fails(r) -> list[str]:
         out.append('final glide losing > 500 m')
     if ca > 0 and t and (abs((r.get('dh') or 0) / ca) / t >= 0.3):
         out.append('≥ 30 % height correction')
+    if r.get('engine'):
+        out.append('engine on')
     return out
 
 def table(title, groups, cols) -> list[str]:

@@ -52,7 +52,7 @@ def tables(days: list[dict], model: str | None=None, srcs: set | None=None, pilo
             for L in f['legs']:
                 m = mleg(L, m_, corrected)
                 own, rt = (m.get('own') or {}, m.get('route') or {})
-                row = {**base, 'leg': L.get('leg'), 'ok': L.get('ok'), 'cat': L.get('cat'), 'dist': L.get('dist'), 't': L.get('t'), 'ca': L.get('ca'), 'dh': L.get('dh'), 'therm': L.get('therm'), 'vg': L.get('vg'), 'vair': L.get('vair'), 'agl': L.get('agl'), 'alt': L.get('alt'), 'speed': L.get('speed'), 'wind_wg': L.get('wind'), 'tcount': L.get('tcount'), 'line_src': L.get('line_src'), 'paired': bool(own), 'last': L is f['legs'][-1]}
+                row = {**base, 'leg': L.get('leg'), 'ok': L.get('ok'), 'cat': L.get('cat'), 'dist': L.get('dist'), 't': L.get('t'), 'ca': L.get('ca'), 'dh': L.get('dh'), 'therm': L.get('therm'), 'vg': L.get('vg'), 'vair': L.get('vair'), 'agl': L.get('agl'), 'alt': L.get('alt'), 'speed': L.get('speed'), 'wind_wg': L.get('wind'), 'tcount': L.get('tcount'), 'line_src': L.get('line_src'), 'engine': L.get('engine'), 'paired': bool(own), 'last': L is f['legs'][-1]}
                 row.update({'m_' + k: own.get(k) for k in MODEL_KEYS})
                 row.update({'r_' + k: rt.get(k) for k in ROUTE_KEYS})
                 legs.append(row)

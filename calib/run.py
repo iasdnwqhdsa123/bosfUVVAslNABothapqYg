@@ -51,7 +51,7 @@ def _short_tracks(client, d: str, shorts: list[dict], long: list[dict]) -> None:
     for c in order[:weglide.SHORT_TRACKS_PER_DAY]:
         dat = client.data(c['id'])
         try:
-            sm = track.short_summary(dat) if dat else None
+            sm = track.short_summary(dat, c.get('mg'), c.get('fes')) if dat else None
         except Exception as e:
             common.note(f"{d}: short flight {c['id']} unreadable: {e!r}")
             sm = None
@@ -111,7 +111,7 @@ def _fetch_chosen(client, d: str, chosen: list[dict], state: dict) -> tuple[list
             continue
         free = next((x for x in det.get('contest') or [] if x.get('name') == 'free'), {})
         ws = free.get('score') or {}
-        rec = {**c, 'src': 'weglide', 'tp': t['tp'], 'zmax': t['zmax'], 'engine_max': t['engine_max'], 'engine_med': t['engine_med'], 'free_km': free.get('distance'), 'free_kmh': free.get('speed'), 'thermal_avg': ws.get('thermal_avg'), 'thermal_pct': ws.get('thermal_percentage'), 'glide_ratio': ws.get('glide_ratio'), 'agl_avg': ws.get('agl_avg'), 'wind_kmh': ws.get('wind_speed'), 'wind_dir': ws.get('wind_direction'), 'legs': t['legs'], 'climbs': t['climbs'], 'track': t['track']}
+        rec = {**c, 'src': 'weglide', 'tp': t['tp'], 'zmax': t['zmax'], 'engine_max': t['engine_max'], 'engine_med': t['engine_med'], 'mg': t['mg'], 'fes': t['fes'], 'sensor': t['sensor'], 'free_km': free.get('distance'), 'free_kmh': free.get('speed'), 'thermal_avg': ws.get('thermal_avg'), 'thermal_pct': ws.get('thermal_percentage'), 'glide_ratio': ws.get('glide_ratio'), 'agl_avg': ws.get('agl_avg'), 'wind_kmh': ws.get('wind_speed'), 'wind_dir': ws.get('wind_direction'), 'legs': t['legs'], 'climbs': t['climbs'], 'track': t['track']}
         out.append(rec)
     return (out, False)
 

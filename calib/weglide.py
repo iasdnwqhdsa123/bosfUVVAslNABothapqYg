@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 import common
+import track
 API = 'https://api.weglide.org/v1'
 UA = 'Mozilla/5.0 (X11; Linux x86_64) research-script/1.0'
 GAP = 2.5
@@ -195,7 +196,7 @@ def pilot_of(item: dict) -> str | None:
 def slim(item: dict) -> dict:
     ap = item.get('takeoff_airport') or {}
     con = item.get('contest') or {}
-    return {'id': item.get('id'), 'scoring_date': item.get('scoring_date'), 'takeoff_time': item.get('takeoff_time'), 'landing_time': item.get('landing_time'), 'bbox': item.get('bbox'), 'dmst_index': item.get('dmst_index'), 'takeoff_airport': {'region': ap.get('region'), 'timezone': ap.get('timezone')}, 'aircraft': {'name': (item.get('aircraft') or {}).get('name')}, 'contest': {'distance': con.get('distance'), 'speed': con.get('speed')}, 'pilot': pilot_of(item)}
+    return {'id': item.get('id'), 'scoring_date': item.get('scoring_date'), 'takeoff_time': item.get('takeoff_time'), 'landing_time': item.get('landing_time'), 'bbox': item.get('bbox'), 'dmst_index': item.get('dmst_index'), 'takeoff_airport': {'region': ap.get('region'), 'timezone': ap.get('timezone')}, 'aircraft': {'name': (item.get('aircraft') or {}).get('name'), 'kind': (item.get('aircraft') or {}).get('kind')}, 'contest': {'distance': con.get('distance'), 'speed': con.get('speed')}, 'pilot': pilot_of(item)}
 
 def choose(day: str, items: list, aircraft: dict, counts: dict, unmapped: dict, seen: set, taken=(), room: int=MAX_PER_DAY, macro: str='US') -> list:
     buckets = {}
@@ -251,7 +252,7 @@ def short_candidate(item: dict, aircraft: dict, macro: str='US') -> dict | None:
     st, from_ap = w
     tp = [round((bbox[0] + bbox[2]) / 2, 5), round((bbox[1] + bbox[3]) / 2, 5)]
     s0, s1 = (solar_hour(item.get('takeoff_time'), tp[0]), solar_hour(item.get('landing_time'), tp[0]))
-    return {'id': item['id'], 'kind': 'short', 'date': item.get('scoring_date'), 'state': st, 'state_from_airport': from_ap, 'region': _region(st, macro, item), 'tz': _tz(item.get('takeoff_airport') or {}, st, macro), 'ac': name, 'key': ac['key'], 'cls': ac['cls'], 'grp': ac['grp'], 'takeoff': item.get('takeoff_time'), 'landing': item.get('landing_time'), 'dur_h': round(h, 2), 'bbox': bbox, 'list_km': km, 'tp': tp, 'tp_src': 'bbox', 'solar0': s0, 'solar1': s1, 'afternoon': s0 is not None and s0 >= AFTERNOON_SOLAR, 'sled': h * 60 < SLED_MIN, 'pilot': pilot_of(item), 'src': 'weglide'}
+    return {'id': item['id'], 'kind': 'short', 'date': item.get('scoring_date'), 'state': st, 'state_from_airport': from_ap, 'region': _region(st, macro, item), 'tz': _tz(item.get('takeoff_airport') or {}, st, macro), 'ac': name, 'key': ac['key'], 'cls': ac['cls'], 'grp': ac['grp'], 'takeoff': item.get('takeoff_time'), 'landing': item.get('landing_time'), 'dur_h': round(h, 2), 'bbox': bbox, 'list_km': km, 'tp': tp, 'tp_src': 'bbox', 'solar0': s0, 'solar1': s1, 'afternoon': s0 is not None and s0 >= AFTERNOON_SOLAR, 'sled': h * 60 < SLED_MIN, 'pilot': pilot_of(item), 'src': 'weglide', **track.motor((item.get('aircraft') or {}).get('kind'))}
 
 def day_summary(day: str, items: list, aircraft: dict, macro: str='US', full: bool | None=None) -> dict:
     regs = {}
