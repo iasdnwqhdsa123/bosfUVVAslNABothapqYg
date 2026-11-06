@@ -1,0 +1,57 @@
+name: Wave collect
+on:
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: "Requests this run (one every 5 s)"
+        type: choice
+        options: ["1000", "300", "100", "20"]
+        default: "1000"
+      wind:
+        description: "Wave days: 700 hPa wind at least (m/s)"
+        type: choice
+        options: ["15", "18", "20", "12"]
+        default: "15"
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: calib-wave
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Restore
+        id: restore
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          set +e
+          python3 calib/state.py fetch calib-wave state 2> /tmp/fetch.err
+          rc=$?
+          set -e
+          if [ "$rc" = 3 ]; then echo "calib-wave: none yet"; mkdir -p state
+          elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::calib-wave didn't download (exit $rc)"; exit 1; fi
+      - name: Collect
+        run: python3 calib/wavecollect.py run state --requests "${{ inputs.requests }}" --wind "${{ inputs.wind }}" --gap 5
+      - name: Pack
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          mkdir -p /tmp/wave-out
+          python3 calib/state.py pack state /tmp/wave-out/calib-wave.enc
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.restore.outcome == 'success'
+        with:
+          name: calib-wave
+          path: /tmp/wave-out/calib-wave.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
