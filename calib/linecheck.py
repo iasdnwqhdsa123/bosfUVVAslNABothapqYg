@@ -33,7 +33,7 @@ STREET_S, FIX_GAP_S, STREET_KM_MIN, WAVE_PAD = (600.0, 60.0, 2.0, 500.0)
 ALONG_DEG = 30.0
 ST_BINS = (0.0, 0.3, 0.5, 0.7, 1.01)
 CALM = 4.0
-ROLL_FIELDS = ('wstar', 'zi', 'depth', 'u_blavg', 'v_blavg', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'dth_m200', 'twidth', 'blapse', 'cubase')
+ROLL_FIELDS = ('wstar', 'zi', 'depth', 'u_blavg', 'v_blavg', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'dth_m200', 'dth_m500', 'twidth', 'blapse', 'cubase')
 ROLL_FULL = ('u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'dth_m200')
 
 class Boxes:
