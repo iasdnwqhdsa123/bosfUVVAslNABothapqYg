@@ -460,12 +460,25 @@ def convective_rain(overdev, cudepth, refc, rain, showers=None, tcc=None, lcc=No
     if refc is None:
         return conv | (rain >= 6.0)
     return conv | (refc >= 45.0) | (refc >= 40.0) & (rain >= 2.5)
+RAIN_BOX_KM, RAIN_CV, RAIN_CV_FLOOR = (21.0, 0.8, 0.05)
 
-def showers_share(cprate, rain, overdev=None, cudepth=None, radar=None, cover=(None, None, None)):
+def rain_texture(rain, grid_step):
+    k = max(3, int(round(RAIN_BOX_KM / (grid_step * 111.2))) | 1)
+    ok = np.isfinite(rain)
+    r = np.where(ok, rain, 0.0).astype(np.float64)
+    n = np.maximum(sky.window_sum(ok.astype(np.float64), k), 1)
+    mean = sky.window_sum(r, k) / n
+    var = np.maximum(sky.window_sum(r * r, k) / n - mean * mean, 0)
+    return np.sqrt(var) / np.maximum(mean, RAIN_CV_FLOOR)
+
+def showers_share(cprate, rain, overdev=None, cudepth=None, radar=None, cover=(None, None, None), grid_step=None):
     if cprate is not None:
         share = np.clip(np.nan_to_num(cprate, nan=0) / np.maximum(rain, 1e-06), 0, 1)
     elif radar is not None:
-        share = convective_rain(overdev, cudepth, radar, rain, None, *cover).astype(np.float32)
+        conv = convective_rain(overdev, cudepth, radar, rain, None, *cover)
+        if grid_step is not None:
+            conv = conv | (rain_texture(rain, grid_step) >= RAIN_CV)
+        share = conv.astype(np.float32)
     else:
         return None
     return np.where(rain > 0.1, share, np.nan)
@@ -604,7 +617,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
         overdev = np.where(storm, np.maximum(overdev, 70), overdev)
     radar = refc if refc is None or s.get('refmax') is None else np.maximum(refc, np.nan_to_num(s['refmax'], nan=0))
     cover = (s.get('tcc'), s.get('lcc'), s.get('mcc'))
-    showers = showers_share(s.get('cprate'), rain, overdev, cudepth, radar, cover)
+    showers = showers_share(s.get('cprate'), rain, overdev, cudepth, radar, cover, grid_step)
     sun_now = sunshine(s.get('sw'), valid, lat2d, lon2d)
     ws_out = ws * rain_damp(rain, convective_rain(overdev, cudepth, refc, rain, showers, *cover, sun_now), ws)
     bs = P.bs_ratio(ws_out, np.hypot(ub, vb))
@@ -925,6 +938,23 @@ def _window_mean(src, run, fh, canon, now_vals, earlier):
     raise ValueError(kind)
 SUNLIT = {'sw', 'shf', 'rnsw'}
 
+def analysis_from_prev(src, run, fh, native, fetch=None):
+    prev = run - timedelta(hours=1)
+    if fh != 0 or not src.analysis_prev or prev.hour not in src.runs:
+        return native
+    keys = {c: src.surface[c] for c in src.analysis_prev if c in src.surface}
+    try:
+        got = (fetch or _fetch)(src, prev, 1, list(keys.values()))
+    except Exception as e:
+        log(f"  f000: the hour's {', '.join(keys)} from {prev:%HZ} f001 unavailable ({e})")
+        return native
+    for c, k in keys.items():
+        v = got.get(k)
+        if v is None:
+            continue
+        native[c] = ('win', v / 3600, 1) if src.windowed.get(c) == 'acc1h' else v
+    return native
+
 def resolve_windows(src, run, fh, native, earlier):
     for canon in src.windowed:
         if isinstance(native.get(canon), tuple):
@@ -1142,6 +1172,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
                 log(f'  f{fh:03d}: earlier step f{pfh:03d} unavailable ({e})')
                 cache[pfh] = {}
         return cache[pfh].get(key)
+    analysis_from_prev(src, run, fh, native)
     resolve_windows(src, run, fh, native, earlier)
     if src.zs_step0_only:
         if regrid_holder.get('zs') is None:
