@@ -21,7 +21,7 @@ FIELDS = ['wstar', 'depth', 'cubase', 'cudepth', 'twidth', 'blapse', 'zi', 'dens
 PAD_LON, PAD_LAT = (1.5, 1.2)
 BUILD_TIMEOUT, EVAL_TIMEOUT = (25 * 60, 15 * 60)
 GRID_FIELDS = os.environ.get('CALIB_GRID_FIELDS', 'all')
-SAVE_ALSO = ('elevation', 'conv', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'dth_m200')
+SAVE_ALSO = ('elevation', 'conv', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'dth_m200')
 GRID_HOURS = os.environ.get('CALIB_GRID_HOURS', 'all')
 
 def boxes(flights: list[dict]) -> list[dict]:

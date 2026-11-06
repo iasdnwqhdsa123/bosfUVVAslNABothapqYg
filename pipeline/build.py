@@ -2260,7 +2260,10 @@ def pick_run(src, needed, pin=None):
     if pin:
         run = datetime.strptime(pin, '%Y%m%d%H').replace(tzinfo=timezone.utc)
         fhs = [int((v - run).total_seconds() // 3600) for v in needed]
-        return (run, [f for f in fhs if 0 <= f <= src.last_fh(run) and src.builds(f)])
+        fhs = [f for f in fhs if 0 <= f <= src.last_fh(run) and src.builds(f)]
+        if not fhs and run < needed[0]:
+            fhs = [f for f in range(0, 49) if f <= src.last_fh(run) and src.builds(f)]
+        return (run, fhs)
     run, fhs = latest_complete_run(src, needed, log)
     if run is None:
         raise SystemExit(f'no complete {src.id} run found')
@@ -2276,6 +2279,7 @@ def main():
     ap.add_argument('--bbox', help='west,south,east,north override (testing)')
     ap.add_argument('--step', type=float)
     ap.add_argument('--max-hours', type=int, help='limit valid times (testing)')
+    ap.add_argument('--utc-hours', help='with --max-hours: the UTC hours taken (e.g. 12,13,14; 18,19,20 without)')
     ap.add_argument('--keep-runs', type=int, default=1)
     ap.add_argument('--tile', type=int)
     ap.add_argument('--force', action='store_true', help='publish again even if this run is already published')
@@ -2310,7 +2314,8 @@ def main():
     needed = needed_times(src, args.days)
     run, fhs = pick_run(src, needed, args.run)
     if args.max_hours:
-        mid = [f for f in fhs if (run + timedelta(hours=f)).hour in (18, 19, 20)] or fhs
+        hrs = tuple((int(x) for x in args.utc_hours.split(','))) if args.utc_hours else (18, 19, 20)
+        mid = [f for f in fhs if (run + timedelta(hours=f)).hour in hrs] or fhs
         fhs = sorted(set(mid[:args.max_hours]))
     log(f'{src.id}: run {run:%Y-%m-%d %HZ}, {len(fhs)} valid times')
     shard = None
