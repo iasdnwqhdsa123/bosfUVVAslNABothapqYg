@@ -16,7 +16,9 @@ SC_CELL_KM = 1.8
 SCORE_CODES, CLASS_CODE0 = (225, 225)
 COVER_MAX = 0.95
 FIELDS = ('cuclass', 'cusky', 'cucover', 'cuwide', 'cueff')
-INPUTS = ('wstar', 'cudepth', 'overdev', 'rain', 'refc', 'showers', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'vis', 'accas', 'depth', 'zi', 'cubase')
+CC_P = (1000, 950, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
+CC_NAMES = tuple((f'cc{p}' for p in CC_P))
+INPUTS = ('wstar', 'cudepth', 'overdev', 'rain', 'refc', 'showers', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'vis', 'accas', 'depth', 'zi', 'cubase') + CC_NAMES
 COVERS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh')
 
 def decode(code, lo, hi, transform):
@@ -74,14 +76,47 @@ def cu_score(w, d, od):
     s = np.where(w < CU_MIN_WS, w / CU_MIN_WS * 0.49, s)
     s = np.where(od >= 50, 4.5 + np.minimum(0.49, (od - 50) / 100), s)
     return np.where(np.isfinite(w) & np.isfinite(d) & np.isfinite(od), s, np.nan)
+DECK_FROM, DECK_BASE, DECK_MID, DECK_SAME = (15.0, 150.0, 200.0, 0.8)
 
-def sky_layers(low, mid, high, total, ceil, sun):
+def low_deck(cc):
+    cc = np.asarray(cc, float)
+    shape = cc.shape[1:]
+    fin = np.isfinite(cc)
+    started = np.zeros(shape, bool)
+    done = np.zeros(shape, bool)
+    seen = np.zeros(shape, bool)
+    p0 = np.full(shape, np.nan)
+    m = np.zeros(shape)
+    top = np.full(shape, np.nan)
+    for k, p in enumerate(CC_P):
+        above = fin[k]
+        c = np.where(above, cc[k], 0.0)
+        p0 = np.where(above & ~seen, float(p), p0)
+        seen |= above
+        cloudy = above & (c >= DECK_FROM)
+        live = above & ~done
+        first = live & ~started
+        go = first & cloudy & (p0 - p <= DECK_BASE)
+        done |= first & ~cloudy & (p0 - p > DECK_BASE)
+        cont = live & started
+        done |= cont & ~cloudy
+        grow = go | cont & cloudy
+        m = np.where(grow, np.maximum(m, c), m)
+        top = np.where(grow, float(p), top)
+        started |= go
+    return (np.where(started, m, 0.0), started & (p0 - top >= DECK_MID))
+
+def sky_layers(low, mid, high, total, ceil, sun, cc=None):
     split = np.isfinite(low) | np.isfinite(mid) | np.isfinite(high)
     c = np.where(np.isfinite(ceil) & (ceil < CEIL_NONE_JS), ceil, np.nan)
     tot = np.nan_to_num(total, nan=0.0)
     has_c = np.isfinite(c)
     lo = np.where(split, np.nan_to_num(low, nan=0.0), np.where(has_c & (c < LOW_TOP), tot, 0.0))
     mi = np.where(split, np.nan_to_num(mid, nan=0.0), np.where(has_c & (c >= LOW_TOP), tot, 0.0))
+    if cc is not None:
+        deck, high_reach = low_deck(cc)
+        mi = np.where(split & high_reach & (deck >= DECK_SAME * mi), 0.0, mi)
+        lo = np.where(split, np.maximum(lo, deck), lo)
     up = split & has_c & (lo >= BROKEN) & (mi < BROKEN) & (c >= LOW_TOP * 1.25)
     dn = split & has_c & (mi >= BROKEN) & (lo < BROKEN) & (c < LOW_TOP) & ~up
     lo, mi = (np.where(dn, mi, np.where(up, 0.0, lo)), np.where(up, lo, np.where(dn, 0.0, mi)))
@@ -139,7 +174,8 @@ def classify(v):
     low, mid, high, total, ceil, sun, vis = (v['cloudlow'], v['cloudmid'], v['cloudhigh'], v['cloud'], v['ceil'], v['sun'], v['vis'])
     score = cu_score(w, d, od)
     cu = js_round(np.nan_to_num(score, nan=0.0))
-    c, lo, mi, hi, thick = sky_layers(low, mid, high, total, ceil, sun)
+    cc = np.stack([v[n] for n in CC_NAMES]) if all((n in v for n in CC_NAMES)) else None
+    c, lo, mi, hi, thick = sky_layers(low, mid, high, total, ceil, sun, cc)
     upper = hi
     deck = deck_of(mi, upper, thick, sun)
     ws = np.nan_to_num(w, nan=0.0)
@@ -166,7 +202,7 @@ def classify(v):
     over = deck_of(mi, upper, thick, sun)
     some = np.isfinite(d) | np.isfinite(low)
     reach = cu_reach(v['zi'], v['cubase'])
-    cover = np.minimum(COVER_MAX, np.maximum(np.where(np.isfinite(d), cu_cover(d, np.nan_to_num(od, nan=0.0), reach), 0.0), np.nan_to_num(low, nan=0.0) / 100))
+    cover = np.minimum(COVER_MAX, np.maximum(np.where(np.isfinite(d), cu_cover(d, np.nan_to_num(od, nan=0.0), reach), 0.0), lo / 100))
     cover = np.where(some, cover, np.nan)
     zi = np.where(np.isfinite(v['depth']), v['depth'], 1200.0)
     wkm = np.where(np.isfinite(d), cumulus_width(np.maximum(0.2, d / 1000), np.maximum(0.3, zi / 1000), 1.0, cover), np.nan)
