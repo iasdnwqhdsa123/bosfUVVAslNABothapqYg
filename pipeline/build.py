@@ -694,7 +694,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
         out[f'dpd{ft}'] = np.where(zq > zs + 100, np.maximum(0, tq - tdq), np.nan)
         out[f't{ft}'] = np.where(zq > zs + 100, tq, np.nan)
     wz_up = w_up = None
-    if lv.get('w') is not None:
+    if lv.get('w') is not None and (not lv.get('w_wave_only')):
         up = np.argsort(-np.asarray(levels))
         wz_up, w_up = (lv['z'][up], lv['w'][up])
     if w_up is not None and grid_step <= WAVE_BAND_MAX_STEP:
@@ -1278,6 +1278,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         lv['cover_tops'] = src.cover_tops
         if lv.get('w') is not None and src.omega:
             lv['w'] = omega_to_w(lv['w'], lv['t'], levels[:, None, None])
+        lv['w_wave_only'] = src.w_wave_only
         if s.get('zs') is None:
             tv = s['t2'] + 273.15
             s['zs'] = np.maximum(0, P.RD * tv / P.G * np.log(s['mslp'] / s['ps']))
