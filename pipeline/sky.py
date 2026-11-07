@@ -253,7 +253,9 @@ def cloud_overview(q, enc, fine, smooth=True):
             v[n] = area_median(v[n])
     cls, score, wet, over, cover, wkm = classify(v)
     if fine and smooth:
+        own = cls
         cls, score, wet, _, _, _ = classify({**v, **{n: cu_area_depth(v[n]) if n == 'cudepth' else area_mean(v[n]) for n in SMOOTHED}})
+        cls = np.where((own == SC) & np.isfinite(cls) & (cls <= 1), SC, cls)
     cuclass, cusky = encode(cls, score, wet, over)
     out = {'cuclass': cuclass, 'cusky': cusky, 'cucover': _codes(cover, *enc['cucover'][:2]), 'cuwide': _codes(wkm, *enc['cuwide'][:2])}
     if 'cueff' in enc:
