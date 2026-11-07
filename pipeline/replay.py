@@ -21,8 +21,9 @@ def unit_of(name):
 
 def variables(src):
     out = set()
+    own = {**getattr(src, 'dwd_vars', {}), **getattr(src, 'mf_levels', {})}
     for key in src.wanted():
-        if key[0] in getattr(src, 'dwd_vars', {}):
+        if key[0] in own:
             continue
         name = om.om_name(key)
         out.update(om.RECIPES[name][0] if name in om.RECIPES else (name,))
