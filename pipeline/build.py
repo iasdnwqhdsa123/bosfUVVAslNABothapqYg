@@ -1022,6 +1022,9 @@ def blend_window(src, canon, m, run):
     mean = (v1 - v0) / (step * 3600) * (1000 if kind == 'accw' else 1)
     return ('win', mean.astype(np.float32), step, run + timedelta(hours=m.fh1))
 
+def omega_to_w(omega, t, p):
+    return -omega * P.RD * (t + 273.15) / (p * 100 * P.G)
+
 def total_of_bands(tcc, bands):
     clear = np.prod([1 - np.clip(np.nan_to_num(b, nan=0), 0, 100) / 100 for b in bands], axis=0)
     return np.where(np.isfinite(tcc), np.fmax(tcc, 100 * (1 - clear)), tcc).astype(np.float32)
@@ -1274,8 +1277,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         lv['cloud'] = (np.array(list(src.levels) + [src.cloud_levels[j] for j in hi_ok], np.float32), rh_c, clw_c, cc_c)
         lv['cover_tops'] = src.cover_tops
         if lv.get('w') is not None and src.omega:
-            p = levels[:, None, None] * 100
-            lv['w'] = -lv['w'] * P.RD * (lv['t'] + 273.15) / (p * P.G)
+            lv['w'] = omega_to_w(lv['w'], lv['t'], levels[:, None, None])
         if s.get('zs') is None:
             tv = s['t2'] + 273.15
             s['zs'] = np.maximum(0, P.RD * tv / P.G * np.log(s['mslp'] / s['ps']))
@@ -1383,7 +1385,7 @@ def sounding_column(src, s, lv, levels, extra, extra_levels, lon2d, rot, origin=
             u, v = grib.earth_winds(u, v, lon2d, rot)
         w = g('w')
         if w is not None and src.omega and (t is not None):
-            w = -w * P.RD * (t + 273.15) / (p * 100 * P.G)
+            w = omega_to_w(w, t, p)
         rows[p] = {'t': t, 'td': td, 'u': u, 'v': v, 'z': g('z'), 'w': w}
     shape = thin(s['ps']).shape
     out = {c: [] for c in ('t', 'dpd', 'u', 'v', 'z', 'w')}

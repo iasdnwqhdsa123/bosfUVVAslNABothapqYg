@@ -22,6 +22,8 @@ def unit_of(name):
 def variables(src):
     out = set()
     for key in src.wanted():
+        if key[0] in getattr(src, 'dwd_vars', {}):
+            continue
         name = om.om_name(key)
         out.update(om.RECIPES[name][0] if name in om.RECIPES else (name,))
     out.discard('HSURF')
