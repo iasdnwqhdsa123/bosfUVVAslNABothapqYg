@@ -122,11 +122,17 @@ def cu_cover(cudepth, overdev, reach=1.0):
     c = (CU_COVER[0] + CU_COVER[1] * clamp01(cudepth / 3000)) * clamp01(reach)
     c = np.where(overdev > 30, np.maximum(c, 0.4 + 0.3 * clamp01((overdev - 30) / 50)), c)
     return np.where(cudepth > 0, c, 0.0)
-CU_ZI, CU_WIDE, CU_MIN = (1.0, 1.3, 1.0)
+CU_ZI, CU_WIDE, CU_MIN = (1.0, 1.3, 1.5)
+CU_MERGE = {'from': 0.2, 'span': 0.6, 'k': 1.0, 'flat': 1.2, 'max': 5.0}
 
-def cumulus_width(D, zi, m=1.0):
+def cu_merge(cover, D=1.0):
+    c = np.clip((np.nan_to_num(cover, nan=0.0) - CU_MERGE['from']) / CU_MERGE['span'], 0, 1)
+    return 1 + (CU_MERGE['k'] + CU_MERGE['flat'] * np.clip((1 - D) / 0.7, 0, 1)) * c
+
+def cumulus_width(D, zi, m=1.0, cover=0.0):
     ratio = np.where(D <= 0.5, 2.0, np.where(D <= 1, 2.5 - D, np.where(D <= 2, 2 - 0.5 * D, np.maximum(0.6, 1 - 0.15 * (D - 2)))))
-    return np.maximum(CU_MIN, np.minimum(5, np.maximum(CU_ZI * zi * (0.6 + 0.5 * m), D * ratio * (1 + (CU_WIDE - 1) * np.clip((3.5 - D) / 1.5, 0, 1)))))
+    w = np.maximum(CU_MIN, np.minimum(5, np.maximum(CU_ZI * zi * (0.6 + 0.5 * m), D * ratio * (1 + (CU_WIDE - 1) * np.clip((3.5 - D) / 1.5, 0, 1)))))
+    return np.minimum(CU_MERGE['max'], w * cu_merge(cover, D))
 
 def classify(v):
     w, d, od = (v['wstar'], v['cudepth'], v['overdev'])
@@ -163,7 +169,7 @@ def classify(v):
     cover = np.minimum(COVER_MAX, np.maximum(np.where(np.isfinite(d), cu_cover(d, np.nan_to_num(od, nan=0.0), reach), 0.0), np.nan_to_num(low, nan=0.0) / 100))
     cover = np.where(some, cover, np.nan)
     zi = np.where(np.isfinite(v['depth']), v['depth'], 1200.0)
-    wkm = np.where(np.isfinite(d), cumulus_width(np.maximum(0.2, d / 1000), np.maximum(0.3, zi / 1000), 1.0), np.nan)
+    wkm = np.where(np.isfinite(d), cumulus_width(np.maximum(0.2, d / 1000), np.maximum(0.3, zi / 1000), 1.0, cover), np.nan)
     return (cls, score, wet, over, cover, wkm)
 COVER_WEIGHTS = (1.0, 0.7, 0.4)
 SUN_SLACK = 0.2
