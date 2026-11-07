@@ -21,7 +21,7 @@ import sky
 import tiles
 from sources import OPEN_AHEAD_H, OPEN_SLACK_H, SOURCES, candidate_runs, latest_complete_run, needed_times
 from tiles import downsample, downsample_at_peak, downsample_peak
-REGIONS = {'hrrr': (-125.0, 24.0, -66.5, 50.0, 0.03), 'gfs': (-170.0, -54.75, 179.75, 70.0, 0.25), 'ecmwf': (-170.0, -54.9, 179.9, 70.0, 0.1), 'icon': (-170.0, -54.875, 179.75, 70.0, 0.125), 'icond2': (-3.94, 43.18, 20.34, 58.08, 0.02)}
+REGIONS = {'hrrr': (-125.0, 24.0, -66.5, 50.0, 0.03), 'gfs': (-170.0, -54.75, 179.75, 70.0, 0.25), 'ecmwf': (-170.0, -54.9, 179.9, 70.0, 0.1), 'icon': (-170.0, -54.875, 179.75, 70.0, 0.125), 'icond2': (-3.94, 43.18, 20.34, 58.08, 0.02), 'arome': (-12.0, 37.5, 16.0, 55.4, 0.025)}
 KEEP = {'gfs': ((-130.0, 20.25, -52.0, 56.0), (-168.0, 59.0, -130.25, 70.0), (-163.0, 54.5, -148.0, 59.0), (-137.0, 54.5, -130.25, 59.0), (-25.0, 34.0, 44.75, 70.0), (-13.0, 27.0, 12.0, 34.0), (-76.0, -54.75, -53.0, -16.0), (-53.0, -34.0, -34.0, -2.0), (-82.0, -16.0, -66.0, 12.5), (11.0, -35.0, 36.0, -16.0), (166.0, -48.0, 179.0, -34.0), (114.0, -35.5, 120.5, -28.5), (131.5, -26.0, 136.5, -21.5), (144.0, -27.0, 154.0, -18.5), (136.0, -39.5, 154.0, -27.0), (143.5, -44.0, 148.75, -39.5), (72.0, 26.0, 97.0, 37.0))}
 KEEP['icon'] = KEEP['ecmwf'] = KEEP['gfs']
 FRONTS_BOXES = {'gfs': ((-170.0, 15.0, 50.0, 70.0),)}
@@ -124,8 +124,8 @@ def analyse_kept(s, lv, levels, grid_step, lat2d, lon2d, valid, windows):
     shape = lat2d.shape
     cut = [lambda a, w=w: _crop(a, *w, shape) for w, _ in windows]
     return analyse_parts([(c(s), c(lv), levels) for c in cut], [(c(lat2d), c(lon2d)) for c in cut], grid_step, valid, windows, shape)
-TILE = {'hrrr': 100, 'gfs': 100, 'ecmwf': 250, 'icon': 200, 'icond2': 100}
-OVERVIEW = {'hrrr': (2, 4, 8), 'icond2': (2, 4, 8)}
+TILE = {'hrrr': 100, 'gfs': 100, 'ecmwf': 250, 'icon': 200, 'icond2': 100, 'arome': 100}
+OVERVIEW = {'hrrr': (2, 4, 8), 'icond2': (2, 4, 8), 'arome': (2, 4, 8)}
 LEVEL_TILE = 200
 DECODE_THREADS = 4
 CLASS_FIELDS = {'ptype', 'fltcat', 'sinkby', 'cuclass', 'cusky'}
