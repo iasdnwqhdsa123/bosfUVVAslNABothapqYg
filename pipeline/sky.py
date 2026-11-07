@@ -19,7 +19,7 @@ FIELDS = ('cuclass', 'cusky', 'cucover', 'cuwide', 'cueff')
 CC_P = (1000, 950, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 CC_NAMES = tuple((f'cc{p}' for p in CC_P))
 INPUTS = ('wstar', 'cudepth', 'overdev', 'rain', 'refc', 'showers', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'vis', 'accas', 'depth', 'zi', 'cubase') + CC_NAMES
-COVERS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh')
+COVERS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh') + CC_NAMES
 
 def decode(code, lo, hi, transform):
     c = np.arange(255, dtype=np.float64)
@@ -41,7 +41,7 @@ def area_median(a):
     return np.where(np.isfinite(a), m, np.nan)
 FINE_STEP = 0.09
 CLASS_MEAN = 5
-SMOOTHED = ('wstar', 'cudepth', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'sun')
+SMOOTHED = ('wstar', 'cudepth', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'sun') + CC_NAMES
 
 def window_sum(a, k):
     r = k // 2
@@ -106,6 +106,13 @@ def low_deck(cc):
         started |= go
     return (np.where(started, m, 0.0), started & (p0 - top >= DECK_MID))
 
+def deck_merge(lo, mi, c, cc, split=True):
+    deck, high_reach = low_deck(cc)
+    ok = split & (lo >= FEW_CU) & ~(np.isfinite(c) & (c >= LOW_TOP))
+    mi = np.where(ok & high_reach & (deck >= DECK_SAME * mi), 0.0, mi)
+    lo = np.where(ok, np.maximum(lo, deck), lo)
+    return (lo, mi)
+
 def sky_layers(low, mid, high, total, ceil, sun, cc=None):
     split = np.isfinite(low) | np.isfinite(mid) | np.isfinite(high)
     c = np.where(np.isfinite(ceil) & (ceil < CEIL_NONE_JS), ceil, np.nan)
@@ -114,9 +121,7 @@ def sky_layers(low, mid, high, total, ceil, sun, cc=None):
     lo = np.where(split, np.nan_to_num(low, nan=0.0), np.where(has_c & (c < LOW_TOP), tot, 0.0))
     mi = np.where(split, np.nan_to_num(mid, nan=0.0), np.where(has_c & (c >= LOW_TOP), tot, 0.0))
     if cc is not None:
-        deck, high_reach = low_deck(cc)
-        mi = np.where(split & high_reach & (deck >= DECK_SAME * mi), 0.0, mi)
-        lo = np.where(split, np.maximum(lo, deck), lo)
+        lo, mi = deck_merge(lo, mi, c, cc, split)
     up = split & has_c & (lo >= BROKEN) & (mi < BROKEN) & (c >= LOW_TOP * 1.25)
     dn = split & has_c & (mi >= BROKEN) & (lo < BROKEN) & (c < LOW_TOP) & ~up
     lo, mi = (np.where(dn, mi, np.where(up, 0.0, lo)), np.where(up, lo, np.where(dn, 0.0, mi)))
@@ -252,7 +257,13 @@ def cloud_overview(q, enc, fine, smooth=True):
     cuclass, cusky = encode(cls, score, wet, over)
     out = {'cuclass': cuclass, 'cusky': cusky, 'cucover': _codes(cover, *enc['cucover'][:2]), 'cuwide': _codes(wkm, *enc['cuwide'][:2])}
     if 'cueff' in enc:
-        out['cueff'] = _codes(effective_cover(v['cloudlow'], v['cloudmid'], v['cloudhigh'], v['cloud'], cover, v['ceil'], v['sun']), *enc['cueff'][:2])
+        mid = v['cloudmid']
+        if all((n in q for n in CC_NAMES)):
+            ce = np.where(np.isfinite(v['ceil']) & (v['ceil'] < CEIL_NONE_JS), v['ceil'], np.nan)
+            split = np.isfinite(v['cloudlow']) | np.isfinite(mid) | np.isfinite(v['cloudhigh'])
+            _, mi = deck_merge(np.nan_to_num(v['cloudlow'], nan=0.0), np.nan_to_num(mid, nan=0.0), ce, np.stack([v[n] for n in CC_NAMES]), split)
+            mid = np.where(np.isfinite(mid), mi, np.nan)
+        out['cueff'] = _codes(effective_cover(v['cloudlow'], mid, v['cloudhigh'], v['cloud'], cover, v['ceil'], v['sun']), *enc['cueff'][:2])
     off = q['wstar'] == 255
     for a in out.values():
         a[off] = 255
