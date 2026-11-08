@@ -5,6 +5,7 @@ import leelattice
 import runwave
 import shade as shade_mod
 import sky
+import wavebars
 FIELDS = ('rrun', 'rrunf', 'wrun', 'wrunf', 'wrunz', 'wtop', 'crest', 'cshade', 'cthin', 'csun')
 RUN_FIELDS = ('rrun', 'rrunf', 'wrun', 'wrunf', 'wrunz', 'wtop', 'crest')
 FINE = {'rrunf': 'rrun', 'wrunf': 'wrun'}
@@ -63,7 +64,13 @@ def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
     if lee is not None and 'wtrap' in q:
         lat = leelattice.lattice(_Decoded(q, enc), grid, lee.edges)
         bands = leelattice.lattice_cells(lat, grid)
-    r = runwave.run_fields(_Decoded(q, enc), grid, lee, ridge, bands)
+    dec = _Decoded(q, enc)
+    bars = bands is not None and 'cuclass' in q
+    r = runwave.run_fields(dec, grid, lee, ridge, bands, bars=bars)
+    if bars and 'bar_own' in r:
+        wb = wavebars.apply(q['cuclass'], dec, r['bar_own'], grid, float(grid['step']) <= sky.FINE_STEP)
+        if wb is not None:
+            out['cuclass'] = wb
     put('rrun', r['ridge'])
     put('wrun', r['wave'])
     for f, n in FINE.items():
@@ -72,7 +79,7 @@ def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
     put('wrunz', np.where(r['wave'] > 0, r['wave_agl'], np.nan))
     put('wtop', r['wave_top'])
     put('crest', r['crest'])
-    del r, bands
+    del r, bands, dec
     s = shade_mod.shade(_Decoded(q, enc), grid, when, mid_by_ceil, agl_heights, rays=True)
     put('cshade', s['shade'])
     put('cthin', s['thin'])

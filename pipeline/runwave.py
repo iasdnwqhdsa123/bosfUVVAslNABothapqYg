@@ -4,6 +4,7 @@ import math
 import os
 import numpy as np
 from PIL import Image
+import wavebars
 RIDGE_COL_M = (600, 1000, 1500, 2000, 3000)
 LEE_AGL = (500.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0, 6000.0, 7500.0, 9000.0)
 NA = len(LEE_AGL)
@@ -120,13 +121,14 @@ def _lee_boost(w):
     t = np.minimum(1.0, np.maximum(0.0, (w - 1.0) / 2.0))
     return w * (1.0 + LEE_BOOST * t * t * (3.0 - 2.0 * t))
 
-def _lee(lee, lat, lon, step, lu, lv, bands, lok):
+def _lee(lee, lat, lon, step, lu, lv, bands, lok, cols=False):
     n = lat.size
     top = np.full(n, np.nan)
     peak = np.zeros(n)
     kbest = np.zeros(n, np.int64)
+    bcol = np.zeros((n, NA)) if cols else None
     if lee is None:
-        return (top, peak, kbest, np.zeros(n, bool))
+        return (top, peak, kbest, np.zeros(n, bool)) + ((bcol,) if cols else ())
     aid, fx, fy = lee.locate(lat, lon)
     D, NB = (lee.dirs, lee.nband)
     dec = (np.arange(256) / 254.0) ** 2 * lee.scale
@@ -145,6 +147,7 @@ def _lee(lee, lat, lon, step, lu, lv, bands, lok):
         tn = np.zeros(sel.size, np.int64)
         bp = np.zeros(sel.size)
         bk = np.zeros(sel.size, np.int64)
+        bc = np.zeros((sel.size, NA)) if cols else None
         for iy, ix, ok in _offsets(a, fx[sel], fy[sel], r):
             w = np.flatnonzero(ok)
             if not w.size:
@@ -185,10 +188,14 @@ def _lee(lee, lat, lon, step, lu, lv, bands, lok):
             better = pk > bp[w]
             bp[w[better]] = pk[better]
             bk[w[better]] = kk[better]
+            if cols:
+                bc[w[better]] = col[better]
         got = tn > 0
         top[sel[got]] = tsum[got] / tn[got]
         peak[sel], kbest[sel] = (bp, bk)
-    return (top, peak, kbest, aid >= 0)
+        if cols:
+            bcol[sel] = bc
+    return (top, peak, kbest, aid >= 0) + ((bcol,) if cols else ())
 
 def _ridge_wind(u3, v3, uwl, vwl, h, cols):
     nan = np.isnan
@@ -257,14 +264,15 @@ def _ridge_lift(ridge, lat, lon, u, v, nlow, step):
         out[sel] = total / (2 * r + 1) ** 2
     return out
 
-def _cells(f, lat, lon, step, lee, ridge, lat_bands):
+def _cells(f, lat, lon, step, lee, ridge, lat_bands, bars=False):
     nan = np.full(lat.size, np.nan)
     g = lambda k: f.get(k, nan)
     zs = np.nan_to_num(g('elevation'), nan=0.0)
     lu = lv = B = lok = None
     if lat_bands is not None:
         lu, lv, B, lok = lat_bands
-    top, peak, kbest, inside = _lee(lee, lat, lon, step, lu, lv, B, lok)
+    bars = bars and lat_bands is not None
+    top, peak, kbest, inside, *bcol = _lee(lee, lat, lon, step, lu, lv, B, lok, cols=bars)
     u, v = (g('u_blavg'), g('v_blavg'))
     u3 = np.where(np.isnan(g('u_g300')), u, g('u_g300'))
     v3 = np.where(np.isnan(g('v_g300')), v, g('v_g300'))
@@ -285,6 +293,11 @@ def _cells(f, lat, lon, step, lee, ridge, lat_bands):
         alt = zs + np.asarray(LEE_AGL)[kbest]
         out['wave_agl'] = np.where(on, alt - zs, np.nan)
         out['wave_top'] = np.where(inside & lok, peak, np.nan)
+    if bars:
+        zr = g('elevation')
+        dt = wavebars.deck_top(g('ceiltop'), g('ceil'), g('cubase'), g('cudepth'), g('zi'), zr)
+        own = np.where(inside & np.isfinite(dt), wavebars.lift_at(bcol[0], dt - zr), 0.0)
+        out['bar_own'] = np.where(np.isfinite(zr) & lok, own, np.nan)
     return out
 
 def _grid(grid):
@@ -303,9 +316,10 @@ class _Rows:
         a = self.done[k]
         return default if a is None else a
 
-def run_fields(fields, grid, lee, ridge, lat_bands=None, chunk=CELLS_A_CHUNK):
+def run_fields(fields, grid, lee, ridge, lat_bands=None, chunk=CELLS_A_CHUNK, bars=False):
     west, north, step, nx, ny = _grid(grid)
-    out = {k: np.empty((ny, nx)) for k in ('ridge', 'wave', 'wave_agl', 'wave_top', 'crest')}
+    keys = ('ridge', 'wave', 'wave_agl', 'wave_top', 'crest') + (('bar_own',) if bars and lat_bands is not None else ())
+    out = {k: np.empty((ny, nx)) for k in keys}
     rows = max(1, chunk // max(1, nx))
     xs = np.arange(nx)
     for y0 in range(0, ny, rows):
@@ -322,7 +336,7 @@ def run_fields(fields, grid, lee, ridge, lat_bands=None, chunk=CELLS_A_CHUNK):
             if lee is not None and B.shape[1] != lee.nband * NA:
                 raise ValueError(f'lattice bands: {B.shape[1]} a cell, {lee.nband} × {NA} expected')
             lb = (np.asarray(lu, np.float64).reshape(-1), np.asarray(lv, np.float64).reshape(-1), B.reshape(n, -1, NA), np.asarray(ok, bool).reshape(-1))
-        res = _cells(f, lat, lon, step, lee, ridge, lb)
+        res = _cells(f, lat, lon, step, lee, ridge, lb, bars)
         for k, a in res.items():
             out[k][y0:y1] = a.reshape(y1 - y0, nx)
     return out
