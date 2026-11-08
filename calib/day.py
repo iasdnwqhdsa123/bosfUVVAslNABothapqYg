@@ -23,6 +23,7 @@ BUILD_TIMEOUT, EVAL_TIMEOUT = (25 * 60, 15 * 60)
 GRID_FIELDS = os.environ.get('CALIB_GRID_FIELDS', 'all')
 SAVE_ALSO = ('elevation', 'conv', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'dth_m200', 'dth_m500', 'heat', 'snowd', 'soilm')
 GRID_HOURS = os.environ.get('CALIB_GRID_HOURS', 'all')
+DUMP_FIELDS = FIELDS + [f for f in SAVE_ALSO if f not in FIELDS]
 
 def boxes(flights: list[dict]) -> list[dict]:
     q = lambda v, up: (math.ceil if up else math.floor)(v / 0.03) * 0.03
@@ -60,10 +61,10 @@ def dump(base: str) -> dict:
         for fn in sorted(glob.glob(f'{base}/_hours/*.npz')):
             z = np.load(fn)
             stamps.append(os.path.basename(fn)[:-4])
-            for k in FIELDS:
+            for k in DUMP_FIELDS:
                 ok = k in z.files and k in m['fields']
                 out.write((dec(k, z[k]) if ok else np.full((ny, nx), np.nan, np.float32)).tobytes())
-    info = {'grid': m['grid'], 'heights': m.get('heights'), 'highAgl': m.get('highAgl'), 'stamps': stamps, 'fields': FIELDS, 'model': m.get('model') or os.path.basename(os.path.normpath(base))}
+    info = {'grid': m['grid'], 'heights': m.get('heights'), 'highAgl': m.get('highAgl'), 'stamps': stamps, 'fields': DUMP_FIELDS, 'model': m.get('model') or os.path.basename(os.path.normpath(base))}
     with open(f'{base}/fields.json', 'w') as f:
         json.dump(info, f)
     return info

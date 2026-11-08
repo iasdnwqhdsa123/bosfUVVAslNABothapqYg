@@ -232,9 +232,28 @@ def lead_version_matches(lv: str | None, key: str) -> bool:
     if want is None or lv is None:
         return lv == want
     return lv == want or lv == f"{_WHOLE_LEAD}:{want.split(':', 1)[1]}"
+FINGERPRINTS: dict = {'US': {}, 'EU': {}}
+
+def load_fingerprints(*paths: str) -> None:
+    for p in paths:
+        try:
+            with open(p, encoding='utf-8') as f:
+                t = json.load(f)
+        except (OSError, ValueError):
+            continue
+        for m, e in (t or {}).items():
+            FINGERPRINTS.setdefault(m, {}).update(e or {})
+load_fingerprints(os.path.join(HERE, 'fingerprints.json'), *[p for p in os.environ.get('CALIB_FINGERPRINTS', '').split(':') if p])
 
 def physics_matches(stamp: str | None, macro: str='US') -> bool:
-    return stamp is not None and stamp in (physics_version(macro), _WHOLE.get(macro))
+    if stamp is None:
+        return False
+    now = (physics_version(macro), _WHOLE.get(macro))
+    if stamp in now:
+        return True
+    fp = FINGERPRINTS.get(macro) or {}
+    mine = fp.get(physics_version(macro))
+    return mine is not None and fp.get(stamp) == mine
 
 def model_physics_matches(stamp: str | None, model: str) -> bool:
     if is_lead(model):

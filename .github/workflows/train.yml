@@ -12,17 +12,19 @@ on:
         default: all
 permissions:
   contents: read
-  actions: read
+  actions: write  # (the land cover's Actions cache: older copies deleted)
 concurrency:
   group: calib
   cancel-in-progress: false
 jobs:
   train:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 240
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
       CALIB_TERRAIN_CACHE: /tmp/terrain
+      CALIB_TRIGGER_TILES: "30000"
+      TRIGGER_COVER_CACHE: /tmp/cover
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -70,10 +72,34 @@ jobs:
           if [ -z "$(ls -A /tmp/grids 2> /dev/null)" ]; then echo "no grids: the raw values"; exit 0; fi
           python3 calib/batch.py rescore --data /tmp/data --grids /tmp/grids --corrections /tmp/model/corrections.json 2>> /tmp/model/stderr.log \
             || echo "::warning::the rescore failed (details in the encrypted log): the raw values"
+      - name: Restore the land cover
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/cover
+          key: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-${{ github.run_id }}
+          restore-keys: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-
       - name: Layer 2, the place
         run: |
           python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage place --grids /tmp/grids 2>> /tmp/model/stderr.log \
             || echo "::error::layer 2 failed (details in the encrypted log)"
+      - name: Keep the land cover
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/cover
+          key: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-${{ github.run_id }}
+      - name: Drop older land cover copies
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mine="$(gh api "repos/${{ github.repository }}/actions/caches?key=trigger-cover-" --jq '[.actions_caches[] | select(.key | endswith("-${{ github.run_id }}"))] | length')"
+          [ "${mine:-0}" -gt 0 ] || { echo "this run's copy isn't saved: the older ones kept"; exit 0; }
+          gh api --paginate "repos/${{ github.repository }}/actions/caches?key=trigger-cover-&per_page=100" --jq '.actions_caches[] | "\(.id) \(.key)"' |
+            while read -r id key; do
+              case "$key" in *-"${{ github.run_id }}") ;; *) gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" > /dev/null && echo "deleted $key" ;; esac
+            done
       - name: Layer 3, the pilot, and the model
         run: |
           python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage pilot 2>> /tmp/model/stderr.log \

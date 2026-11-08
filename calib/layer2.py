@@ -1,8 +1,11 @@
 from __future__ import annotations
+import glob
 import json
 import math
 import os
+import random
 import struct
+import subprocess
 import urllib.request
 import zlib
 from datetime import date, datetime, timezone
@@ -26,6 +29,10 @@ MIN_DEPTH = 300
 TILE_Z = 11
 DEM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium'
 FEATURES = ['trig', 'st', 'sunslope', 'up', 'flat', 'slope', 'tpi', 'relief', 'wstar', 'zi', 'cu', 'wind', 'solar', 'sunelev', 'elev', 'doy_s', 'doy_c']
+SITE_PARTS = ['st', 'sunSlope', 'src', 'up', 'peak', 'crest', 'forest', 'wc', 'flat', 'heat', 'wet', 'edge', 'shade', 'grade', 'tpi', 'relief']
+FEATURES_SITE = ['site', *SITE_PARTS, 'wstar', 'zi', 'cu', 'wind', 'solar', 'sunelev', 'elev', 'doy_s', 'doy_c']
+SITE_MIN = 0.5
+MAX_TILES = int(os.environ.get('CALIB_TRIGGER_TILES', '30000'))
 PARAMS = dict(max_iter=100, learning_rate=0.06, max_leaf_nodes=8, min_samples_leaf=30, l2_regularization=1.0, random_state=7)
 MIN_ROWS, MIN_DAYS = (200, 10)
 
@@ -331,7 +338,8 @@ def points(days: list[dict], model: str, grids: Grids | None=None, bad: dict | N
                 if not e or (e['cb'] or e['zi']) < MIN_DEPTH:
                     continue
                 flon, flat, zr = foot_of(p['lon'], p['lat'], max(50.0, agl), e)
-                out.append({'label': 1, 'lon': flon, 'lat': flat, 'zr': zr, 't': c['_t0'], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': c.get('rate'), 'agl': agl, 'met': (p['lon'], p['lat'])})
+                box = (gkey, m_, bi) if e['from'] == 'grid' else None
+                out.append({'label': 1, 'lon': flon, 'lat': flat, 'zr': zr, 't': c['_t0'], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': c.get('rate'), 'agl': agl, 'met': (p['lon'], p['lat']), 'box': box})
                 if tr and i + 1 < len(cs):
                     t0, t1 = (c['_t1'], cs[i + 1]['_t0'])
                     last = None
@@ -346,19 +354,83 @@ def points(days: list[dict], model: str, grids: Grids | None=None, bad: dict | N
                         if agl_q < LOW_AGL:
                             continue
                         glon, glat, zr_q = foot_of(q[1], q[2], agl_q, e)
-                        out.append({'label': 0, 'lon': glon, 'lat': glat, 'zr': zr_q, 't': q[0], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': None, 'agl': agl_q, 'met': here})
+                        out.append({'label': 0, 'lon': glon, 'lat': glat, 'zr': zr_q, 't': q[0], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': None, 'agl': agl_q, 'met': here, 'box': box})
     return out
 
-def featurize(pts: list[dict], T: Terrain) -> list[dict]:
+def node_script() -> str | None:
+    return next(iter(sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trigger_eval.*')))), None)
+
+def _tile12(lon: float, lat: float) -> tuple[int, int]:
+    n, s = (4096, math.sin(math.radians(lat)))
+    return (int((lon + 180) / 360 * n), int((0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n))
+
+def site_triggers(pts: list[dict], grids: 'Grids | None', work: str, max_tiles: int=MAX_TILES, seed: int=7) -> dict:
+    res = {'points': 0, 'tiles': 0, 'failed': 0, 'days_left_out': 0, 'ran': False}
+    script = node_script()
+    if not grids or not grids.root or (not script):
+        return res
+    cand = [p for p in pts if p.get('box')]
+    by_day = {}
+    for p in cand:
+        by_day.setdefault(p['date'], set()).add(_tile12(p['lon'], p['lat']))
+    days, tiles = (sorted(by_day), set())
+    random.Random(seed).shuffle(days)
+    keep = set()
+    for d in days:
+        if len(tiles | by_day[d]) > max_tiles and keep:
+            res['days_left_out'] += 1
+            continue
+        tiles |= by_day[d]
+        keep.add(d)
+    cand = [p for p in cand if p['date'] in keep]
+    boxes, rows = ({}, [])
+    for p in cand:
+        gk, m_, bi = p['box']
+        if not grids.box(gk, m_, bi):
+            continue
+        key = f'{gk}|{m_}|{bi}'
+        boxes[key] = os.path.join(grids.root, gk, f'{m_}-box{bi}')
+        rows.append((p, [key, p['lat'], p['lon'], int(p['t'] * 1000)]))
+    if not rows:
+        return res
+    os.makedirs(work, exist_ok=True)
+    fin, fout = (os.path.join(work, 'trigger_in.json'), os.path.join(work, 'trigger_out.json'))
+    with open(fin, 'w') as f:
+        json.dump({'boxes': boxes, 'points': [r for _, r in rows]}, f)
+    r = subprocess.run(['node', script, fin, fout], capture_output=True, text=True, timeout=5 * 3600)
+    if r.returncode != 0 or not os.path.exists(fout):
+        raise RuntimeError(f'trigger_eval: {r.stderr[-400:]}')
+    with open(fout) as f:
+        o = json.load(f)
+    names = o['names']
+    for (p, _), v in zip(rows, o['rows']):
+        if v:
+            d = dict(zip(names, v))
+            d['site'] = d.pop('score') / 100
+            p['site'] = d
+            res['points'] += 1
+    res.update(tiles=o['tiles'], failed=o['failed'], ran=True)
+    for fn in (fin, fout):
+        os.remove(fn)
+    return res
+
+def featurize(pts: list[dict], T: Terrain, site: bool=False) -> list[dict]:
     out = []
     for p in pts:
+        if site and (not p.get('site')):
+            continue
         sun = sun_position(p['lat'], p['lon'], p['t'])
         tf = terrain_features(T, p['lon'], p['lat'], sun, p['e']['u'], p['e']['v'])
         if not tf:
             continue
         e = p['e']
         doy = train.doy_of(p['date'])
-        out.append({**p, **tf, 'wstar': e['ws'], 'zi': e['cb'] if e.get('cb') else e['zi'], 'cu': 1.0 if e.get('cb') else 0.0, 'wind': math.hypot(e['u'], e['v']), 'solar': e.get('solar'), 'sunelev': sun['elev'], 'elev': tf['g'], 'doy_s': math.sin(2 * math.pi * doy / 365.25), 'doy_c': math.cos(2 * math.pi * doy / 365.25)})
+        row = {**p, **tf, 'wstar': e['ws'], 'zi': e['cb'] if e.get('cb') else e['zi'], 'cu': 1.0 if e.get('cb') else 0.0, 'wind': math.hypot(e['u'], e['v']), 'solar': e.get('solar'), 'sunelev': sun['elev'], 'elev': tf['g'], 'doy_s': math.sin(2 * math.pi * doy / 365.25), 'doy_c': math.cos(2 * math.pi * doy / 365.25)}
+        if site:
+            row.update({k: p['site'].get(k) for k in SITE_PARTS})
+            row['site'] = p['site']['site']
+            row['flat'] = p['site']['flat'] if p['site'].get('flat') is not None else row['flat']
+        out.append(row)
     return out
 
 def top_decile(score, y) -> dict:
@@ -410,16 +482,16 @@ def spacing_rows(pts: list[dict]) -> list[dict]:
                 out.append({'flown_km': d, 'placed_km': placed_spacing_km(e['ws'], e['cb'] if e.get('cb') else e['zi']), 'region': b['region'], 'rate': b['rate'], 'ws': e['ws']})
     return out
 
-def fit(F: list[dict]) -> dict | None:
+def fit(F: list[dict], features: list[str]=FEATURES, score_key: str='trig') -> dict | None:
     from layer1 import auc
     if len(F) < MIN_ROWS or len({r['date'] for r in F}) < MIN_DAYS:
         return None
     y = np.array([r['label'] for r in F], dtype=float)
     if y.sum() < 20 or (1 - y).sum() < 20:
         return None
-    X = np.array([[np.nan if r.get(k) is None else float(r[k]) for k in FEATURES] for r in F], dtype=float)
+    X = np.array([[np.nan if r.get(k) is None else float(r[k]) for k in features] for r in F], dtype=float)
     keep = [j for j in range(X.shape[1]) if np.isfinite(X[:, j]).mean() >= 0.02]
-    names = [FEATURES[j] for j in keep]
+    names = [features[j] for j in keep]
     X = X[:, keep]
     g = np.array([r['date'] for r in F])
     p_ml, _ = train.crossval(X, y, g, g, None, PARAMS, train.classifier)
@@ -429,11 +501,11 @@ def fit(F: list[dict]) -> dict | None:
     e['kind'] = 'logit'
     e['version'] = date.today().isoformat()
     chk = train.export_check(e, m, X)
-    trig = np.array([r['trig'] for r in F])
+    trig = np.array([r[score_key] for r in F])
     return {'export': e, 'rows': int(len(y)), 'days': int(len(set(g))), 'check': chk, 'auc_ml': auc(p_ml, y), 'auc_trig': auc(trig, y), 'top_ml': top_decile(p_ml, y), 'top_trig': top_decile(trig, y), 'train_dropped': train.crossval.dropped, 'auc_noday': None if p_nd is None else auc(p_nd, y), 'top_noday': None if p_nd is None else top_decile(p_nd, y)}
 
 def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None) -> dict:
-    md = [f"Each climb traced down the wind to its trigger point (the 3D thermals' lean at the height the glider met it); negatives along the glides between climbs (every {NEG_KM:g} km, over {LOW_AGL} m up), traced the same way: ground flown over without circling. The site's Thermal Triggers score (its terrain part: hill, sunlit slope, windward slope, flat land; no land cover or airflow here) scored against them: AUC (0.5 = chance) and the top decile's hit rate against the base rate (lift). Then a tree model P(climb | cell, hour) on the same terrain and the layer-1 air, cross-validated by day. Layer 3 sees the planner on that air, not where the thermals were: nothing here is counted again there.", '']
+    md = [f"Each climb traced down the wind to its trigger point (the 3D thermals' lean at the height the glider met it); negatives along the glides between climbs (every {NEG_KM:g} km, over {LOW_AGL} m up), traced the same way: ground flown over without circling. The site's Thermal Triggers as the map works them out (the site's own code on zoom-12 tiles, the land cover from Esri's imagery and ESA WorldCover, water and the shore, the airflow over the terrain, its shadow, the forecast's W*, wind, heating, snow and soil at the hour), where the point's day has its grids saved; the terrain-only copy here (hill, sunlit slope, windward slope, flat land) beside it. Each scored against them: AUC (0.5 = chance) and the top decile's hit rate against the base rate (lift). Then a tree model P(climb | cell, hour) on the site's score, its terms and the layer-1 air, cross-validated by day. Layer 3 sees the planner on that air, not where the thermals were: nothing here is counted again there.", '']
     res = {'scores': None, 'cv': None, 'points': 0, 'rows': 0}
     if D['days'] is None:
         md += ["No day files (exported rows only): the climbs' positions and the tracks aren't in them. Nothing scored.", '']
@@ -445,7 +517,17 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
         md += ["No climbs with the forecast's wind and layer at them (the day files hold no sampled u, v, W*, zi per climb).", '']
         return _finish(out, md, res)
     T = terrain or Terrain(os.environ.get('CALIB_TERRAIN_CACHE') or os.path.join(out, 'terrain'))
-    F = featurize(pts, T)
+    try:
+        st = site_triggers(pts, G, os.path.join(out, 'trigger-work'))
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as ex:
+        st = {'ran': False, 'error': str(ex)[-300:]}
+    n_grid = sum((1 for p in pts if p.get('box')))
+    site = st.get('ran') and st['points'] >= SITE_MIN * max(1, n_grid) and (st['points'] >= MIN_ROWS)
+    res['site'] = {**st, 'used': bool(site), 'grid_points': n_grid}
+    how = f"{st['points']} of {n_grid} points with grids ({st['tiles']} tiles, {st['failed']} that wouldn't load, {st['days_left_out']} days left out for the tile budget)" if st.get('ran') else f"not run ({st.get('error') or 'no node, script or grids'})"
+    md += ["The site's trigger: " + how + ('; trained on it.' if site else '; too few: the terrain-only copy instead.'), '']
+    F = featurize(pts, T, site=bool(site))
+    score_key, feats = ('site', FEATURES_SITE) if site else ('trig', FEATURES)
     res['points'] = res['rows'] = len(F)
     n_pos = sum((r['label'] for r in F))
     src = {'grid': sum((1 for p in pts if p['e']['from'] == 'grid')), 'probe': sum((1 for p in pts if p['e']['from'] == 'probe'))}
@@ -453,12 +535,18 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
     if not F:
         md += ["No terrain (the tiles couldn't be fetched and no cache): nothing scored.", '']
         return _finish(out, md, res)
-    tab = score_table(F, 'trig', groups_of(F))
+    tab = score_table(F, score_key, groups_of(F))
     res['scores'] = tab
-    md += ["## The site's trigger score against the climbs flown", '', "| Group | points | climbs | AUC | top decile: climbs' share, base rate, lift |", '|---|---|---|---|---|']
+    md += ["## The site's trigger score against the climbs flown" + (" (the map's)" if site else ' (the terrain-only copy)'), '', "| Group | points | climbs | AUC | top decile: climbs' share, base rate, lift |", '|---|---|---|---|---|']
     for r in tab:
         t = r['top']
         md.append(f"| {r['group']} | {r['n']} | {r['climbs']} | {_f(r['auc'], 3)} | {t['share']:.2f}, {t['base']:.2f}, {_f(t['lift'], 2)} |")
+    if site:
+        res['scores_terrain_only'] = tt = score_table(F, 'trig', {'all': lambda r: True, 'flat': lambda r: r['flat'] > 0.5, 'hills/mountains': lambda r: r['flat'] <= 0.5})
+        md += ['', 'The terrain-only copy on the same points: ' + '; '.join((f"{r['group']} AUC {_f(r['auc'], 3)}, lift {_f(r['top']['lift'], 2)}" for r in tt)) + '.', '']
+        from layer1 import auc as _auc
+        y = [r['label'] for r in F]
+        md += ["Each of the map's terms alone (AUC; below 0.5: the climbs where it's lower): " + ', '.join((f'{k} {_f(_auc([r[k] if r.get(k) is not None else 0.0 for r in F], y), 3)}' for k in SITE_PARTS)) + '.', '']
     sp = spacing_rows(pts)
     if sp:
         q = lambda xs, p: float(np.percentile(xs, p))
@@ -469,7 +557,7 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
         if st_:
             md += [f"Climb flown / the placed core's peak (CORE {T3['peak']} × the model's W*): median {math.exp(q(st_, 50)):.2f} (IQR {math.exp(q(st_, 25)):.2f}–{math.exp(q(st_, 75)):.2f}); layer 1's W* correction is what moves this.", '']
         res['spacing'] = {'n': len(sp), 'flown_med_km': q(fl, 50), 'placed_med_km': q(pl, 50), 'ratio_med': math.exp(q(ratio, 50))}
-    f = fit(F)
+    f = fit(F, feats, score_key)
     md += ['## P(climb | cell, hour): the trees against the score', '']
     if not f:
         md += [f"Too few points ({len(F)} on {len({r['date'] for r in F})} days) for a model.", '']

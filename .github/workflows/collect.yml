@@ -139,18 +139,14 @@ jobs:
       chain: ${{ steps.opts.outputs.chain }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            /calib/
-            /pipeline/*.py
-            /pipeline/native/
-          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: calib/requirements.txt
-      - run: pip install -q -r calib/requirements.txt
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
       - name: Check the key
         run: |
           [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
@@ -185,6 +181,12 @@ jobs:
           elif [ "$rc" != 0 ]; then tail -n 2 /tmp/fetch.err; echo "::error::couldn't fetch the data (exit $rc)"; exit 1; fi
           echo "base=$(cat /tmp/base)" >> "$GITHUB_OUTPUT"
           python3 calib/state.py decrypt calib/seed.enc /tmp/seed.json.gz
+      - name: Fingerprint
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/plan
+          python3 calib/fingerprint.py ensure --table /tmp/data/fingerprints.json --out /tmp/plan/fingerprints.json --work /tmp/fpwork \
+            2>> /tmp/fp.err || { echo "::warning::no fingerprint for this code (its stamp matches only itself)"; echo '{}' > /tmp/plan/fingerprints.json; }
       - name: Corrections
         id: corr
         continue-on-error: true
@@ -202,6 +204,7 @@ jobs:
           DAYS: ${{ steps.opts.outputs.days }}
           NEW: ${{ steps.opts.outputs.new }}
           CORR: ${{ steps.corr.outputs.file }}
+          CALIB_FINGERPRINTS: /tmp/data/fingerprints.json:/tmp/plan/fingerprints.json
         run: |
           mkdir -p /tmp/plan/logs
           extra=""
@@ -235,6 +238,7 @@ jobs:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
       WORKERS: "4"
       SHARD: ${{ matrix.shard }}
+      CALIB_FINGERPRINTS: /tmp/plan/fingerprints.json
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -334,7 +338,9 @@ jobs:
         id: merge
         env:
           STALE: ${{ needs.gate.outputs.stale }}
+          CALIB_FINGERPRINTS: /tmp/data/fingerprints.json:/tmp/plan/fingerprints.json
         run: |
+          [ -f /tmp/plan/fingerprints.json ] && python3 calib/fingerprint.py merge /tmp/plan/fingerprints.json /tmp/data/fingerprints.json
           python3 calib/batch.py merge --data /tmp/data --plan /tmp/plan --built /tmp/built --daily "$DAILY_REQUESTS" --keep-months "${STALE:-[]}" \
             2>> "/tmp/data/logs/stderr-$GITHUB_RUN_ID-merge.log" || { echo "::error::merge failed (details in the encrypted log)"; exit 1; }
       - name: Report
