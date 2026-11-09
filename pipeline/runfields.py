@@ -50,6 +50,26 @@ class _Decoded:
         if n not in self:
             raise KeyError(n)
         return self.get(n)
+OVERVIEW_BLOCK = 64
+OVERVIEW_REACH = 3
+
+def _overview_again(q, enc, fine, changed):
+    if any((n not in q for n in sky.FIELDS)):
+        return sky.cloud_overview(q, enc, fine)
+    ny, nx = changed.shape
+    out = {n: np.array(q[n], copy=True) for n in sky.FIELDS}
+    B, R, M = (OVERVIEW_BLOCK, OVERVIEW_REACH, OVERVIEW_REACH + 1)
+    grids = {k: v for k, v in q.items() if getattr(v, 'shape', None) == (ny, nx)}
+    for y0 in range(0, ny, B):
+        for x0 in range(0, nx, B):
+            y1, x1 = (min(ny, y0 + B), min(nx, x0 + B))
+            if not changed[max(0, y0 - R):y1 + R, max(0, x0 - R):x1 + R].any():
+                continue
+            wy0, wy1, wx0, wx1 = (max(0, y0 - M), min(ny, y1 + M), max(0, x0 - M), min(nx, x1 + M))
+            ov = sky.cloud_overview({k: v[wy0:wy1, wx0:wx1] for k, v in grids.items()}, enc, fine)
+            for k, a in ov.items():
+                out[k][y0:y1, x0:x1] = a[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0]
+    return out
 
 def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
     if 'wstar' not in q or 'elevation' not in q:
@@ -67,8 +87,25 @@ def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
     dec = _Decoded(q, enc)
     bars = bands is not None and 'cuclass' in q
     r = runwave.run_fields(dec, grid, lee, ridge, bands, bars=bars)
+    fine = float(grid['step']) <= sky.FINE_STEP
     if bars and 'bar_own' in r:
-        wb = wavebars.apply(q['cuclass'], dec, r['bar_own'], grid, float(grid['step']) <= sky.FINE_STEP)
+        low = wavebars.cloud(dec, r['bar_own'], grid)
+        if low is not None:
+            low0 = dec.get('cloudlow')
+            gain = np.where(np.isfinite(low0), low - np.nan_to_num(low0, nan=0.0), 0.0) > 0
+            q = dict(q)
+            new = {'cloudlow': low}
+            if dec.get('cloud') is not None:
+                new['cloud'] = np.fmax(dec.get('cloud'), low)
+            if dec.get('sun') is not None:
+                new['sun'] = dec.get('sun') * (1 - wavebars.SUN_LOSS * np.clip((low - np.nan_to_num(low0, nan=0.0)) / 100, 0, 1))
+            for n, v in new.items():
+                q[n] = out[n] = np.where(gain, _encode(v, *enc[n]), q[n]).astype(np.uint8)
+            ov = _overview_again(q, enc, fine, gain)
+            q.update(ov)
+            out.update(ov)
+            dec = _Decoded(q, enc)
+        wb = wavebars.apply(q['cuclass'], dec, r['bar_own'], grid, fine)
         if wb is not None:
             out['cuclass'] = wb
     put('rrun', r['ridge'])

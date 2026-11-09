@@ -15,6 +15,9 @@ WIND = 7.0
 LIFT = 0.12
 CARRY, REACH, STEP = (90000.0, 150000.0, 10000.0)
 M_DEG = 111320.0
+ML_LEVELS = (600, 1000, 1500, 2000)
+CLOUD_K, CLOUD_X0, CLOUD_W, CLOUD_MAX = (1.5, -0.3, 0.7, 0.95)
+SUN_LOSS = 0.5
 
 def deck_top(ceiltop, ceil, cubase, cudepth, zi, zs):
     ct = np.where(np.isfinite(ceiltop) & np.isfinite(ceil) & (ceil < CEIL_NONE_JS), ceiltop, np.nan)
@@ -47,11 +50,24 @@ def bars(cls, wstar, low, trap, lam, u, v, own, north, step):
     lo = low(iy, ix) if callable(low) else low[iy, ix]
     ok = ~np.isin(c0, (sky.NONE, sky.BLUE)) | (lo >= LOW)
     iy, ix = (iy[ok], ix[ok])
+    best = carried(own, u, v, iy, ix, north, step)
+    out = np.zeros_like(cand)
+    out[iy[best >= LIFT], ix[best >= LIFT]] = True
+    return out
+
+def riding(trap, lam, u, v, own):
+    tt = np.where(trap > 1, trap / 100.0, trap)
+    with np.errstate(invalid='ignore'):
+        return (tt >= TRAP) & (lam >= LAM[0]) & (lam <= LAM[1]) & (np.hypot(u, v) >= WIND) & np.isfinite(own)
+
+def carried(own, u, v, iy, ix, north, step):
+    ny, nx = own.shape
     best = own[iy, ix].copy()
-    uu, vv, UU = (u[iy, ix], v[iy, ix], U[iy, ix])
+    uu, vv = (u[iy, ix], v[iy, ix])
+    UU = np.hypot(uu, vv)
     lat = north - iy * step
-    kx = np.where(UU > 0, -uu / UU / (M_DEG * np.cos(lat * math.pi / 180) * step), 0.0)
-    ky = np.where(UU > 0, vv / UU / (M_DEG * step), 0.0)
+    kx = np.where(UU > 0, -uu / np.where(UU > 0, UU, 1) / (M_DEG * np.cos(lat * math.pi / 180) * step), 0.0)
+    ky = np.where(UU > 0, vv / np.where(UU > 0, UU, 1) / (M_DEG * step), 0.0)
     s = STEP
     while s <= REACH:
         jx, jy = (_js_round(ix + kx * s).astype(np.int64), _js_round(iy + ky * s).astype(np.int64))
@@ -61,9 +77,7 @@ def bars(cls, wstar, low, trap, lam, u, v, own, north, step):
         k = np.isfinite(w)
         best[k] = np.maximum(best[k], w[k] * f)
         s += STEP
-    out = np.zeros_like(cand)
-    out[iy[best >= LIFT], ix[best >= LIFT]] = True
-    return out
+    return best
 
 def median_at(a, iy, ix):
     p = np.pad(a, 1, constant_values=np.nan)
@@ -88,3 +102,47 @@ def apply(cuclass, dec, own, grid, fine):
     if not b.any():
         return None
     return np.where(b, CODE, cuclass).astype(np.uint8)
+
+def ml_spread(dpd, zi):
+    zi = np.asarray(zi, np.float64)
+    best, at = (np.full(zi.shape, np.nan), np.full(zi.shape, float(ML_LEVELS[0])))
+    zz = np.nan_to_num(zi, nan=-np.inf)
+    for m in ML_LEVELS:
+        d = dpd.get(m)
+        if d is None:
+            continue
+        d = np.asarray(d, np.float64)
+        ok = np.isfinite(d) & (~np.isfinite(best) | (zz >= m))
+        best, at = (np.where(ok, d, best), np.where(ok, float(m), at))
+    with np.errstate(invalid='ignore'):
+        return np.maximum(0.0, best - 8 * np.maximum(0.0, np.nan_to_num(zi, nan=0.0) - at) / 1000)
+
+def cover(lift, spread):
+    return CLOUD_MAX / (1 + np.exp(-(CLOUD_K * lift - spread - CLOUD_X0) / CLOUD_W))
+
+def cloud(dec, own, grid):
+    need = ('wtrap', 'wlam', 'u_wl', 'v_wl', 'cloudlow', 'zi')
+    if any((dec.get(n) is None for n in need)):
+        return None
+    u, v = (np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64))
+    ws = dec.get('wstar')
+    with np.errstate(invalid='ignore'):
+        cand = riding(np.asarray(dec.get('wtrap'), np.float64), np.asarray(dec.get('wlam'), np.float64), u, v, own)
+        if ws is not None:
+            cand &= ~(np.nan_to_num(np.asarray(ws, np.float64), nan=-1.0) >= WSTAR)
+    low = np.asarray(dec.get('cloudlow'), np.float64)
+    cand &= np.isfinite(low)
+    iy, ix = np.nonzero(cand)
+    if not iy.size:
+        return None
+    lift = carried(own, u, v, iy, ix, float(grid['north']), float(grid['step']))
+    at = lambda a: None if a is None else np.asarray(a, np.float64)[iy, ix]
+    spread = ml_spread({m: at(dec.get(f'dpd_g{m}')) for m in ML_LEVELS}, at(dec.get('zi')))
+    with np.errstate(invalid='ignore'):
+        c = np.where((lift >= LIFT) & np.isfinite(spread), 100 * cover(lift, np.nan_to_num(spread, nan=99.0)), 0.0)
+        gain = c > low[iy, ix]
+    if not gain.any():
+        return None
+    out = low.copy()
+    out[iy[gain], ix[gain]] = c[gain]
+    return out
