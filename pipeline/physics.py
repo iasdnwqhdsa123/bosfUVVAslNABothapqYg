@@ -503,6 +503,20 @@ def ceiling_agl(ceil_msl, zs, inside):
     agl = np.clip(np.nan_to_num(ceil_msl, nan=0) - zs, 0, CEIL_NONE)
     return np.where(inside, np.where(has, agl, CEIL_NONE), np.nan)
 RH_CLOUD = 92.0
+LOWBASE_LEVELS = (600, 1000, 1500, 2000, 3000)
+LOWBASE_K = 175.0
+LOWBASE_DPD_MAX = 4.0
+LOWBASE_CEIL = 2500.0
+LOWBASE_COVER = 10.0
+
+def low_deck_base(dpd, ceil):
+    d = np.stack([np.asarray(dpd[m], np.float32) for m in LOWBASE_LEVELS])
+    m = np.asarray(LOWBASE_LEVELS, np.float32)[:, None, None]
+    with np.errstate(invalid='ignore'):
+        base = np.nanmin(np.where(np.isfinite(d), m + LOWBASE_K * d, np.inf), axis=0)
+        near = np.nanmin(np.where(np.isfinite(d), d, np.inf), axis=0) <= LOWBASE_DPD_MAX
+        low_ceil = np.isfinite(ceil) & (ceil < LOWBASE_CEIL)
+    return np.where(near & np.isfinite(base) & ~low_ceil, base, np.nan).astype(np.float32)
 
 def ceiling_from_humidity(prof: Profile, tcc=None, zmax_agl=5000.0):
     rh = rh_from_td(prof.t, prof.td)

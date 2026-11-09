@@ -134,7 +134,7 @@ WAVE_ALTS_FT = [8000, 10000, 12000, 14000, 18000, 24000]
 SAMPLED_FIELDS = {f'wv{ft}' for ft in WAVE_ALTS_FT} | {'wlow', 'vis', 'cucover', 'cuwide', 'cueff'}
 PEAK_FIELDS = {'overdev', 'refc', 'showers', 'wrun', 'wtop'}
 AT_PEAK = {'wrunz': 'wrun'}
-ENC = {'wstar': (0, 6, None), 'zi': (0, 6000, None), 'depth': (0, 6000, None), 'cubase': (0, 7000, None), 'cudepth': (0, 12000, 'sqrt'), 'blapse': (0, 15, None), 'twidth': (0, 1000, None), 'overdev': (0, 100, None), 'bs': (0, P.BS_MAX, None), 'cape': (0, 6000, 'sqrt'), 'rain': (0, 50, 'sqrt'), 'showers': (0, 1, None), 'sun': (0, 1.2, None), 'cloud': (0, 100, None), 'cloudlow': (0, 100, None), 'cloudmid': (0, 100, None), 'cloudhigh': (0, 100, None), 't2': (-40, 50, None), 'td2': (-45, 35, None), 'sst': (-2, 36, None), 'snowd': (0, 3, 'sqrt'), 'soilm': (0, 1, None), 'mslp': (950, 1060, None), 'heat': (0, 800, None), 'densalt': (-1000, 7000, None), 'gust': (0, 50, None), 'wavemax': (0, 8, None), 'wavemaxz': (0, 12000, None), 'nlow': (0, 0.04, None), 'wlow': (-4, 4, None), 'wtrap': (0, 100, None), 'wlam': (0, 60000, None), 'conv': (-2, 2, None), 'sink': (0, 6, None), 'sinkth': (0, 3, None), 'sinkby': (0, 254, None), 'ridge': (0, 4, None), 'bumpy': (0, 1, None), 'pm25': (0, 300, 'sqrt'), 'elevation': (-100, 6000, None), 'ceil': (0, P.CEIL_NONE, 'sqrt'), 'vis': (0, 16100, 'sqrt'), 'fltcat': (0, 254, None), 'ptype': (0, 254, None), 'slr': (P.SLR_RANGE[0], P.SLR_RANGE[1], None), 'snowshare': (0, 1, None), 'frzl': (-100, 6500, None), 'icing': (0, 100, None), 'icebase': (0, 8000, None), 'icetop': (0, 8000, None), 'turb': (0, 25, None), 'turbz': (0, 11000, None), 'turbbase': (0, 11000, None), 'turbtop': (0, 11000, None), 'llws': (0, 40, None), 'ctop': (0, 16000, None), 'refc': (0, 75, None), 'ceiltop': (0, 16000, None), 'accas': (0, 100, None), 'cuclass': (0, 254, None), 'cusky': (0, 254, None), 'cucover': (0, 1, None), 'cuwide': (0, 5, None), 'cueff': (0, 100, None), 'u_cuw': (-60, 60, None), 'v_cuw': (-60, 60, None), 'curh': (0, 1, None), 'u_wl': (-60, 60, None), 'v_wl': (-60, 60, None), 'u_twt': (-60, 60, None), 'v_twt': (-60, 60, None), 'u_twa': (-60, 60, None), 'v_twa': (-60, 60, None), 'rrun': (0, 8, 'sqrt'), 'wrun': (0, 8, 'sqrt'), 'wrunz': (0, 12700, None), 'crest': (-2540, 2540, None), 'wtop': (0, (254 * 0.26 ** 0.5 / 45.5) ** 2, 'sqrt'), 'rrunf': (-0.5, 0.5, None), 'wrunf': (-0.5, 0.5, None), 'cshade': (0, 1, None), 'cthin': (0, 1, None), 'csun': (0, 1.2, None)}
+ENC = {'wstar': (0, 6, None), 'zi': (0, 6000, None), 'depth': (0, 6000, None), 'cubase': (0, 7000, None), 'cudepth': (0, 12000, 'sqrt'), 'blapse': (0, 15, None), 'twidth': (0, 1000, None), 'overdev': (0, 100, None), 'bs': (0, P.BS_MAX, None), 'cape': (0, 6000, 'sqrt'), 'rain': (0, 50, 'sqrt'), 'showers': (0, 1, None), 'sun': (0, 1.2, None), 'cloud': (0, 100, None), 'cloudlow': (0, 100, None), 'cloudmid': (0, 100, None), 'cloudhigh': (0, 100, None), 't2': (-40, 50, None), 'td2': (-45, 35, None), 'sst': (-2, 36, None), 'snowd': (0, 3, 'sqrt'), 'soilm': (0, 1, None), 'mslp': (950, 1060, None), 'heat': (0, 800, None), 'densalt': (-1000, 7000, None), 'gust': (0, 50, None), 'wavemax': (0, 8, None), 'wavemaxz': (0, 12000, None), 'nlow': (0, 0.04, None), 'wlow': (-4, 4, None), 'wtrap': (0, 100, None), 'wlam': (0, 60000, None), 'conv': (-2, 2, None), 'sink': (0, 6, None), 'sinkth': (0, 3, None), 'sinkby': (0, 254, None), 'ridge': (0, 4, None), 'bumpy': (0, 1, None), 'pm25': (0, 300, 'sqrt'), 'elevation': (-100, 6000, None), 'ceil': (0, P.CEIL_NONE, 'sqrt'), 'vis': (0, 16100, 'sqrt'), 'fltcat': (0, 254, None), 'ptype': (0, 254, None), 'slr': (P.SLR_RANGE[0], P.SLR_RANGE[1], None), 'snowshare': (0, 1, None), 'frzl': (-100, 6500, None), 'icing': (0, 100, None), 'icebase': (0, 8000, None), 'icetop': (0, 8000, None), 'turb': (0, 25, None), 'turbz': (0, 11000, None), 'turbbase': (0, 11000, None), 'turbtop': (0, 11000, None), 'llws': (0, 40, None), 'ctop': (0, 16000, None), 'refc': (0, 75, None), 'lowbase': (0, 6000, None), 'ceiltop': (0, 16000, None), 'accas': (0, 100, None), 'cuclass': (0, 254, None), 'cusky': (0, 254, None), 'cucover': (0, 1, None), 'cuwide': (0, 5, None), 'cueff': (0, 100, None), 'u_cuw': (-60, 60, None), 'v_cuw': (-60, 60, None), 'curh': (0, 1, None), 'u_wl': (-60, 60, None), 'v_wl': (-60, 60, None), 'u_twt': (-60, 60, None), 'v_twt': (-60, 60, None), 'u_twa': (-60, 60, None), 'v_twa': (-60, 60, None), 'rrun': (0, 8, 'sqrt'), 'wrun': (0, 8, 'sqrt'), 'wrunz': (0, 12700, None), 'crest': (-2540, 2540, None), 'wtop': (0, (254 * 0.26 ** 0.5 / 45.5) ** 2, 'sqrt'), 'rrunf': (-0.5, 0.5, None), 'wrunf': (-0.5, 0.5, None), 'cshade': (0, 1, None), 'cthin': (0, 1, None), 'csun': (0, 1.2, None)}
 for ft in WAVE_ALTS_FT:
     ENC[f'wv{ft}'] = (-8, 8, None)
     ENC[f'dpd{ft}'] = (0, 40, None)
@@ -849,6 +849,8 @@ def general_aviation(s, lv, levels, prof, rain, grid_step, ddx, ddy, cc=None, zi
     if s.get('ctop_olr') is not None:
         ctop = np.where(np.isfinite(s['ctop_olr']), np.fmax(s['ctop_olr'], np.nan_to_num(ctop, nan=0)), ctop)
     ceiltop = P.ceiling_top(ceil, zs, zc, np.stack(cc)) if cc is not None else None
+    cloudy = np.nan_to_num(s['lcc'] if s.get('lcc') is not None else tcc if tcc is not None else np.full_like(zs, 100.0), nan=0) >= P.LOWBASE_COVER
+    lowbase = np.where(inside & cloudy, P.low_deck_base({m: np.maximum(0, np.subtract(*prof.at(zs + m, 't', 'td'))) for m in P.LOWBASE_LEVELS}, ceil), np.nan)
     refc = radar(s, rain, grid_step)
     order = np.argsort(-np.asarray(levels))
     z_l, t_l = (lv['z'][order], lv['t'][order])
@@ -869,7 +871,7 @@ def general_aviation(s, lv, levels, prof, rain, grid_step, ddx, ddy, cc=None, zi
     slr = np.full(zs.shape, np.nan, np.float32)
     if snowing.any():
         slr = np.where(snowing, P.kuchera_ratio(prof), np.nan)
-    return {'ceil': ceil, 'vis': vis, 'fltcat': P.flight_category(ceil, vis), 'ptype': nan(ptype), 'slr': slr, 'refc': nan(refc), 'snowshare': None if share is None else np.where(snowing, share, np.nan), 'frzl': nan(frzl), 'ctop': nan(ctop), 'ceiltop': None if ceiltop is None else nan(ceiltop), 'icing': nan(icing), 'icebase': icebase, 'icetop': icetop, 'turb': nan(turb), 'turbz': np.where(turb >= 2, turbz, np.nan), 'turbbase': turbbase, 'turbtop': turbtop, 'llws': nan(llws)}
+    return {'ceil': ceil, 'vis': vis, 'fltcat': P.flight_category(ceil, vis), 'ptype': nan(ptype), 'slr': slr, 'refc': nan(refc), 'snowshare': None if share is None else np.where(snowing, share, np.nan), 'frzl': nan(frzl), 'ctop': nan(ctop), 'ceiltop': None if ceiltop is None else nan(ceiltop), 'lowbase': lowbase, 'icing': nan(icing), 'icebase': icebase, 'icetop': icetop, 'turb': nan(turb), 'turbz': np.where(turb >= 2, turbz, np.nan), 'turbbase': turbbase, 'turbtop': turbtop, 'llws': nan(llws)}
 
 class Blend:
     __slots__ = ('m0', 'm1', 'a', 'fh0', 'fh1', 'nearest')
@@ -1435,7 +1437,7 @@ def sounding_grid(src, parts, windows, shape, q):
         out.append(np.ascontiguousarray(q[n][::S, ::S]) if n in q else np.full(out[0].shape, 255, np.uint8))
     return np.stack(out)
 _CTX: dict = {}
-HOURS_VERSION = 25
+HOURS_VERSION = 26
 
 def _job_hour(job):
     run, fh = job if isinstance(job, tuple) else (_CTX['run'], job)
@@ -2128,7 +2130,7 @@ def hour_token(model, run_id, stamp, secret=None):
         _MASKED.add(tok)
     return tok
 _MASKED: set = set()
-FREE_FIELDS = {'wstar', 'depth', 'zi', 'cubase', 'cudepth', 'overdev', 'rain', 'showers', 'sun', 'ptype', 'cape', 'bs', 'densalt', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'accas', *(f'cc{p}' for p in P.CC_LEVELS), 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'bumpy', 'ceil', 'vis', 'fltcat', *sky.FIELDS, 't2', 'td2', 'sst', 'mslp', 'gust', 'pm25', *(f'{c}_a{ft}' for ft in WIND_ALTS_FT for c in ('u', 'v'))}
+FREE_FIELDS = {'wstar', 'depth', 'zi', 'cubase', 'cudepth', 'overdev', 'rain', 'showers', 'sun', 'ptype', 'cape', 'bs', 'densalt', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'accas', *(f'cc{p}' for p in P.CC_LEVELS), 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'bumpy', 'ceil', 'lowbase', 'vis', 'fltcat', *sky.FIELDS, 't2', 'td2', 'sst', 'mslp', 'gust', 'pm25', *(f'{c}_a{ft}' for ft in WIND_ALTS_FT for c in ('u', 'v'))}
 NOW_AHEAD = timedelta(hours=24) + FREE_SLACK
 NOW_FIELDS = FREE_FIELDS | {'twidth', 'sinkth', 'heat', 'soilm', 'ctop', 'ceiltop', 'wtrap', 'wlam', 'u_wl', 'v_wl', 'u_cuw', 'v_cuw', 'curh', 'thml', 'thx', *(f'{k}_m{dz}' for dz in ML_TOP_DZ for k in ('dth', 'q')), *(f'wv{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f'dpd{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f't{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f'{c}_g{m}' for m in (100, 300, 600, 1000, 1500, 2000, 3000) for c in ('u', 'v')), *(f'dpd_g{m}' for m in (600, 1000, 1500, 2000, 3000)), *(f'n_g{m}' for m in (750, 1250, 1750, 2500, 3500, 5000)), *(f'{c}_a{ft}' for ft in (2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000) for c in ('u', 'v'))}
 
