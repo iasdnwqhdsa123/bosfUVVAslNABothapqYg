@@ -150,6 +150,7 @@ for p in P.CC_LEVELS:
     ENC[f'cc{p}'] = (0, 100, None)
 WIND_AGL_M = [100, 300]
 COL_AGL_M = [600, 1000, 1500, 2000, 3000]
+COL_WIND_M = sorted(COL_AGL_M + [2500])
 STAB_AGL_M = [500, 1000, 1500, 2000, 3000, 4000, 6000]
 STAB_NAMES = [f'n_g{(a + b) // 2}' for a, b in zip(STAB_AGL_M, STAB_AGL_M[1:])]
 for name in STAB_NAMES:
@@ -157,7 +158,7 @@ for name in STAB_NAMES:
 for m in COL_AGL_M:
     ENC[f'dpd_g{m}'] = (0, 40, None)
 WIND_ENC, WIND_ENC_ALOFT, WIND_ALOFT_FT = ((-60, 60, None), (-100, 100, None), 12000)
-for key in ['sfc', 'blavg', 'bltop'] + [f'a{ft}' for ft in WIND_ALTS_FT] + [f'g{m}' for m in WIND_AGL_M + COL_AGL_M]:
+for key in ['sfc', 'blavg', 'bltop'] + [f'a{ft}' for ft in WIND_ALTS_FT] + [f'g{m}' for m in WIND_AGL_M + COL_WIND_M]:
     enc = WIND_ENC_ALOFT if key.startswith('a') and int(key[1:]) >= WIND_ALOFT_FT else WIND_ENC
     ENC[f'u_{key}'] = enc
     ENC[f'v_{key}'] = enc
@@ -732,11 +733,12 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     out['wlam'] = np.where(trapping, P.carry_wavelength(score, wavelen, ul, vl, grid_step, lat2d), np.nan)
     out['u_wl'], out['v_wl'] = (np.where(trapping | hilly, a, np.nan) for a in (ul, vl))
     col = trapping | hilly
-    for m in COL_AGL_M:
+    for m in COL_WIND_M:
         u, v, t, td = prof.at(zs + m, 'u', 'v', 't', 'td')
         fade = np.clip(1 - m / pump['depth'], 0, 1)
         out[f'u_g{m}'], out[f'v_g{m}'] = (np.where(col, a + fade * pump[c], np.nan) for a, c in ((u, 'u'), (v, 'v')))
-        out[f'dpd_g{m}'] = np.where(col, np.maximum(0, t - td), np.nan)
+        if m in COL_AGL_M:
+            out[f'dpd_g{m}'] = np.where(col, np.maximum(0, t - td), np.nan)
     th = [P.theta(*prof.at(zs + m, 't', 'lnp')) for m in STAB_AGL_M]
     for name, a, b, tha, thb in zip(STAB_NAMES, STAB_AGL_M, STAB_AGL_M[1:], th, th[1:]):
         n2 = P.G / (0.5 * (tha + thb)) * (thb - tha) / (b - a)
@@ -1437,7 +1439,7 @@ def sounding_grid(src, parts, windows, shape, q):
         out.append(np.ascontiguousarray(q[n][::S, ::S]) if n in q else np.full(out[0].shape, 255, np.uint8))
     return np.stack(out)
 _CTX: dict = {}
-HOURS_VERSION = 26
+HOURS_VERSION = 27
 
 def _job_hour(job):
     run, fh = job if isinstance(job, tuple) else (_CTX['run'], job)
@@ -2132,7 +2134,7 @@ def hour_token(model, run_id, stamp, secret=None):
 _MASKED: set = set()
 FREE_FIELDS = {'wstar', 'depth', 'zi', 'cubase', 'cudepth', 'overdev', 'rain', 'showers', 'sun', 'ptype', 'cape', 'bs', 'densalt', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'accas', *(f'cc{p}' for p in P.CC_LEVELS), 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'bumpy', 'ceil', 'lowbase', 'vis', 'fltcat', *sky.FIELDS, 't2', 'td2', 'sst', 'mslp', 'gust', 'pm25', *(f'{c}_a{ft}' for ft in WIND_ALTS_FT for c in ('u', 'v'))}
 NOW_AHEAD = timedelta(hours=24) + FREE_SLACK
-NOW_FIELDS = FREE_FIELDS | {'twidth', 'sinkth', 'heat', 'soilm', 'ctop', 'ceiltop', 'wtrap', 'wlam', 'u_wl', 'v_wl', 'u_cuw', 'v_cuw', 'curh', 'thml', 'thx', *(f'{k}_m{dz}' for dz in ML_TOP_DZ for k in ('dth', 'q')), *(f'wv{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f'dpd{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f't{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f'{c}_g{m}' for m in (100, 300, 600, 1000, 1500, 2000, 3000) for c in ('u', 'v')), *(f'dpd_g{m}' for m in (600, 1000, 1500, 2000, 3000)), *(f'n_g{m}' for m in (750, 1250, 1750, 2500, 3500, 5000)), *(f'{c}_a{ft}' for ft in (2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000) for c in ('u', 'v'))}
+NOW_FIELDS = FREE_FIELDS | {'twidth', 'sinkth', 'heat', 'soilm', 'ctop', 'ceiltop', 'wtrap', 'wlam', 'u_wl', 'v_wl', 'u_cuw', 'v_cuw', 'curh', 'thml', 'thx', *(f'{k}_m{dz}' for dz in ML_TOP_DZ for k in ('dth', 'q')), *(f'wv{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f'dpd{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f't{ft}' for ft in (8000, 10000, 12000, 14000, 18000, 24000)), *(f'{c}_g{m}' for m in (100, 300, 600, 1000, 1500, 2000, 2500, 3000) for c in ('u', 'v')), *(f'dpd_g{m}' for m in (600, 1000, 1500, 2000, 3000)), *(f'n_g{m}' for m in (750, 1250, 1750, 2500, 3500, 5000)), *(f'{c}_a{ft}' for ft in (2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000) for c in ('u', 'v'))}
 
 def write_free(out, model, now=None, workers=1):
     if model not in FREE_MODELS:
