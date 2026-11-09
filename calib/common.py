@@ -243,7 +243,7 @@ def load_fingerprints(*paths: str) -> None:
             continue
         for m, e in (t or {}).items():
             FINGERPRINTS.setdefault(m, {}).update(e or {})
-load_fingerprints(os.path.join(HERE, 'fingerprints.json'), *[p for p in os.environ.get('CALIB_FINGERPRINTS', '').split(':') if p])
+load_fingerprints(*[p for p in os.environ.get('CALIB_FINGERPRINTS', '').split(':') if p], os.path.join(HERE, 'fingerprints.json'))
 
 def physics_matches(stamp: str | None, macro: str='US') -> bool:
     if stamp is None:
