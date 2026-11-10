@@ -112,8 +112,9 @@ def deck_merge(lo, mi, c, cc, split=True):
     mi = np.where(ok & high_reach & (deck >= DECK_SAME * mi), 0.0, mi)
     lo = np.where(ok, np.maximum(lo, deck), lo)
     return (lo, mi)
+CU_DECK = (300.0, 600.0)
 
-def sky_layers(low, mid, high, total, ceil, sun, cc=None):
+def sky_layers(low, mid, high, total, ceil, sun, cc=None, cu=None, cubase=None):
     split = np.isfinite(low) | np.isfinite(mid) | np.isfinite(high)
     c = np.where(np.isfinite(ceil) & (ceil < CEIL_NONE_JS), ceil, np.nan)
     tot = np.nan_to_num(total, nan=0.0)
@@ -124,6 +125,10 @@ def sky_layers(low, mid, high, total, ceil, sun, cc=None):
         lo, mi = deck_merge(lo, mi, c, cc, split)
     up = split & has_c & (lo >= BROKEN) & (mi < BROKEN) & (c >= LOW_TOP * 1.25)
     dn = split & has_c & (mi >= BROKEN) & (lo < BROKEN) & (c < LOW_TOP) & ~up
+    if cu is not None and cubase is not None:
+        with np.errstate(invalid='ignore'):
+            cud = (cu >= 2) & (cu < CB) & (cubase > 0) & (c >= cubase - CU_DECK[0]) & (c <= cubase + CU_DECK[1])
+        dn |= split & has_c & (mi >= BROKEN) & (lo < BROKEN) & ~up & cud
     lo, mi = (np.where(dn, mi, np.where(up, 0.0, lo)), np.where(up, lo, np.where(dn, 0.0, mi)))
     hi = np.where(split, np.nan_to_num(high, nan=0.0), np.where(~has_c, tot, 0.0))
     thick = np.where(np.isfinite(sun), sun < THICK_SUN, (mi >= BROKEN) & (hi >= BROKEN))
@@ -180,7 +185,7 @@ def classify(v):
     score = cu_score(w, d, od)
     cu = js_round(np.nan_to_num(score, nan=0.0))
     cc = np.stack([v[n] for n in CC_NAMES]) if all((n in v for n in CC_NAMES)) else None
-    c, lo, mi, hi, thick = sky_layers(low, mid, high, total, ceil, sun, cc)
+    c, lo, mi, hi, thick = sky_layers(low, mid, high, total, ceil, sun, cc, cu, v['cubase'])
     upper = hi
     deck = deck_of(mi, upper, thick, sun)
     ws = np.nan_to_num(w, nan=0.0)
