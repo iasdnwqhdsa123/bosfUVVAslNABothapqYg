@@ -2076,14 +2076,18 @@ def write_points(rdir, hours_dir, times, elev_time, only=None, workers=1, block=
 def write_soundings(rdir, hours_dir, times, src, workers=1, block=SND_BLOCK):
     if not src.snd_levels or not times:
         return None
-    have = []
+    shapes = {}
     for t in sorted(times):
         with np.load(os.path.join(hours_dir, f'{t:%Y%m%d%H}.npz')) as h:
             if 'snd' in h.files:
-                have.append(t)
-                shape = h['snd'].shape
-    if not have:
+                shapes[t] = h['snd'].shape
+    if not shapes:
         return None
+    shape = shapes[max(shapes)]
+    have = [t for t, s in shapes.items() if s == shape]
+    old = [t for t, s in shapes.items() if s != shape]
+    if old:
+        log(f'  soundings: {len(old)} hour(s) from other levels left out ({old[0]:%d %HZ}…{old[-1]:%d %HZ})')
     nv, sy, sx = shape
     B, W = (block, block + 1)
     nby, nbx = (max(1, -(-(sy - 1) // B)), max(1, -(-(sx - 1) // B)))
