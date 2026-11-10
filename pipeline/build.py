@@ -364,6 +364,7 @@ CU_LOW_BROKEN = 56.25
 CU_OVERSHOOT = 0.5
 CU_OVERSHOOT_MIN = 500.0
 CU_FLAT = 150.0
+BLUE_OVER_LCL = 500.0
 CU_WIND_DEPTH = 1500.0
 CU_NEAR_HPA = 75.0
 DALR = 9.8
@@ -575,6 +576,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     p_base = prof.at(zs + 2 + lcl, 'lnp')
     cu_cover = cumulus_cover(p_base, s['ps'], tops, [s.get('lcc'), s.get('mcc'), s.get('hcc')], np.stack([ccl[f'cc{p}'] for p in P.CC_LEVELS]))
     has_cu = cumulus_forms(ws, zi, lcl, cu_cover)
+    zi = np.where(~has_cu & (ws > 0.5) & (zi > lcl + BLUE_OVER_LCL), lcl + BLUE_OVER_LCL, zi)
     depth = np.where(has_cu, lcl, np.where(ws > 0, zi, 0))
     d = np.maximum(np.where(has_cu, lcl, zi), 100)
     ub, vb = P.layer_mean(prof, zs + 2, zs + 2 + d, ['u', 'v'])
@@ -1447,7 +1449,7 @@ def sounding_grid(src, parts, windows, shape, q):
         out.append(np.ascontiguousarray(q[n][::S, ::S]) if n in q else np.full(out[0].shape, 255, np.uint8))
     return np.stack(out)
 _CTX: dict = {}
-HOURS_VERSION = 27
+HOURS_VERSION = 28
 
 def _job_hour(job):
     run, fh = job if isinstance(job, tuple) else (_CTX['run'], job)
