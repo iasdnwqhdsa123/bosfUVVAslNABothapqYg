@@ -1092,7 +1092,7 @@ def cloud_top_from_olr(olr, t, z, t_hi, p_lv, p_hi):
     return (np.where(found, inside, above).astype(np.float32), tb)
 CONTRAILS = os.environ.get('CONTRAILS', '1') != '0'
 
-def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d):
+def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d, levels=None):
     if not CONTRAILS or valid is None or lv.get('cloud') is None or (s.get('hcc') is None):
         return
     try:
@@ -1101,7 +1101,7 @@ def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d):
         if fix is None:
             return
         have, rh_c = (list(lv['cloud'][0]), lv['cloud'][1])
-        lev = list(src.levels)
+        lev = list(src.levels if levels is None else levels)
         if 300 not in lev or 400 not in lev or lv.get('u') is None or (lv.get('z') is None):
             return
         i3, i4 = (lev.index(300), lev.index(400))
@@ -1214,11 +1214,16 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
             decoded[key] = [None] * len(parts) if m is None else [p(f) for f in [_decode(m, region, boxes)] for p in parts]
         return decoded[key]
     lvp = {canon: [get((gname, f'{l} mb')) for l in src.levels] for canon, gname in src.level_vars.items()}
+    keep = [k for k in range(len(src.levels)) if any((st[k][0] is not None for st in lvp.values()))]
+    if len(keep) < len(src.levels):
+        log(f'  f{fh:03d} levels left out (no messages): {[src.levels[k] for k in range(len(src.levels)) if k not in keep]}')
+        lvp = {c: [st[k] for k in keep] for c, st in lvp.items()}
+    use_levels = [src.levels[k] for k in keep]
     hip = {c: [get((src.level_vars[c], f'{l} mb')) for l in src.cloud_levels] for c in src.cloud_vars()}
     snd_extra = [l for l in src.snd_levels if l not in src.levels]
     sndp = {c: [get((src.level_vars[c], f'{l} mb')) for l in snd_extra] for c in src.snd_vars()} if snd_extra else {}
     rot = regrid_holder.get('rot')
-    levels = np.array(src.levels, dtype=np.float32)
+    levels = np.array(use_levels, dtype=np.float32)
     if src.om_extra and 'om_idx' not in regrid_holder:
         import om
         rows = om.gaussian_rows()
@@ -1236,6 +1241,9 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         for canon, stack in lvp.items():
             stack = [x[i] for x in stack]
             lv[canon] = None if any((x is None for x in stack)) else np.stack(stack)
+        for stack in lvp.values():
+            for x in stack:
+                x[i] = None
         hi = {c: [x[i] for x in v] for c, v in hip.items()}
         hi_ok = [j for j in range(len(src.cloud_levels)) if all((hi[c][j] is not None for c in hi if c != 'cc'))]
         for a, b in (('u10', 'v10'), ('uh', 'vh')):
@@ -1278,7 +1286,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
             rh_c = np.concatenate([rh_c, rh_hi])
             clw_c = None if clw_c is None else np.concatenate([clw_c, pick('clw')])
             cc_c = None if cc_c is None or any((hi['cc'][j] is None for j in hi_ok)) else np.concatenate([cc_c, pick('cc')])
-        lv['cloud'] = (np.array(list(src.levels) + [src.cloud_levels[j] for j in hi_ok], np.float32), rh_c, clw_c, cc_c)
+        lv['cloud'] = (np.array(list(use_levels) + [src.cloud_levels[j] for j in hi_ok], np.float32), rh_c, clw_c, cc_c)
         lv['cover_tops'] = src.cover_tops
         if lv.get('w') is not None and src.omega:
             lv['w'] = omega_to_w(lv['w'], lv['t'], levels[:, None, None])
@@ -1301,10 +1309,10 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         olr = s.pop('olr', None)
         if olr is not None:
             t_hi = [hi['t'][j] - 273.15 for j in hi_ok] if 't' in hi else []
-            z_olr, tb = cloud_top_from_olr(-olr, lv['t'], lv['z'], t_hi, list(src.levels), [src.cloud_levels[j] for j in hi_ok] if t_hi else [])
+            z_olr, tb = cloud_top_from_olr(-olr, lv['t'], lv['z'], t_hi, list(use_levels), [src.cloud_levels[j] for j in hi_ok] if t_hi else [])
             cold = (np.nan_to_num(s.get('tcc', 0), nan=0) >= OLR_TOP_COVER) & (tb <= s['t2'] - OLR_TOP_COLDER)
             s['ctop_olr'] = np.where(cold, z_olr, np.nan).astype(np.float32)
-        add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d)
+        add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d, use_levels)
         s['hub_m'] = src.hub_m
         s['hpbl_season'] = src.hpbl_season
         if src.derive:
@@ -1398,8 +1406,8 @@ def sounding_column(src, s, lv, levels, extra, extra_levels, lon2d, rot, origin=
         if p in rows:
             d = rows[p]
         else:
-            k = lev.index(float(p))
-            d = {c: None if lv.get(c) is None else lv[c][k] for c in ('t', 'td', 'u', 'v', 'z', 'w')}
+            k = lev.index(float(p)) if float(p) in lev else None
+            d = {c: None if k is None or lv.get(c) is None else lv[c][k] for c in ('t', 'td', 'u', 'v', 'z', 'w')}
         d = {c: thin(x) for c, x in d.items()}
         d['dpd'] = None if d['t'] is None or d['td'] is None else np.maximum(d['t'] - d['td'], 0)
         for c in out:
