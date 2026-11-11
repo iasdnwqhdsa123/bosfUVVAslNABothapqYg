@@ -1,5 +1,6 @@
 from __future__ import annotations
 import math
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 AGL_WIND_M = (100, 300, 600, 1000, 1500, 2000, 2500, 3000)
 WIND_ALTS_FT = (2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000, 18000, 24000, 30000)
@@ -25,6 +26,7 @@ MIN_U = 0.5
 EFF = 0.69
 G, KAPPA = (9.81, 0.2857)
 NODES_A_CHUNK = 2048
+LATTICE_THREADS = 2
 
 def hypot(a, b):
     aa, ab = (np.abs(a), np.abs(b))
@@ -421,12 +423,22 @@ def lattice(fields, grid, edges, chunk=NODES_A_CHUNK):
     u, v = (np.full(N, np.nan), np.full(N, np.nan))
     bands = np.zeros((N, nband * len(LEE_AGL)))
     idx = np.nonzero(P['ok'])[0]
-    for c0 in range(0, idx.size, chunk):
-        sel = idx[c0:c0 + chunk]
-        u[sel], v[sel], bands[sel] = _solve(P, sel, ks, nband)
+    chunks = [idx[c0:c0 + chunk] for c0 in range(0, idx.size, chunk)]
+    with ThreadPoolExecutor(max(1, min(LATTICE_THREADS, len(chunks)))) as ex:
+        for sel, (cu, cv, cb) in zip(chunks, ex.map(lambda sel: _solve(P, sel, ks, nband), chunks)):
+            u[sel], v[sel], bands[sel] = (cu, cv, cb)
     return dict(i0=i0, j0=j0, ni=ni, nj=nj, u=u.reshape(nj, ni), v=v.reshape(nj, ni), bands=bands.reshape(nj, ni, -1), ok=P['ok'].reshape(nj, ni))
 
-def lattice_at(L, lat, lon):
+def _node_tables(L):
+    nb = L['bands'].shape[-1]
+    okL = np.append(L['ok'].ravel(), False)
+    uL = np.append(np.where(L['ok'], L['u'], 0.0).ravel(), 0.0)
+    vL = np.append(np.where(L['ok'], L['v'], 0.0).ravel(), 0.0)
+    B = np.concatenate([np.where(L['ok'][..., None], L['bands'], 0.0).reshape(-1, nb), np.zeros((1, nb))])
+    Bv = np.ascontiguousarray(B).view(np.dtype((np.void, 8 * nb))).ravel()
+    return (okL, uL, vL, Bv, nb)
+
+def lattice_at(L, lat, lon, tables=None):
     lat = np.asarray(lat, np.float64)
     lon = np.asarray(lon, np.float64)
     shape = np.broadcast_shapes(lat.shape, lon.shape)
@@ -436,12 +448,7 @@ def lattice_at(L, lat, lon):
     tx, ty = (fi - i0, fj - j0)
     i0, j0 = (i0.astype(np.int64) - L['i0'], j0.astype(np.int64) - L['j0'])
     ni, nj = (L['ni'], L['nj'])
-    nb = L['bands'].shape[-1]
-    okL = np.append(L['ok'].ravel(), False)
-    uL = np.append(np.where(L['ok'], L['u'], 0.0).ravel(), 0.0)
-    vL = np.append(np.where(L['ok'], L['v'], 0.0).ravel(), 0.0)
-    B = np.concatenate([np.where(L['ok'][..., None], L['bands'], 0.0).reshape(-1, nb), np.zeros((1, nb))])
-    Bv = np.ascontiguousarray(B).view(np.dtype((np.void, 8 * nb))).ravel()
+    okL, uL, vL, Bv, nb = tables if tables is not None else _node_tables(L)
     none = okL.size - 1
     ws = ((1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty)
     rows = []
@@ -463,13 +470,16 @@ def lattice_at(L, lat, lon):
         v += vL[r] * w
         wq.append(w)
     n = lat.shape[0]
-    bands = np.empty((n, nb))
+    bands = np.zeros((n, nb))
+    live = np.flatnonzero((rows[0] != none) | (rows[1] != none) | (rows[2] != none) | (rows[3] != none))
+    rows = [r[live] for r in rows]
+    wq = [w[live] for w in wq]
     blk = 4096
     acc = np.empty((blk, nb))
     tmpv = np.empty(blk, Bv.dtype)
     tmp = tmpv.view(np.float64).reshape(blk, nb)
-    for b0 in range(0, n, blk):
-        b1 = min(n, b0 + blk)
+    for b0 in range(0, live.size, blk):
+        b1 = min(live.size, b0 + blk)
         m = b1 - b0
         a = acc[:m]
         a.fill(0.0)
@@ -478,17 +488,18 @@ def lattice_at(L, lat, lon):
             t = tmp[:m]
             t *= w[b0:b1, None]
             a += t
-        bands[b0:b1] = a
+        bands[live[b0:b1]] = a
     u, v = (np.where(ok, u, np.nan), np.where(ok, v, np.nan))
     return (u.reshape(shape), v.reshape(shape), bands.reshape(shape + (nb,)), ok.reshape(shape))
 
 def lattice_cells(L, grid):
     west, north, step, nx = (float(grid['west']), float(grid['north']), float(grid['step']), int(grid['nx']))
     xs = np.arange(nx)
+    tables = _node_tables(L)
 
     def rows(y0, y1):
         iy = np.arange(y0, y1)
         lat = (north - iy * step)[:, None]
         lon = (west + xs * step)[None, :]
-        return lattice_at(L, lat, lon)
+        return lattice_at(L, lat, lon, tables)
     return rows
