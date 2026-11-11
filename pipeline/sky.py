@@ -1,7 +1,12 @@
 from __future__ import annotations
+import os
 import warnings
 import numpy as np
 NONE, BLUE, CB, SHOWERS, NS, FOG, ST, SC, AC, AS, CS = (0, 1, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+ACC = 15
+ACC_MIN = 50.0
+ACC_MID = 0.0
+ACC_CLASS = os.environ.get('ACC_CLASS') in ('1', 'own')
 LOW_TOP = 2000.0
 BROKEN, OVERCAST = (56.25, 85.0)
 CU_MIN_WS = 0.5
@@ -18,7 +23,7 @@ COVER_MAX = 0.95
 FIELDS = ('cuclass', 'cusky', 'cucover', 'cuwide', 'cueff')
 CC_P = (1000, 950, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200)
 CC_NAMES = tuple((f'cc{p}' for p in CC_P))
-INPUTS = ('wstar', 'cudepth', 'overdev', 'rain', 'refc', 'showers', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'vis', 'accas', 'depth', 'zi', 'cubase') + CC_NAMES
+INPUTS = ('wstar', 'cudepth', 'overdev', 'rain', 'refc', 'showers', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'vis', 'accas', 'depth', 'zi', 'cubase', 'acscore') + CC_NAMES
 COVERS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh') + CC_NAMES
 
 def decode(code, lo, hi, transform):
@@ -41,7 +46,7 @@ def area_median(a):
     return np.where(np.isfinite(a), m, np.nan)
 FINE_STEP = 0.09
 CLASS_MEAN = 5
-SMOOTHED = ('wstar', 'cudepth', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'sun') + CC_NAMES
+SMOOTHED = ('wstar', 'cudepth', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'sun', 'acscore') + CC_NAMES
 
 def window_sum(a, k):
     r = k // 2
@@ -201,6 +206,9 @@ def classify(v):
     cls = np.where((cu <= 0) & (lo >= FEW_CU) & (lo < BROKEN) & (~has_c | (c < LOW_TOP * 1.25)), SC, cls)
     cls = np.where((accas >= ACCAS_MIN) & (mi >= FEW_CU), AC, cls)
     cls = np.where(deck > 0, deck, cls)
+    if ACC_CLASS:
+        acc = (np.nan_to_num(v.get('acscore', np.nan), nan=-1.0) >= ACC_MIN) & (mi >= ACC_MID)
+        cls = np.where(acc & ((deck == AC) | (deck == 0) & (cu < 2)), ACC, cls)
     cls = np.where(cu_shown, cu, cls)
     cls = np.where((lo >= BROKEN) & ((cu <= 2) | (cu <= 3) & (lo >= SC_SPREAD)), st_sc, cls)
     cls = np.where((lo >= OVERCAST) & ~(cu >= 4), st_sc, cls)

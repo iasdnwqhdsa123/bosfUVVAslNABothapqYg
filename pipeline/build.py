@@ -135,7 +135,7 @@ WAVE_ALTS_FT = [8000, 10000, 12000, 14000, 18000, 24000]
 SAMPLED_FIELDS = {f'wv{ft}' for ft in WAVE_ALTS_FT} | {'wlow', 'vis', 'cucover', 'cuwide', 'cueff'}
 PEAK_FIELDS = {'overdev', 'refc', 'showers', 'wrun', 'wtop'}
 AT_PEAK = {'wrunz': 'wrun'}
-ENC = {'wstar': (0, 6, None), 'zi': (0, 6000, None), 'depth': (0, 6000, None), 'cubase': (0, 7000, None), 'cudepth': (0, 12000, 'sqrt'), 'blapse': (0, 15, None), 'twidth': (0, 1000, None), 'overdev': (0, 100, None), 'bs': (0, P.BS_MAX, None), 'cape': (0, 6000, 'sqrt'), 'rain': (0, 50, 'sqrt'), 'showers': (0, 1, None), 'sun': (0, 1.2, None), 'cloud': (0, 100, None), 'cloudlow': (0, 100, None), 'cloudmid': (0, 100, None), 'cloudhigh': (0, 100, None), 't2': (-40, 50, None), 'td2': (-45, 35, None), 'sst': (-2, 36, None), 'snowd': (0, 3, 'sqrt'), 'soilm': (0, 1, None), 'mslp': (950, 1060, None), 'heat': (0, 800, None), 'densalt': (-1000, 7000, None), 'gust': (0, 50, None), 'wavemax': (0, 8, None), 'wavemaxz': (0, 12000, None), 'nlow': (0, 0.04, None), 'wlow': (-4, 4, None), 'wtrap': (0, 100, None), 'wlam': (0, 60000, None), 'conv': (-2, 2, None), 'sink': (0, 6, None), 'sinkth': (0, 3, None), 'sinkby': (0, 254, None), 'ridge': (0, 4, None), 'bumpy': (0, 1, None), 'pm25': (0, 300, 'sqrt'), 'elevation': (-100, 6000, None), 'ceil': (0, P.CEIL_NONE, 'sqrt'), 'vis': (0, 16100, 'sqrt'), 'fltcat': (0, 254, None), 'ptype': (0, 254, None), 'slr': (P.SLR_RANGE[0], P.SLR_RANGE[1], None), 'snowshare': (0, 1, None), 'frzl': (-100, 6500, None), 'icing': (0, 100, None), 'icebase': (0, 8000, None), 'icetop': (0, 8000, None), 'turb': (0, 25, None), 'turbz': (0, 11000, None), 'turbbase': (0, 11000, None), 'turbtop': (0, 11000, None), 'llws': (0, 40, None), 'ctop': (0, 16000, None), 'refc': (0, 75, None), 'lowbase': (0, 6000, None), 'rowstr': (0, 1, None), 'rowdir': (0, 180, None), 'rowgap': (0, 40, None), 'wdeck': (0, 3, None), 'dtop': (0, 3000, None), 'ceiltop': (0, 16000, None), 'accas': (0, 100, None), 'cuclass': (0, 254, None), 'cusky': (0, 254, None), 'cucover': (0, 1, None), 'cuwide': (0, 5, None), 'cueff': (0, 100, None), 'u_cuw': (-60, 60, None), 'v_cuw': (-60, 60, None), 'curh': (0, 1, None), 'u_wl': (-60, 60, None), 'v_wl': (-60, 60, None), 'u_twt': (-60, 60, None), 'v_twt': (-60, 60, None), 'u_twa': (-60, 60, None), 'v_twa': (-60, 60, None), 'rrun': (0, 8, 'sqrt'), 'wrun': (0, 8, 'sqrt'), 'wrunz': (0, 12700, None), 'crest': (-2540, 2540, None), 'wtop': (0, (254 * 0.26 ** 0.5 / 45.5) ** 2, 'sqrt'), 'rrunf': (-0.5, 0.5, None), 'wrunf': (-0.5, 0.5, None), 'cshade': (0, 1, None), 'cthin': (0, 1, None), 'csun': (0, 1.2, None)}
+ENC = {'wstar': (0, 6, None), 'zi': (0, 6000, None), 'depth': (0, 6000, None), 'cubase': (0, 7000, None), 'cudepth': (0, 12000, 'sqrt'), 'blapse': (0, 15, None), 'twidth': (0, 1000, None), 'overdev': (0, 100, None), 'bs': (0, P.BS_MAX, None), 'cape': (0, 6000, 'sqrt'), 'rain': (0, 50, 'sqrt'), 'showers': (0, 1, None), 'sun': (0, 1.2, None), 'cloud': (0, 100, None), 'cloudlow': (0, 100, None), 'cloudmid': (0, 100, None), 'cloudhigh': (0, 100, None), 't2': (-40, 50, None), 'td2': (-45, 35, None), 'sst': (-2, 36, None), 'snowd': (0, 3, 'sqrt'), 'soilm': (0, 1, None), 'mslp': (950, 1060, None), 'heat': (0, 800, None), 'densalt': (-1000, 7000, None), 'gust': (0, 50, None), 'wavemax': (0, 8, None), 'wavemaxz': (0, 12000, None), 'nlow': (0, 0.04, None), 'wlow': (-4, 4, None), 'wtrap': (0, 100, None), 'wlam': (0, 60000, None), 'conv': (-2, 2, None), 'sink': (0, 6, None), 'sinkth': (0, 3, None), 'sinkby': (0, 254, None), 'ridge': (0, 4, None), 'bumpy': (0, 1, None), 'pm25': (0, 300, 'sqrt'), 'elevation': (-100, 6000, None), 'ceil': (0, P.CEIL_NONE, 'sqrt'), 'vis': (0, 16100, 'sqrt'), 'fltcat': (0, 254, None), 'ptype': (0, 254, None), 'slr': (P.SLR_RANGE[0], P.SLR_RANGE[1], None), 'snowshare': (0, 1, None), 'frzl': (-100, 6500, None), 'icing': (0, 100, None), 'icebase': (0, 8000, None), 'icetop': (0, 8000, None), 'turb': (0, 25, None), 'turbz': (0, 11000, None), 'turbbase': (0, 11000, None), 'turbtop': (0, 11000, None), 'llws': (0, 40, None), 'ctop': (0, 16000, None), 'refc': (0, 75, None), 'lowbase': (0, 6000, None), 'rowstr': (0, 1, None), 'rowdir': (0, 180, None), 'rowgap': (0, 40, None), 'wdeck': (0, 3, None), 'dtop': (0, 3000, None), 'ceiltop': (0, 16000, None), 'accas': (0, 100, None), 'acscore': (0, 100, None), 'acbase': (0, 8000, None), 'accape': (0, 2000, 'sqrt'), 'accin': (0, 300, None), 'cuclass': (0, 254, None), 'cusky': (0, 254, None), 'cucover': (0, 1, None), 'cuwide': (0, 5, None), 'cueff': (0, 100, None), 'u_cuw': (-60, 60, None), 'v_cuw': (-60, 60, None), 'curh': (0, 1, None), 'u_wl': (-60, 60, None), 'v_wl': (-60, 60, None), 'u_twt': (-60, 60, None), 'v_twt': (-60, 60, None), 'u_twa': (-60, 60, None), 'v_twa': (-60, 60, None), 'rrun': (0, 8, 'sqrt'), 'wrun': (0, 8, 'sqrt'), 'wrunz': (0, 12700, None), 'crest': (-2540, 2540, None), 'wtop': (0, (254 * 0.26 ** 0.5 / 45.5) ** 2, 'sqrt'), 'rrunf': (-0.5, 0.5, None), 'wrunf': (-0.5, 0.5, None), 'cshade': (0, 1, None), 'cthin': (0, 1, None), 'csun': (0, 1.2, None)}
 for ft in WAVE_ALTS_FT:
     ENC[f'wv{ft}'] = (-8, 8, None)
     ENC[f'dpd{ft}'] = (0, 40, None)
@@ -652,6 +652,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     if agl is not None:
         out['cloudlow'], out['cloudmid'], out['cloudhigh'] = agl
     out['accas'] = accas_score(lv, levels, zs, s['t2'])
+    out.update(castellanus(lv, levels, zs, zi, s, grid_step, lat2d))
     out.update(sounding)
     for m in WIND_AGL_M:
         out[f'u_g{m}'], out[f'v_g{m}'] = prof.at(zs + m, 'u', 'v')
@@ -778,6 +779,52 @@ def accas_score(lv, levels, zs, t2):
         ok = (z[k] - zs >= LOW_AGL) & (np.nan_to_num(rh[k], nan=0) >= ACCAS_RH) & (dz > 0)
         score = np.where(ok, np.maximum(score, sc), score)
     return np.where(np.isfinite(t2), score, np.nan).astype(np.float32)
+EA_GRID_KM = 6.0
+EA_W_SIGMA_KM = 15.0
+EA_OWN_ONLY = os.environ.get('ACC_CLASS') == 'own'
+EA_SCHEME = (1000.0, 500.0)
+
+def castellanus(lv, levels, zs, zi, s, grid_step, lat2d):
+    from scipy import ndimage
+    if s.get('cvbase') is not None and s.get('cvtop') is not None:
+        return castellanus_scheme(s, zs, zi, lat2d)
+    own_w = lv.get('w') is not None and (not lv.get('w_wave_only'))
+    if EA_OWN_ONLY and (not own_w):
+        return {}
+    km = grid_step * 111.2
+    n = max(1, int(round(EA_GRID_KM / km)))
+    g2, g3 = ((slice(None, None, n),) * 2, (slice(None),) + (slice(None, None, n),) * 2)
+    src = (np.asarray(levels) <= P.EA_P[0]) & (np.asarray(levels) >= P.EA_P[1])
+    if own_w:
+        sig = EA_W_SIGMA_KM / (km * n)
+        w = [None] * len(levels)
+        for k in np.nonzero(src)[0]:
+            wk = np.nan_to_num(lv['w'][k][g2])
+            w[k] = ndimage.gaussian_filter(wk, sig, mode='nearest') if sig > 0.5 else wk
+    else:
+        w = P.kinematic_w(lv['u'][g3], lv['v'][g3], lv['t'][g3], levels, s['ps'][g2], grid_step * n, lat2d[g2], want=src)
+    ea = P.elevated_parcels(lv['z'][g3], lv['t'][g3], lv['td'][g3], cloud_rh(lv)[g3], levels, zs[g2], zi[g2], s['t2'][g2], s['td2'][g2], s['ps'][g2], w=w, lat=lat2d[g2])
+    out = {'acscore': 100 * ea['score'], 'acbase': ea['base'], 'accape': ea['cape'], 'accin': -ea['cin']}
+    if n > 1:
+        iy, ix = np.meshgrid(np.arange(zs.shape[0]) / n, np.arange(zs.shape[1]) / n, indexing='ij')
+        up = lambda a, order: ndimage.map_coordinates(a, [iy, ix], order=order, mode='nearest').astype(np.float32)
+        has = up((ea['score'] > 0).astype(np.float32), 0) > 0
+        out = {k: up(np.nan_to_num(v), 1) if k == 'acscore' else np.where(has, up(np.nan_to_num(v), 0), np.nan) for k, v in out.items()}
+    inside = np.isfinite(s['t2'])
+    return {k: np.where(inside, v, np.nan).astype(np.float32) for k, v in out.items()}
+
+def castellanus_scheme(s, zs, zi, lat2d):
+    ramp = lambda x, a, b: np.clip((x - a) / (b - a), 0, 1)
+    b, t = (np.asarray(s['cvbase'], np.float32), np.asarray(s['cvtop'], np.float32))
+    on = np.isfinite(b) & np.isfinite(t) & (b > -400)
+    base = np.where(on, b - zs, np.nan)
+    top = np.where(np.abs(lat2d) < 23.5, P.EA_BASE[2], P.EA_BASE[1])
+    f = np.nan_to_num(ramp(base, P.EA_BASE[0] - P.EA_BASE[3], P.EA_BASE[0]) * (1 - ramp(base, top, top + P.EA_BASE[3])))
+    ok = on & (base >= np.nan_to_num(zi) + EA_SCHEME[0]) & (t - b >= EA_SCHEME[1])
+    score = np.where(ok, 100 * f, 0)
+    inside = np.isfinite(s['t2'])
+    nan = np.full(score.shape, np.nan, np.float32)
+    return {'acscore': np.where(inside, score, np.nan).astype(np.float32), 'acbase': np.where(inside & (score > 0), base, np.nan).astype(np.float32), 'accape': nan, 'accin': nan}
 
 def cloud_levels(s, lv, levels, tops=P.COVER_TOPS_NCEP, rh_out=None):
     ps = np.where(np.isfinite(s['t2']), s['ps'], np.nan)
@@ -1543,7 +1590,7 @@ def hour_fronts(parts, regrids, fh=0):
     except Exception as e:
         log(f'  f{fh:03d} fronts skipped: {e!r}')
         return None
-NOT_TILES = {'elevation', 'snd', 'fronts', 'frontp'}
+NOT_TILES = {'elevation', 'snd', 'fronts', 'frontp', 'acscore', 'acbase', 'accape', 'accin'}
 STEP_FRONTS_H = 2
 
 def write_fronts(rdir, hours_dir, times, day_of=None, around=None):

@@ -415,6 +415,228 @@ ENTRAIN_MIN, ENTRAIN_MAX = (0.0001, 0.001)
 def cumulus_mix(twidth, step=CU_STEP):
     r = np.where(np.isfinite(twidth), np.asarray(twidth, np.float32), 1000.0)
     return (np.clip(0.2 / np.maximum(r, 1.0), ENTRAIN_MIN, ENTRAIN_MAX) * step).astype(np.float32)
+EA_P = (850.0, 450.0)
+EA_FLOOR = (300.0, 1500.0)
+EA_RH_MIN = 60.0
+EA_BASE = (2000.0, 7000.0, 8000.0, 300.0)
+EA_FULL = (50.0, 50.0)
+EA_SAT = (80.0, 90.0)
+EA_TAU = 3 * 3600.0
+EA_DEC = (0.5, 0.9)
+EA_PRE = 1.0
+EA_CAP = 50.0
+G_CP = G / CP
+
+def theta_e(t, td, p):
+    td = np.minimum(td, t)
+    r = mixing_ratio(td, p)
+    tk = t + K0
+    tl = 1.0 / (1.0 / (td + K0 - 56.0) + np.log(tk / (td + K0)) / 800.0) + 56.0
+    th_dl = tk * (1000.0 / np.maximum(p - es(td), 1.0)) ** KAPPA * (tk / tl) ** (0.28 * r)
+    return th_dl * np.exp((3036.0 / tl - 1.78) * r * (1 + 0.448 * r))
+_THE_GRID = np.arange(200.0, 450.0, 0.02)
+_THE_LUT: dict = {}
+
+def t_saturated(the, p: float):
+    key = round(float(p), 2)
+    lut = _THE_LUT.get(key)
+    if lut is None:
+        tg = np.arange(-100.0, 50.0, 0.01)
+        th = theta_e(tg, tg, np.full(tg.shape, float(p)))
+        ok = np.isfinite(th) & (np.diff(th, prepend=-np.inf) > 0)
+        lut = _THE_LUT[key] = np.interp(_THE_GRID, th[ok], tg[ok])
+    x = (np.clip(np.nan_to_num(the, nan=_THE_GRID[0]), _THE_GRID[0], _THE_GRID[-1]) - _THE_GRID[0]) / (_THE_GRID[1] - _THE_GRID[0])
+    i = np.minimum(x.astype(np.intp), _THE_GRID.size - 2)
+    f = (x - i).astype(np.float32)
+    return (lut[i] * (1 - f) + lut[i + 1] * f).astype(np.float32)
+
+def _buoyancy(tp, rp, te, tde, p):
+    tve = (te + K0) * (1 + 0.61 * mixing_ratio(np.minimum(tde, te), p))
+    return G * ((tp + K0) * (1 + 0.61 * rp) - tve) / tve
+
+def parcel_cape(z0, t0, td0, p0, zc, tc, tdc, pc, use):
+    tl = td0 - (0.212 + 0.001571 * td0 - 0.000436 * t0) * (t0 - td0)
+    zl = z0 + (t0 - tl) / G_CP
+    r0 = mixing_ratio(td0, p0)
+    the0 = theta_e(t0, td0, p0)
+    m = z0.shape[0]
+    cape = np.zeros(m, np.float32)
+    cin = np.zeros(m, np.float32)
+    el = np.full(m, np.nan, np.float32)
+    free = np.zeros(m, bool)
+    done = np.zeros(m, bool)
+    lcl_in = np.zeros(m, bool)
+    zp, bp = (z0.astype(np.float32), np.zeros(m, np.float32))
+    tep, tdep, lpp, tpp = (t0.astype(np.float32), td0.astype(np.float32), np.log(np.broadcast_to(p0, (m,))).astype(np.float32), t0.astype(np.float32))
+
+    def add(zj, b, on):
+        nonlocal cape, cin, el, free, done
+        on = on & ~done & (zj > zp)
+        dz = np.where(on, zj - zp, 0)
+        cross = (bp >= 0) != (b >= 0)
+        f = np.where(cross, bp / np.where(cross, bp - b, 1), 0)
+        pos = np.where(cross, np.where(b > 0, 0.5 * b * dz * (1 - f), 0.5 * bp * dz * f), np.where(b >= 0, 0.5 * (b + bp) * dz, 0))
+        neg = np.where(cross, np.where(b < 0, 0.5 * b * dz * (1 - f), 0.5 * bp * dz * f), np.where(b < 0, 0.5 * (b + bp) * dz, 0))
+        rise = on & ~free & (b >= 0) & (zj >= zl - 1)
+        cin = np.where(on & ~free, cin + neg, cin).astype(np.float32)
+        cape = np.where(on & (free | rise), cape + pos, cape).astype(np.float32)
+        sink = on & (free | rise) & (b < 0)
+        el = np.where(sink & np.isnan(el), zp + f * dz, el).astype(np.float32)
+        free |= rise
+        done |= sink
+        return on
+    for j in range(zc.shape[0]):
+        on = use[j] & ~done
+        if not on.any():
+            if done.all():
+                break
+            continue
+        zj, pj = (zc[j], float(pc[j]))
+        lpj = np.float32(np.log(pj))
+        at_l = on & ~lcl_in & (zl > zp) & (zl <= zj)
+        if at_l.any():
+            w = np.clip((zl - zp) / np.maximum(zj - zp, 0.001), 0, 1)
+            te, tde, lp = (tep + w * (tc[j] - tep), tdep + w * (tdc[j] - tdep), lpp + w * (lpj - lpp))
+            bl = _buoyancy(tl, r0, te, tde, np.exp(lp))
+            took = add(np.where(at_l, zl, zp), np.where(at_l, bl, bp), at_l)
+            zp, bp = (np.where(took, zl, zp).astype(np.float32), np.where(took, bl, bp).astype(np.float32))
+            tep, tdep, lpp, tpp = (np.where(took, a, b_).astype(np.float32) for a, b_ in ((te, tep), (tde, tdep), (lp, lpp), (tl, tpp)))
+            lcl_in |= at_l
+        dry = zj < zl
+        tp_dry = t0 - G_CP * (zj - z0)
+        tpj = np.where(dry, tp_dry, t_saturated(the0, pj))
+        b = _buoyancy(tpj, np.where(dry, r0, mixing_ratio(tpj, pj)), tc[j], tdc[j], pj)
+        took = add(zj, b, on)
+        zp, bp = (np.where(took, zj, zp).astype(np.float32), np.where(took, b, bp).astype(np.float32))
+        tep, tdep, lpp, tpp = (np.where(took, a, b_).astype(np.float32) for a, b_ in ((tc[j], tep), (tdc[j], tdep), (lpj, lpp), (tpj, tpp)))
+        lcl_in |= on & (zj >= zl)
+    return (cape, cin, zl, np.where(free & np.isnan(el), zp, el))
+EA_KIN_SIGMA_KM = 40.0
+
+def kinematic_w(u, v, t, levels, ps, grid_step, lat2d, sigma_km=EA_KIN_SIGMA_KM, want=None):
+    from scipy import ndimage
+    p = np.asarray(levels, np.float32)
+    order = np.argsort(-p)
+    full = want is None
+    want = np.ones(len(p), bool) if full else np.asarray(want, bool)
+    p_top = float(p[want].min()) if want.any() else float('inf')
+    dy = grid_step * 111200.0
+    dx = dy * np.cos(np.radians(np.asarray(lat2d, np.float64)))
+
+    def div(k):
+        uk, vk = (np.nan_to_num(u[k]), np.nan_to_num(v[k]))
+        dudx = np.gradient(uk, axis=1) / dx if uk.shape[1] > 1 else 0.0
+        dvdy = -np.gradient(vk, axis=0) / dy if vk.shape[0] > 1 else 0.0
+        return np.asarray(dudx + dvdy, np.float32).astype(np.float64)
+    w = np.full(np.shape(u), np.nan, np.float32) if full else [None] * len(p)
+    om = np.zeros(ps.shape, np.float64)
+    p_prev = np.asarray(ps, np.float64)
+    d_prev = None
+    sig = sigma_km / (grid_step * 111.2)
+    for k in order:
+        if p[k] < p_top:
+            break
+        above = p[k] < ps
+        d = div(k)
+        d_prev = d if d_prev is None else d_prev
+        om = np.where(above, om + 0.5 * (d + np.where(above, d_prev, d)) * (p_prev - p[k]) * 100.0, om)
+        p_prev = np.where(above, p[k], p_prev)
+        d_prev = np.where(above, d, d_prev)
+        if not want[k]:
+            continue
+        rho = p[k] * 100.0 / (RD * (np.asarray(t[k], np.float64) + K0))
+        wk = -om / (rho * G)
+        if sig > 0.5:
+            wk = ndimage.gaussian_filter(np.nan_to_num(wk), sig, mode='nearest')
+        w[k] = np.where(above, wk, np.nan).astype(np.float32)
+    return w
+EA_BLOCK = 1 << 18
+
+def elevated_parcels(z, t, td, rh, levels, zs, zi, t2, td2, ps, w=None, lat=None):
+    ny, nx = np.shape(zs)
+    rows = max(1, EA_BLOCK // max(nx, 1))
+    out = {k: np.empty((ny, nx), np.float32) for k in ('score', 'cape', 'cin', 'base')}
+    lv = [np.asarray(a) for a in (z, t, td, rh)]
+    sf = [np.broadcast_to(np.asarray(a, np.float32), (ny, nx)) for a in (zs, zi, t2, td2, ps)]
+    la = None if lat is None else np.broadcast_to(np.asarray(lat), (ny, nx))
+    for r0 in range(0, ny, rows):
+        r = slice(r0, min(ny, r0 + rows))
+        o = _elevated_block(*(a[:, r] for a in lv), levels, *(a[r] for a in sf), None if w is None else [None if wk is None else wk[r] for wk in w], None if la is None else la[r])
+        for k in out:
+            out[k][r] = o[k]
+    return out
+
+def _elevated_block(z, t, td, rh, levels, zs, zi, t2, td2, ps, w, lat):
+    p = np.asarray(levels, np.float32)
+    order = np.argsort(-p)
+    p = p[order]
+    shape, n = (zs.shape, zs.size)
+    flat = lambda a: np.asarray(a, np.float32)[order].reshape(len(p), n)
+    Z, T, TD, RH = (flat(z), flat(t), flat(np.minimum(td, t)), flat(rh))
+    W = None
+    if w is not None:
+        W = np.zeros((len(p), n), np.float32)
+        for i, k0 in enumerate(order):
+            if w[k0] is not None:
+                W[i] = np.nan_to_num(np.asarray(w[k0], np.float32), nan=0.0).reshape(n)
+    zs1, zi1 = (np.asarray(zs, np.float32).reshape(n), np.nan_to_num(np.asarray(zi, np.float32), nan=0.0).reshape(n))
+    top = np.where(np.abs(np.asarray(lat).reshape(n)) < 23.5, EA_BASE[2], EA_BASE[1]) if lat is not None else np.full(n, EA_BASE[1])
+    ramp = lambda x, a, b: np.clip((x - a) / (b - a), 0, 1)
+    above_ground = Z > zs1[None] + 10
+    src = [k for k in range(len(p)) if EA_P[1] <= p[k] <= EA_P[0]]
+
+    def cheap(k, cells):
+        tk, tdk, zk, zsk, tp = (T[k, cells], TD[k, cells], Z[k, cells], zs1[cells], top[cells])
+        zl = zk + (tk - (tdk - (0.212 + 0.001571 * tdk - 0.000436 * tk) * (tk - tdk))) / G_CP
+        base = zl - zsk
+        f_base = ramp(base, EA_BASE[0] - EA_BASE[3], EA_BASE[0]) * (1 - ramp(base, tp, tp + EA_BASE[3]))
+        lift = np.maximum(W[k, cells], 0) * EA_TAU if W is not None else 0.0
+        f_moist = np.maximum(ramp(RH[k, cells], *EA_SAT), np.clip(lift / np.maximum(zl - zk, 1.0), 0, 1))
+        ok = above_ground[k, cells] & (zk - zsk >= np.maximum(zi1[cells] + EA_FLOOR[0], EA_FLOOR[1])) & (RH[k, cells] >= EA_RH_MIN) & (f_base > 0) & (f_moist > 0)
+        return (ok, base, f_base, f_moist)
+    best = np.zeros(n, np.float32)
+    cape_best = np.zeros(n, np.float32)
+    cin_best = np.zeros(n, np.float32)
+    base_best = np.full(n, np.nan, np.float32)
+    first = {k: cheap(k, slice(None)) for k in src}
+    cand = np.logical_or.reduce([first[k][0] for k in src]) if src else np.zeros(n, bool)
+    ci = np.nonzero(cand)[0]
+    if ci.size:
+        L = len(p)
+        Zc, Tc, TDc, AGc = (Z[:, ci], T[:, ci], TD[:, ci], above_ground[:, ci])
+        thes = np.full((L, ci.size), np.inf, np.float32)
+        for j in range(L):
+            if p[j] < EA_P[0]:
+                thes[j] = np.where(AGc[j], theta_e(Tc[j], Tc[j], p[j]), np.inf)
+        least_above = np.full(thes.shape, np.inf, np.float32)
+        for j in range(L - 2, -1, -1):
+            least_above[j] = np.minimum(least_above[j + 1], thes[j + 1])
+        bc, capec, cinc = (np.zeros(ci.size, np.float32) for _ in range(3))
+        basec = np.full(ci.size, np.nan, np.float32)
+        for k in src:
+            ok, base, f_base, f_moist = (a[ci] for a in first[k])
+            c0 = np.nonzero(ok & (f_moist * f_base > bc))[0]
+            if not c0.size:
+                continue
+            c = c0[theta_e(Tc[k, c0], TDc[k, c0], p[k]) > least_above[k, c0] - EA_PRE]
+            if not c.size:
+                continue
+            up = np.arange(L)[:, None] > k
+            cape, cin, _, _ = parcel_cape(Zc[k, c], Tc[k, c], TDc[k, c], p[k], Zc[:, c], Tc[:, c], TDc[:, c], p, up & AGc[:, c])
+            sc = ramp(cape, 0, EA_FULL[0]) * np.clip(1 + cin / EA_FULL[1], 0, 1) * f_moist[c] * f_base[c]
+            take = sc > bc[c]
+            ct = c[take]
+            bc[ct], capec[ct], cinc[ct], basec[ct] = (sc[take], cape[take], cin[take], base[c][take])
+        best[ci], cape_best[ci], cin_best[ci], base_best[ci] = (bc, capec, cinc, basec)
+    c = np.nonzero(best > 0)[0]
+    if c.size:
+        ps1, t21, td21 = (np.asarray(a, np.float32).reshape(n)[c] for a in (ps, t2, td2))
+        sb, sbcin, _, _ = parcel_cape(zs1[c] + 2, t21, np.minimum(td21, t21), ps1, Z[:, c], T[:, c], TD[:, c], p, above_ground[:, c])
+        sb = sb * np.clip(1 + sbcin / EA_CAP, 0, 1)
+        dec = 1 - sb / np.maximum(np.maximum(cape_best[c], sb), 1e-06)
+        best[c] = best[c] * ramp(dec, *EA_DEC)
+    has = best > 0
+    return {'score': best.reshape(shape), 'cape': np.where(has, cape_best, np.nan).reshape(shape), 'cin': np.where(has, cin_best, np.nan).reshape(shape), 'base': np.where(has, base_best, np.nan).reshape(shape)}
 
 def wave_environment(prof: Profile):
     zs = prof.zs
