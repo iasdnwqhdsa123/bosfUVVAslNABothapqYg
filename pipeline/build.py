@@ -19,6 +19,7 @@ import pack
 import runfields
 import decks
 import sky
+import spotting
 import tiles
 from sources import OPEN_AHEAD_H, OPEN_SLACK_H, SOURCES, candidate_runs, latest_complete_run, needed_times
 from tiles import downsample, downsample_at_peak, downsample_peak
@@ -129,13 +130,13 @@ TILE = {'hrrr': 100, 'gfs': 100, 'ecmwf': 250, 'icon': 200, 'icond2': 100, 'arom
 OVERVIEW = {'hrrr': (2, 4, 8), 'icond2': (2, 4, 8), 'arome': (2, 4, 8)}
 LEVEL_TILE = 200
 DECODE_THREADS = 4
-CLASS_FIELDS = {'ptype', 'fltcat', 'sinkby', 'cuclass', 'cusky'}
+CLASS_FIELDS = {'ptype', 'fltcat', 'sinkby', 'cuclass', 'cusky', 'spot1', 'spot2'}
 WIND_ALTS_FT = [2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000, 18000, 24000, 30000]
 WAVE_ALTS_FT = [8000, 10000, 12000, 14000, 18000, 24000]
 SAMPLED_FIELDS = {f'wv{ft}' for ft in WAVE_ALTS_FT} | {'wlow', 'vis', 'cucover', 'cuwide', 'cueff'}
 PEAK_FIELDS = {'overdev', 'refc', 'showers', 'wrun', 'wtop'}
 AT_PEAK = {'wrunz': 'wrun'}
-ENC = {'wstar': (0, 6, None), 'zi': (0, 6000, None), 'depth': (0, 6000, None), 'cubase': (0, 7000, None), 'cudepth': (0, 12000, 'sqrt'), 'blapse': (0, 15, None), 'twidth': (0, 1000, None), 'overdev': (0, 100, None), 'bs': (0, P.BS_MAX, None), 'cape': (0, 6000, 'sqrt'), 'rain': (0, 50, 'sqrt'), 'showers': (0, 1, None), 'sun': (0, 1.2, None), 'cloud': (0, 100, None), 'cloudlow': (0, 100, None), 'cloudmid': (0, 100, None), 'cloudhigh': (0, 100, None), 't2': (-40, 50, None), 'td2': (-45, 35, None), 'sst': (-2, 36, None), 'snowd': (0, 3, 'sqrt'), 'soilm': (0, 1, None), 'mslp': (950, 1060, None), 'heat': (0, 800, None), 'densalt': (-1000, 7000, None), 'gust': (0, 50, None), 'wavemax': (0, 8, None), 'wavemaxz': (0, 12000, None), 'nlow': (0, 0.04, None), 'wlow': (-4, 4, None), 'wtrap': (0, 100, None), 'wlam': (0, 60000, None), 'conv': (-2, 2, None), 'sink': (0, 6, None), 'sinkth': (0, 3, None), 'sinkby': (0, 254, None), 'ridge': (0, 4, None), 'bumpy': (0, 1, None), 'pm25': (0, 300, 'sqrt'), 'elevation': (-100, 6000, None), 'ceil': (0, P.CEIL_NONE, 'sqrt'), 'vis': (0, 16100, 'sqrt'), 'fltcat': (0, 254, None), 'ptype': (0, 254, None), 'slr': (P.SLR_RANGE[0], P.SLR_RANGE[1], None), 'snowshare': (0, 1, None), 'frzl': (-100, 6500, None), 'icing': (0, 100, None), 'icebase': (0, 8000, None), 'icetop': (0, 8000, None), 'turb': (0, 25, None), 'turbz': (0, 11000, None), 'turbbase': (0, 11000, None), 'turbtop': (0, 11000, None), 'llws': (0, 40, None), 'ctop': (0, 16000, None), 'refc': (0, 75, None), 'lowbase': (0, 6000, None), 'rowstr': (0, 1, None), 'rowdir': (0, 180, None), 'rowgap': (0, 40, None), 'wdeck': (0, 3, None), 'dtop': (0, 3000, None), 'ceiltop': (0, 16000, None), 'accas': (0, 100, None), 'acscore': (0, 100, None), 'acbase': (0, 8000, None), 'accape': (0, 2000, 'sqrt'), 'accin': (0, 300, None), 'cuclass': (0, 254, None), 'cusky': (0, 254, None), 'cucover': (0, 1, None), 'cuwide': (0, 5, None), 'cueff': (0, 100, None), 'u_cuw': (-60, 60, None), 'v_cuw': (-60, 60, None), 'curh': (0, 1, None), 'u_wl': (-60, 60, None), 'v_wl': (-60, 60, None), 'u_twt': (-60, 60, None), 'v_twt': (-60, 60, None), 'u_twa': (-60, 60, None), 'v_twa': (-60, 60, None), 'rrun': (0, 8, 'sqrt'), 'wrun': (0, 8, 'sqrt'), 'wrunz': (0, 12700, None), 'crest': (-2540, 2540, None), 'wtop': (0, (254 * 0.26 ** 0.5 / 45.5) ** 2, 'sqrt'), 'rrunf': (-0.5, 0.5, None), 'wrunf': (-0.5, 0.5, None), 'cshade': (0, 1, None), 'cthin': (0, 1, None), 'csun': (0, 1.2, None)}
+ENC = {'wstar': (0, 6, None), 'zi': (0, 6000, None), 'depth': (0, 6000, None), 'cubase': (0, 7000, None), 'cudepth': (0, 12000, 'sqrt'), 'blapse': (0, 15, None), 'twidth': (0, 1000, None), 'overdev': (0, 100, None), 'bs': (0, P.BS_MAX, None), 'cape': (0, 6000, 'sqrt'), 'rain': (0, 50, 'sqrt'), 'showers': (0, 1, None), 'sun': (0, 1.2, None), 'cloud': (0, 100, None), 'cloudlow': (0, 100, None), 'cloudmid': (0, 100, None), 'cloudhigh': (0, 100, None), 't2': (-40, 50, None), 'td2': (-45, 35, None), 'sst': (-2, 36, None), 'snowd': (0, 3, 'sqrt'), 'soilm': (0, 1, None), 'mslp': (950, 1060, None), 'heat': (0, 800, None), 'densalt': (-1000, 7000, None), 'gust': (0, 50, None), 'wavemax': (0, 8, None), 'wavemaxz': (0, 12000, None), 'nlow': (0, 0.04, None), 'wlow': (-4, 4, None), 'wtrap': (0, 100, None), 'wlam': (0, 60000, None), 'conv': (-2, 2, None), 'sink': (0, 6, None), 'sinkth': (0, 3, None), 'sinkby': (0, 254, None), 'ridge': (0, 4, None), 'bumpy': (0, 1, None), 'pm25': (0, 300, 'sqrt'), 'elevation': (-100, 6000, None), 'ceil': (0, P.CEIL_NONE, 'sqrt'), 'vis': (0, 16100, 'sqrt'), 'fltcat': (0, 254, None), 'ptype': (0, 254, None), 'slr': (P.SLR_RANGE[0], P.SLR_RANGE[1], None), 'snowshare': (0, 1, None), 'frzl': (-100, 6500, None), 'icing': (0, 100, None), 'icebase': (0, 8000, None), 'icetop': (0, 8000, None), 'turb': (0, 25, None), 'turbz': (0, 11000, None), 'turbbase': (0, 11000, None), 'turbtop': (0, 11000, None), 'llws': (0, 40, None), 'ctop': (0, 16000, None), 'refc': (0, 75, None), 'lowbase': (0, 6000, None), 'rowstr': (0, 1, None), 'rowdir': (0, 180, None), 'rowgap': (0, 40, None), 'wdeck': (0, 3, None), 'dtop': (0, 3000, None), 'spot1': (0, 254, None), 'spot2': (0, 254, None), 'ceiltop': (0, 16000, None), 'accas': (0, 100, None), 'acscore': (0, 100, None), 'acbase': (0, 8000, None), 'accape': (0, 2000, 'sqrt'), 'accin': (0, 300, None), 'cuclass': (0, 254, None), 'cusky': (0, 254, None), 'cucover': (0, 1, None), 'cuwide': (0, 5, None), 'cueff': (0, 100, None), 'u_cuw': (-60, 60, None), 'v_cuw': (-60, 60, None), 'curh': (0, 1, None), 'u_wl': (-60, 60, None), 'v_wl': (-60, 60, None), 'u_twt': (-60, 60, None), 'v_twt': (-60, 60, None), 'u_twa': (-60, 60, None), 'v_twa': (-60, 60, None), 'rrun': (0, 8, 'sqrt'), 'wrun': (0, 8, 'sqrt'), 'wrunz': (0, 12700, None), 'crest': (-2540, 2540, None), 'wtop': (0, (254 * 0.26 ** 0.5 / 45.5) ** 2, 'sqrt'), 'rrunf': (-0.5, 0.5, None), 'wrunf': (-0.5, 0.5, None), 'cshade': (0, 1, None), 'cthin': (0, 1, None), 'csun': (0, 1.2, None)}
 for ft in WAVE_ALTS_FT:
     ENC[f'wv{ft}'] = (-8, 8, None)
     ENC[f'dpd{ft}'] = (0, 40, None)
@@ -753,7 +754,27 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     nanf = lambda a: np.full(zs.shape, np.nan, np.float32) if a is None else a
     el = sun_elevation(valid, lat2d, lon2d) if valid is not None and lon2d is not None else np.full(zs.shape, 45.0, np.float32)
     out.update(decks.organisation(prof, zs, s['t2'], s['td2'], s['ps'], s['u10'], s['v10'], nanf(out.get('sst')), hth, out['zi'], np.stack([out[f'cc{p}'] for p in P.CC_LEVELS]), P.level_heights(levels, lv['z']), nanf(out.get('cloudlow')), nanf(out.get('cloudmid')), nanf(out.get('cloudhigh')), np.where(np.isfinite(nanf(ceil)) & (nanf(ceil) < P.CEIL_NONE), nanf(ceil), np.nan), nanf(out.get('lowbase')), el))
+    out.update(spotted(levels, lv, zs, s, out, relief, grid_step, lat2d, lon2d, valid, el))
     return out
+SPOTTING = os.environ.get('SPOTTING', '1') != '0'
+
+def spotted(levels, lv, zs, s, out, relief, grid_step, lat2d, lon2d, valid, el):
+    if not SPOTTING:
+        return {}
+    try:
+        flights = None
+        if valid is not None and lon2d is not None:
+            try:
+                import contrails
+                tr = contrails.traffic()
+            except ImportError:
+                tr = None
+            if tr is not None:
+                flights = contrails._bilinear(tr[0][valid.hour].sum(axis=(0, 1)), lat2d, lon2d) * float(tr[1][valid.weekday()])
+        return spotting.spot(levels, lv, zs, s, out, relief, grid_step * 111.2, el if valid is not None and lon2d is not None else None, flights, s.get('contrail'), lat2d, lon2d, valid)
+    except Exception as e:
+        log(f'  spotting skipped: {e!r}')
+        return {}
 
 def cloud_rh(lv):
     if lv.get('rh_cloud') is not None:
@@ -1173,6 +1194,7 @@ def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d, levels=None):
             return
         mu = np.sin(np.radians(np.maximum(sun_elevation(valid, lat2d, lon2d), 0)))
         contrails.fold_issr(s, contrails.issr_mask(t, rhi), r[0], r[1], mu, fix)
+        s['contrail'] = r[0]
     except Exception as e:
         log(f'  contrails skipped: {e!r}')
 
