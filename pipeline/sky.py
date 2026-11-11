@@ -276,3 +276,42 @@ def cloud_overview(q, enc, fine, smooth=True):
     for a in out.values():
         a[off] = 255
     return out
+TIME_W = (0.25, 0.5, 0.25)
+TIME_SMOOTHED = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'sun') + CC_NAMES
+DECK_HYST = 10.0
+WB_CODE = CLASS_CODE0 + 14 - CB
+
+def time_smoothed(q, before, after, enc):
+    out = dict(q)
+    for n in TIME_SMOOTHED:
+        if n not in q or n not in enc or enc[n][2] is not None:
+            continue
+        own = decode(q[n], *enc[n])
+        acc, wsum = (TIME_W[1] * np.nan_to_num(own), np.where(np.isfinite(own), TIME_W[1], 0.0))
+        for w, h in ((TIME_W[0], before), (TIME_W[2], after)):
+            if h is None or n not in h:
+                continue
+            v = decode(h[n], *enc[n])
+            ok = np.isfinite(v) & np.isfinite(own)
+            acc, wsum = (acc + np.where(ok, w * v, 0.0), wsum + np.where(ok, w, 0.0))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            out[n] = _codes(np.where(np.isfinite(own), acc / np.maximum(wsum, 1e-09), np.nan), enc[n][0], enc[n][1])
+    return out
+
+def classes_of(codes):
+    c = np.asarray(codes, np.float64)
+    return np.where(c == 255, np.nan, np.where(c < SCORE_CODES, np.floor(c / 50 + 0.5), c - CLASS_CODE0 + CB))
+
+def hour_class(q, before, after, enc, fine):
+    ov = cloud_overview(time_smoothed(q, before, after, enc), enc, fine)
+    if not ov:
+        return {}
+    cls = np.where(q['cuclass'] == WB_CODE, q['cuclass'], ov['cuclass']) if 'cuclass' in q else ov['cuclass']
+    return {'cuclass': cls.astype(np.uint8), 'cusky': ov['cusky']}
+
+def hold_decks(prev, cls, low):
+    if prev is None:
+        return cls
+    pc, cc = (classes_of(prev), classes_of(cls))
+    keep = np.isin(pc, (ST, SC)) & (cc <= 3) & (np.nan_to_num(low, nan=0.0) >= BROKEN - DECK_HYST)
+    return np.where(keep, np.uint8(CLASS_CODE0 + SC - CB), cls).astype(np.uint8)
