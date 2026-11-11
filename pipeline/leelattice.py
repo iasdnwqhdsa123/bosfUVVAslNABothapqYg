@@ -106,8 +106,8 @@ def _compact(z, valid, *vals):
     zc = np.take_along_axis(np.where(valid, z, np.inf), order, 1)
     return (zc,) + tuple((np.take_along_axis(np.where(valid, v, 0.0), order, 1) for v in vals))
 
-def _profiles(fields, lat, lon, grid):
-    s = _Sampler(grid, lat, lon)
+def _profiles(fields, lat, lon, grid, sampler=None):
+    s = (sampler or _Sampler)(grid, lat, lon)
     N = lat.shape[0]
     F = lambda k: fields.get(k)
     zs = s(F('elevation'))
@@ -410,22 +410,23 @@ class _F64:
         a = self.done[k]
         return default if a is None else a
 
-def lattice(fields, grid, edges, chunk=NODES_A_CHUNK):
+def lattice(fields, grid, edges, chunk=NODES_A_CHUNK, solve=None, sampler=None):
     i0, j0, ni, nj = node_range(grid)
     jj, ii = np.meshgrid(np.arange(j0, j0 + nj), np.arange(i0, i0 + ni), indexing='ij')
     lat = (jj * LEE_LAT).astype(np.float64).ravel()
     lon = (ii * LEE_LAT).astype(np.float64).ravel()
     fields = _F64(fields)
-    P = _profiles(fields, lat, lon, grid)
+    P = _profiles(fields, lat, lon, grid, sampler)
     ks = band_wavenumbers(list(edges))
     nband = len(edges) - 1
     N = lat.shape[0]
     u, v = (np.full(N, np.nan), np.full(N, np.nan))
     bands = np.zeros((N, nband * len(LEE_AGL)))
     idx = np.nonzero(P['ok'])[0]
+    fn = solve or _solve
     chunks = [idx[c0:c0 + chunk] for c0 in range(0, idx.size, chunk)]
     with ThreadPoolExecutor(max(1, min(LATTICE_THREADS, len(chunks)))) as ex:
-        for sel, (cu, cv, cb) in zip(chunks, ex.map(lambda sel: _solve(P, sel, ks, nband), chunks)):
+        for sel, (cu, cv, cb) in zip(chunks, ex.map(lambda sel: fn(P, sel, ks, nband), chunks)):
             u[sel], v[sel], bands[sel] = (cu, cv, cb)
     return dict(i0=i0, j0=j0, ni=ni, nj=nj, u=u.reshape(nj, ni), v=v.reshape(nj, ni), bands=bands.reshape(nj, ni, -1), ok=P['ok'].reshape(nj, ni))
 
@@ -492,14 +493,14 @@ def lattice_at(L, lat, lon, tables=None):
     u, v = (np.where(ok, u, np.nan), np.where(ok, v, np.nan))
     return (u.reshape(shape), v.reshape(shape), bands.reshape(shape + (nb,)), ok.reshape(shape))
 
-def lattice_cells(L, grid):
+def lattice_cells(L, grid, at=None):
     west, north, step, nx = (float(grid['west']), float(grid['north']), float(grid['step']), int(grid['nx']))
     xs = np.arange(nx)
-    tables = _node_tables(L)
+    tables = None if at else _node_tables(L)
 
     def rows(y0, y1):
         iy = np.arange(y0, y1)
         lat = (north - iy * step)[:, None]
         lon = (west + xs * step)[None, :]
-        return lattice_at(L, lat, lon, tables)
+        return at(L, lat, lon) if at else lattice_at(L, lat, lon, tables)
     return rows

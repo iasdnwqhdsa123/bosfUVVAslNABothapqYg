@@ -207,7 +207,7 @@ def _version_of(paths: list[str], skip: bool=True) -> str:
             found = True
             h.update(os.path.basename(p).encode() + b'\x00' + _stripped(p, skip).encode() + b'\x00')
     return h.hexdigest()[:12] if found else 'none'
-_PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
+_PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'runfields_native', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
 PHYSICS_FILES = _PIPELINE_FILES + [os.path.join(HERE, 'build_day.py')]
 PHYSICS_FILES_EU = _PIPELINE_FILES + [os.path.join(PIPELINE, 'om.py'), os.path.join(PIPELINE, 'replay.py'), os.path.join(HERE, 'build_eu.py')]
 PHYSICS_VERSION = _version_of(PHYSICS_FILES)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 import os
+import time
 import numpy as np
 import leelattice
+import runfields_native
 import runwave
 import shade as shade_mod
 import sky
@@ -10,6 +12,9 @@ FIELDS = ('rrun', 'rrunf', 'wrun', 'wrunf', 'wrunz', 'wtop', 'crest', 'cshade', 
 RUN_FIELDS = ('rrun', 'rrunf', 'wrun', 'wrunf', 'wrunz', 'wtop', 'crest')
 FINE = {'rrunf': 'rrun', 'wrunf': 'wrun'}
 SHADE_FIELDS = ('cshade', 'cthin', 'csun')
+NATIVE = None
+NATIVE_TOLERANCE = 0.0001
+LOG = lambda *a: print(*a, flush=True)
 HERE = os.path.dirname(os.path.abspath(__file__))
 _DIRS = {k: [os.path.join(HERE, 'geo', k), os.path.join(HERE, '..', 'public', 'geo', k)] for k in ('lee', 'ridge')}
 _EXPOSURES: dict = {}
@@ -71,22 +76,20 @@ def _overview_again(q, enc, fine, changed):
                 out[k][y0:y1, x0:x1] = a[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0]
     return out
 
-def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
-    if 'wstar' not in q or 'elevation' not in q:
-        return {}
-    nodata = ~np.isfinite(sky.decode(q['wstar'], *enc['wstar']))
+def _running(q, enc, grid, nodata, native):
     out = {}
 
     def put(n, v):
         out[n] = np.where(nodata, 255, _encode(v, *enc[n])).astype(np.uint8)
+    lat_of, run_of = (runfields_native, runfields_native) if native else (leelattice, runwave)
     lee, ridge = (exposure('lee'), exposure('ridge'))
     bands = None
     if lee is not None and 'wtrap' in q:
-        lat = leelattice.lattice(_Decoded(q, enc), grid, lee.edges)
-        bands = leelattice.lattice_cells(lat, grid)
+        lat = lat_of.lattice(_Decoded(q, enc), grid, lee.edges)
+        bands = lat_of.lattice_cells(lat, grid)
     dec = _Decoded(q, enc)
     bars = bands is not None and 'cuclass' in q
-    r = runwave.run_fields(dec, grid, lee, ridge, bands, bars=bars)
+    r = run_of.run_fields(dec, grid, lee, ridge, bands, bars=bars)
     fine = float(grid['step']) <= sky.FINE_STEP
     if bars and 'bar_own' in r:
         low = wavebars.cloud(dec, r['bar_own'], grid)
@@ -116,7 +119,63 @@ def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
     put('wrunz', np.where(r['wave'] > 0, r['wave_agl'], np.nan))
     put('wtop', r['wave_top'])
     put('crest', r['crest'])
-    del r, bands, dec
+    return (out, q, bands is not None)
+
+def _differ(a, b):
+    bad, near = ([], [])
+    for k in sorted((set(a) | set(b)) - set(FINE)):
+        x, y = (a.get(k), b.get(k))
+        if x is None or y is None or x.shape != y.shape:
+            bad.append(f'{k} missing')
+            continue
+        x, y = (x.astype(np.int32), y.astype(np.int32))
+        f = next((f for f, n in FINE.items() if n == k), None)
+        unit = ' code(s)'
+        if f is not None and (f in a or f in b):
+            if f not in a or f not in b or a[f].shape != x.shape or (b[f].shape != y.shape):
+                bad.append(f'{f} missing')
+                continue
+            x, y, unit = (x * 254 + a[f], y * 254 + b[f], '/254 code(s)')
+        diff = x != y
+        if not diff.any():
+            continue
+        worst = int(np.abs(x - y)[diff].max())
+        (near if float(diff.mean()) <= NATIVE_TOLERANCE and worst <= 1 else bad).append(f'{k} {diff.sum()} cells, {worst}{unit}')
+    return (bad, near)
+
+def _pick(q, enc, grid, nodata, when):
+    global NATIVE
+    if NATIVE is None and (not runfields_native.available()):
+        NATIVE = False
+        LOG(f'ridge/wave running: leelattice.py and runwave.py (C++ not available: {runfields_native.N.error})')
+    if NATIVE:
+        try:
+            return _running(q, enc, grid, nodata, True)[:2]
+        except Exception as e:
+            NATIVE = False
+            LOG(f'::warning::ridge/wave running: the C++ failed on {when:%a %HZ} ({e!r}), leelattice.py and runwave.py from here')
+    out, q2, lattice = _running(q, enc, grid, nodata, False)
+    if NATIVE is None and lattice:
+        t0 = time.time()
+        try:
+            bad, near = _differ(out, _running(q, enc, grid, nodata, True)[0])
+        except Exception as e:
+            bad, near = ([f'it failed: {e!r}'], [])
+        NATIVE = not bad
+        if bad:
+            LOG(f"::warning::ridge/wave running: the C++ differs from leelattice.py and runwave.py on {when:%a %HZ} ({'; '.join(bad[:8])}), the Python for this run")
+        else:
+            LOG(f'ridge/wave running: C++ (matches leelattice.py and runwave.py on {when:%a %HZ}: {len(out) - len(FINE) - len(near)} of {len(out) - len(FINE)} fields identical' + (f"; {', '.join(near)}" if near else '') + f'; checked in {time.time() - t0:.1f}s)')
+    return (out, q2)
+
+def publish(q, enc, grid, when, mid_by_ceil=False, agl_heights=True):
+    if 'wstar' not in q or 'elevation' not in q:
+        return {}
+    nodata = ~np.isfinite(sky.decode(q['wstar'], *enc['wstar']))
+    out, q = _pick(q, enc, grid, nodata, when)
+
+    def put(n, v):
+        out[n] = np.where(nodata, 255, _encode(v, *enc[n])).astype(np.uint8)
     s = shade_mod.shade(_Decoded(q, enc), grid, when, mid_by_ceil, agl_heights, rays=True)
     put('cshade', s['shade'])
     put('cthin', s['thin'])

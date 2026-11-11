@@ -168,6 +168,7 @@ LEVEL_SKIP = {f'cc{p}' for p in P.CC_LEVELS} | {'thx'} | {f'q_m{dz}' for dz in M
 
 def log(*a):
     print(time.strftime('%H:%M:%S'), *a, flush=True)
+runfields.LOG = log
 
 def _fmt_dur(sec):
     sec = int(round(sec))
@@ -2406,7 +2407,7 @@ def main():
     ap.add_argument('--workers', type=int, default=int(os.environ.get('WORKERS', '3')))
     ap.add_argument('--free-only', action='store_true', help='only refresh the free 24 h window from stored hours')
     ap.add_argument('--no-quarters', action='store_true', help="skip HRRR's 15-minute output")
-    ap.add_argument('--python-physics', action='store_true', help='physics.py only (never the C++ physics)')
+    ap.add_argument('--python-physics', action='store_true', help='physics.py, leelattice.py and runwave.py only (never their C++)')
     ap.add_argument('--last-fh', type=int, help="the ensemble's last step (testing)")
     ap.add_argument('--shard', help="i/n: compute only share i (0…n-1) of the run's hours into the store, nothing published (shard_hours)")
     ap.add_argument('--run', help="YYYYMMDDHH: this run, not the newest complete one (the hour shards')")
@@ -2473,6 +2474,8 @@ def main():
         with open(kfile, 'w') as f:
             f.write(keep_now)
     _CTX.update({'src': src, 'run': run, 'region': region, 'hours': hours_dir, 'holder': {}, 'recompute': args.recompute, 'pick_physics': not args.python_physics})
+    if args.python_physics:
+        runfields.NATIVE = False
     jobs = list(fhs)
     back = backfill_jobs(src, run, needed, hours_dir) if not args.max_hours and shard is None else []
     if back:
