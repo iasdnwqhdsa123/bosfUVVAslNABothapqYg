@@ -2383,7 +2383,7 @@ def _publish_open(out, fbase, model, full, times, fields, cutoff, workers, point
             shutil.rmtree(os.path.join(fbase, old), ignore_errors=True)
     open(os.path.join(out, '.changed'), 'w').close()
     return manifest
-STORE_AHEAD_H = {'gfs': 60, 'icon': 60, 'ecmwf': 48, 'ens': 0}
+STORE_AHEAD_H = {'gfs': 60, 'icon': 60, 'ecmwf': 48}
 STORE_AFTER_FREE_H: dict[str, int] = {}
 
 def prune_store(hours_dir, ahead_h, now=None):
@@ -2477,16 +2477,9 @@ def main():
     ap.add_argument('--free-only', action='store_true', help='only refresh the free 24 h window from stored hours')
     ap.add_argument('--no-quarters', action='store_true', help="skip HRRR's 15-minute output")
     ap.add_argument('--python-physics', action='store_true', help='physics.py, leelattice.py and runwave.py only (never their C++)')
-    ap.add_argument('--last-fh', type=int, help="the ensemble's last step (testing)")
     ap.add_argument('--shard', help="i/n: compute only share i (0…n-1) of the run's hours into the store, nothing published (shard_hours)")
     ap.add_argument('--run', help="YYYYMMDDHH: this run, not the newest complete one (the hour shards')")
     args = ap.parse_args()
-    if args.model == 'ens':
-        import ens
-        region = list(REGIONS['gfs'])
-        if args.bbox:
-            region[:4] = [float(x) for x in args.bbox.split(',')]
-        return ens.build(args.out, last=args.last_fh or ens.LAST_FH, region=tuple(region), workers=args.workers, force=args.force)
     if args.free_only:
         write_free(args.out, args.model, workers=args.workers)
         hours_dir = os.path.join(args.out, args.model, '_hours')

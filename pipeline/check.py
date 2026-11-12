@@ -11,7 +11,7 @@ from aviation import VERSION as AVIATION_VERSION
 from chart_tiles import VERSION as CHART_TILES_VERSION, cycle_of
 from sources import OPEN_AHEAD_H, OPEN_SLACK_H, PAUSED, REQUIRED, SOURCES, latest_complete_run, needed_times
 AIRSPACE_MAX_AGE = timedelta(days=7)
-SLOTS = {'01:15': {'hrrr': 23}, '02:00': {'hrrr': 0, 'icond2': 0, 'ecmwf': 18, 'arome': 21}, '02:30': {'hrrr': 1}, '03:30': {'hrrr': 2}, '03:55': {'icon': 0, 'icond2': 3, 'hrrr': 3}, '05:30': {'gfs': 0, 'hrrr': 4}, '06:30': {'hrrr': 5, 'arome': 3}, '08:00': {'hrrr': 6, 'icond2': 6}, '08:30': {'hrrr': 7}, '09:40': {'ecmwf': 0, 'icon': 6, 'ens': 0, 'hrrr': 8}, '10:30': {'hrrr': 9}, '11:30': {'gfs': 6, 'icond2': 9, 'hrrr': 10}, '12:30': {'hrrr': 11}, '14:00': {'hrrr': 12, 'icond2': 12, 'ecmwf': 6, 'arome': 9}, '14:30': {'hrrr': 13}, '15:40': {'hrrr': 14}, '16:30': {'icon': 12, 'icond2': 15, 'hrrr': 15}, '17:30': {'gfs': 12, 'hrrr': 16}, '18:30': {'hrrr': 17}, '20:00': {'hrrr': 18, 'icond2': 18, 'arome': 15}, '20:30': {'hrrr': 19}, '21:40': {'icon': 18, 'ecmwf': 12, 'ens': 12, 'hrrr': 20}, '22:30': {'icond2': 21, 'hrrr': 21}, '23:20': {'gfs': 18, 'hrrr': 22}}
+SLOTS = {'01:15': {'hrrr': 23}, '02:00': {'hrrr': 0, 'icond2': 0, 'ecmwf': 18, 'arome': 21}, '02:30': {'hrrr': 1}, '03:30': {'hrrr': 2}, '03:55': {'icon': 0, 'icond2': 3, 'hrrr': 3}, '05:30': {'gfs': 0, 'hrrr': 4}, '06:30': {'hrrr': 5, 'arome': 3}, '08:00': {'hrrr': 6, 'icond2': 6}, '08:30': {'hrrr': 7}, '09:40': {'ecmwf': 0, 'icon': 6, 'hrrr': 8}, '10:30': {'hrrr': 9}, '11:30': {'gfs': 6, 'icond2': 9, 'hrrr': 10}, '12:30': {'hrrr': 11}, '14:00': {'hrrr': 12, 'icond2': 12, 'ecmwf': 6, 'arome': 9}, '14:30': {'hrrr': 13}, '15:40': {'hrrr': 14}, '16:30': {'icon': 12, 'icond2': 15, 'hrrr': 15}, '17:30': {'gfs': 12, 'hrrr': 16}, '18:30': {'hrrr': 17}, '20:00': {'hrrr': 18, 'icond2': 18, 'arome': 15}, '20:30': {'hrrr': 19}, '21:40': {'icon': 18, 'ecmwf': 12, 'hrrr': 20}, '22:30': {'icond2': 21, 'hrrr': 21}, '23:20': {'gfs': 18, 'hrrr': 22}}
 
 def lands(mid: str, hour: int) -> tuple[timedelta, timedelta]:
     hm = lambda s: timedelta(hours=int(s[:-3]), minutes=int(s[-2:]))
@@ -25,10 +25,8 @@ def lands(mid: str, hour: int) -> tuple[timedelta, timedelta]:
         t = ('3:35', '4:45') if hour == 0 else ('4:28', '4:50') if hour == 12 else ('3:20', '4:30')
     elif mid == 'gfs':
         t = ('5:18', '6:30')
-    elif mid == 'ecmwf':
-        t = ('9:35', '10:10') if hour % 12 == 0 else ('8:28', '9:00')
     else:
-        t = ('7:46', '8:30')
+        t = ('9:35', '10:10') if hour % 12 == 0 else ('8:28', '9:00')
     return (hm(t[0]), hm(t[1]))
 OVERDUE = timedelta(minutes=60)
 WAIT_STEP = timedelta(minutes=1)
