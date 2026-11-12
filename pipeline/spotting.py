@@ -1,22 +1,24 @@
 from __future__ import annotations
 import numpy as np
 LEN, VIR, HALO, FLU, MAM, CAV, SEA = (1, 2, 4, 8, 16, 32, 64)
-ARC, PIL, CTR, VOL = (1, 2, 4, 8)
+ARC, PIL, CTR, VOL, STR = (1, 2, 4, 8, 16)
 G = 9.81
 LIFT_PER_K = 125.0
 P_TOP = 250.0
-LEN_WIND = 8.0
-LEN_SPREAD = 5.0
+LEN_W = 0.15
+LEN_RMS_KM = 30.0
+LEN_P_TOP, LEN_EVERY = (400.0, 2)
+LEN_WIND = 6.0
 LEN_N2 = 2e-05
-LEN_COVER = (60.0, 40.0)
 LEN_AGL = 1200.0
 LEN_RELIEF = (250.0, 40.0)
 LEN_NEAR_KM = 12.0
-LEN_TERRAIN = 0.6
 LEN_RAIN = 0.3
+LEN_LOW = 60.0
+LEN_TERRAIN, LEN_ETA, LEN_SPREAD = (0.6, 300.0, 5.0)
 N_MIN = 0.006
-LEN_GRID_WAVE, LEN_WAVE_MAX, LEN_COARSE_KM = (6.0, 60000.0, 8.0)
-VIR_DBZ, VIR_LOW_DBZ, VIR_RAIN, VIR_SFC_SPREAD = (10.0, 5.0, 0.1, 3.0)
+LEN_COARSE_KM = 8.0
+VIR_DBZ, VIR_LOW_DBZ, VIR_RAIN, VIR_SFC_SPREAD = (5.0, 5.0, 0.1, 3.0)
 VIR_DECK = (70.0, 2500.0, -8.0, 10.0)
 HALO_HIGH, HALO_SUN, HALO_LOW, HALO_MID, HALO_EL = (60.0, 0.5, 30.0, 40.0, 5.0)
 FLU_RI, FLU_SHEAR, FLU_AGL = (0.6, 0.008, 1000.0)
@@ -30,6 +32,7 @@ ARC_KM, ARC_GUST, ARC_SPREAD = (15.0, 15.0, 8.0)
 PIL_OD, PIL_SPREAD, PIL_AGL, PIL_COVER = (40.0, 2.5, (3500.0, 9000.0), 60.0)
 VOL_BOX, VOL_MONTHS = ((136.5, -20.5, 142.5, -14.0), (8, 9, 10, 11))
 VOL_HOURS, VOL_SPREAD, VOL_WIND, VOL_LOW, VOL_INV = ((4.0, 9.0), 3.0, 6.0, 60.0, 1.0)
+STR_CU, STR_OD, STR_WSTAR, STR_WIND, STR_TURN, STR_ZL, STR_Z0 = (150.0, 50.0, 0.8, 7.0, 40.0, (2.0, 25.0), 0.1)
 CTR_COVER = 0.03
 SEEN_LOW = 80.0
 
@@ -52,7 +55,7 @@ def _cover_at(cc, p):
 def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrail=None, lat=None, lon=None, valid=None):
     from scipy import ndimage
     order = [i for i in np.argsort(-np.asarray(levels, dtype=np.float64)) if levels[i] >= P_TOP]
-    p = np.asarray([float(levels[i]) for i in order])
+    p = np.asarray([float(levels[i]) for i in order], dtype=np.float32)
     z, t, td, u, v = (np.stack([np.asarray(lv[k][i], dtype=np.float32) for i in order]) for k in ('z', 't', 'td', 'u', 'v'))
     w = None if lv.get('w') is None else np.stack([np.nan_to_num(np.asarray(lv['w'][i], dtype=np.float32)) for i in order])
     shape = zs.shape
@@ -79,21 +82,21 @@ def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrai
     dry = _near(rain, cells(LEN_NEAR_KM), ndimage.maximum_filter) < LEN_RAIN
     hills = _near(np.nan_to_num(relief), cells(LEN_RELIEF[1]), ndimage.maximum_filter)
     zi = f(out.get('zi'))
-    n_low = np.sqrt(np.maximum(n2k[min(1, L - 1)], N_MIN ** 2))
-    eta_ground = LEN_TERRAIN * np.minimum(_near(np.nan_to_num(relief), cells(LEN_NEAR_KM), ndimage.maximum_filter), spd[min(1, L - 1)] / n_low)
+    fine = w is not None and grid_km < LEN_COARSE_KM
     lent = np.zeros(shape, bool)
-    for k in range(L):
-        n = np.sqrt(np.maximum(n2k[k], N_MIN ** 2))
-        eta = eta_ground
-        if w is not None:
-            wind = np.maximum(spd[k], 5.0)
-            lam = np.minimum(np.maximum(2 * np.pi * wind / n, LEN_GRID_WAVE * grid_km * 1000), LEN_WAVE_MAX)
-            eta_w = _near(np.abs(w[k]), cells(LEN_NEAR_KM), ndimage.maximum_filter) * lam / (2 * np.pi * wind)
-            eta = np.maximum(eta_w, eta_ground) if grid_km >= LEN_COARSE_KM else eta_w
-        patchy = _near(cc[k], cells(LEN_COVER[1]), ndimage.uniform_filter) < LEN_COVER[0]
-        here = ok[k] & (agl[k] >= np.maximum(LEN_AGL, zi + 300)) & (spd[k] >= LEN_WIND) & (n2k[k] >= LEN_N2) & patchy
-        lent |= here & (dpd[k] <= LEN_SPREAD) & (eta >= LIFT_PER_K * dpd[k]) & (seen | (agl[k] < 2000))
-    lent &= dry & (hills >= LEN_RELIEF[0])
+    floor = np.maximum(LEN_AGL, zi + 300)
+    if fine:
+        for k in [k for k in range(L) if p[k] >= LEN_P_TOP][::LEN_EVERY]:
+            here = ok[k] & (agl[k] >= floor) & (spd[k] >= LEN_WIND) & (n2k[k] >= LEN_N2)
+            if here.any():
+                lent |= here & (_near(w[k] * w[k], cells(LEN_RMS_KM), ndimage.uniform_filter) >= LEN_W ** 2)
+    else:
+        n_low = np.sqrt(np.maximum(n2k[min(1, L - 1)], N_MIN ** 2))
+        eta_ground = LEN_TERRAIN * np.minimum(_near(np.nan_to_num(relief), cells(LEN_NEAR_KM), ndimage.maximum_filter), spd[min(1, L - 1)] / n_low)
+        for k in range(L):
+            here = ok[k] & (agl[k] >= floor) & (spd[k] >= LEN_WIND) & (n2k[k] >= LEN_N2)
+            lent |= here & (dpd[k] <= LEN_SPREAD) & (eta_ground >= np.maximum(LEN_ETA, LIFT_PER_K * dpd[k]))
+    lent &= dry & (hills >= LEN_RELIEF[0]) & (low < LEN_LOW)
     refc, refd1 = (s.get('refc'), s.get('refd1'))
     spread2 = np.nan_to_num(s['t2'] - s['td2'])
     if refc is not None:
@@ -139,6 +142,18 @@ def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrai
         sea = deck & (peaks >= deck_top + SEA_ABOVE) | (zs >= _near(deck_top, r, ndimage.minimum_filter) + SEA_ABOVE)
     moist = ok & (agl >= PIL_AGL[0]) & (agl <= PIL_AGL[1]) & (dpd <= PIL_SPREAD) & (cc < PIL_COVER) & (n2k > 0)
     pil = (od >= PIL_OD) & moist.any(axis=0)
+    wstar, cud = (f(out.get('wstar')), f(out.get('cudepth')))
+    bl = np.isfinite(agl) & (agl >= 0) & (agl <= np.maximum(zi, 300.0)[None]) & np.isfinite(u) & np.isfinite(v)
+    nbl = bl.sum(axis=0)
+    u10, v10 = (f(s.get('u10')), f(s.get('v10')))
+    ub, vb = ((np.where(bl, u, 0).sum(axis=0) + u10) / (nbl + 1), (np.where(bl, v, 0).sum(axis=0) + v10) / (nbl + 1))
+    ktop = np.argmax(np.where(bl, agl, -np.inf), axis=0)[None]
+    ut = np.where(nbl > 0, np.take_along_axis(u, ktop, axis=0)[0], u10)
+    vt = np.where(nbl > 0, np.take_along_axis(v, ktop, axis=0)[0], v10)
+    turn = np.abs((np.degrees(np.arctan2(ut, vt) - np.arctan2(u10, v10)) + 180) % 360 - 180)
+    ustar = 0.4 * wind10 / np.log(10.0 / STR_Z0)
+    zl = 0.4 * (wstar / np.maximum(ustar, 0.05)) ** 3
+    streets = (cud >= STR_CU) & (od < STR_OD) & (rain < VIR_RAIN) & (wstar >= STR_WSTAR) & (np.hypot(ub, vb) >= STR_WIND) & (zl >= STR_ZL[0]) & (zl <= STR_ZL[1]) & (turn <= STR_TURN) & (wind10 > 0.5)
     ctr = np.zeros(shape, bool) if contrail is None else (np.nan_to_num(contrail) >= CTR_COVER) & seen & (mid < SEEN_LOW)
     vol = np.zeros(shape, bool)
     if lat is not None and lon is not None and (valid is not None) and (valid.month in VOL_MONTHS):
@@ -149,5 +164,5 @@ def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrai
             warm = np.where(ok, t, -np.inf)[:k1 + 2].max(axis=0) - np.nan_to_num(s['t2'])
             vol = box & (solar >= VOL_HOURS[0]) & (solar <= VOL_HOURS[1]) & (spread2 <= VOL_SPREAD) & (wind10 <= VOL_WIND) & (low < VOL_LOW) & (rain < VIR_RAIN) & (warm >= VOL_INV)
     s1 = LEN * lent + VIR * virga + HALO * halo + FLU * flu + MAM * mam + CAV * cav + SEA * sea
-    s2 = ARC * arc + PIL * pil + CTR * ctr + VOL * vol
+    s2 = ARC * arc + PIL * pil + CTR * ctr + VOL * vol + STR * streets
     return {'spot1': np.where(inside, s1, np.nan).astype(np.float32), 'spot2': np.where(inside, s2, np.nan).astype(np.float32)}
