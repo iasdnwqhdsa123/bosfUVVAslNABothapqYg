@@ -21,17 +21,21 @@ EU_FLAT_REGIONS = {'Germany-Benelux', 'Poland-Czech'}
 FLAT_REGIONS |= EU_FLAT_REGIONS
 ALPS_BOXES = ((5.0, 45.3, 16.8, 48.1), (5.0, 43.7, 7.8, 45.3), (9.5, 44.9, 13.5, 45.3))
 EU_BOX = (-25.0, 34.0, 44.75, 71.5)
-MACRO = {'US': {'models': tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr,gfs').split(',') if m)) or ('hrrr',), 'tz': 'America/Chicago'}, 'EU': {'models': tuple((m for m in os.environ.get('CALIB_EU_MODELS', 'ecmwf,icon,icond2').split(',') if m)) or ('ecmwf',), 'tz': 'Europe/Berlin'}}
+MACRO = {'US': {'models': tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr,gfs').split(',') if m)) or ('hrrr',), 'tz': 'America/Chicago'}, 'EU': {'models': tuple((m for m in os.environ.get('CALIB_EU_MODELS', 'ecmwf,icon,icond2,arome').split(',') if m)) or ('ecmwf',), 'tz': 'Europe/Berlin'}}
 REGION_MACRO = {**{r: 'US' for r in set(REGION.values())}, **{r: 'EU' for r in set(EU_REGION.values())}}
-MODEL_INDEX = {'hrrr': 0, 'gfs': 1, 'ecmwf': 2, 'icon': 3, 'icond2': 4}
-MODEL_MACRO = {'hrrr': 'US', 'gfs': 'US', 'ecmwf': 'EU', 'icon': 'EU', 'icond2': 'EU'}
-MODEL_LABEL = {'hrrr': 'HRRR', 'gfs': 'GFS', 'ecmwf': 'ECMWF', 'icon': 'ICON', 'icond2': 'ICON-D2'}
+MODEL_INDEX = {'hrrr': 0, 'gfs': 1, 'ecmwf': 2, 'icon': 3, 'icond2': 4, 'arome': 5}
+MODEL_MACRO = {'hrrr': 'US', 'gfs': 'US', 'ecmwf': 'EU', 'icon': 'EU', 'icond2': 'EU', 'arome': 'EU'}
+MODEL_LABEL = {'hrrr': 'HRRR', 'gfs': 'GFS', 'ecmwf': 'ECMWF', 'icon': 'ICON', 'icond2': 'ICON-D2', 'arome': 'AROME'}
 MACRO_LABEL = {'US': 'United States', 'EU': 'Europe'}
 EU_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_SHARE', '0.4') or 0.4)))
 EU_FIRST = max(0, int(os.environ.get('CALIB_EU_FIRST', '120') or 0))
 EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '0.25') or 0.25)))
 SAMPLED = {'icon', 'icond2'}
 ICON_FIRST = '2025-01-17'
+AROME_FIRST = '2025-01-14'
+FIRST_DAY = {'icon': ICON_FIRST, 'icond2': ICON_FIRST, 'arome': AROME_FIRST}
+PART_DOMAIN = {'icond2', 'arome'}
+ADDED = ('arome',)
 EU_START = '2024-03-01'
 LEADS = {m: tuple((int(x) for x in ns.split('+') if x.strip().isdigit())) for m, _, ns in (p.partition(':') for p in os.environ.get('CALIB_LEADS', 'hrrr:1,gfs:1+3+5+7,ecmwf:1+3+5+7').split(',') if ':' in p)}
 LEAD_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_LEAD_SHARE', '1') or 0)))
@@ -89,7 +93,7 @@ def models_for(regions, day: str | None=None, lead: bool=True) -> tuple:
     out = []
     for a in sorted({macro_of(r) for r in regions} or {'US'}):
         for m in MACRO[a]['models']:
-            if m in out or (m in SAMPLED and (not (day and icon_sampled(day)))):
+            if m in out or (m in SAMPLED and (not (day and icon_sampled(day)))) or (m in FIRST_DAY and (not (day and day >= FIRST_DAY[m]))):
                 continue
             out.append(m)
     if day and lead:
@@ -220,9 +224,15 @@ _WHOLE_LEAD = _version_of(PHYSICS_FILES_LEAD, skip=False)
 def model_physics(model: str) -> str:
     return globals()['LEAD_VERSION'] if is_lead(model) else physics_version(model_macro(model))
 
+def added_models(macro: str, day: str | None) -> list[str]:
+    return [m for m in ADDED if m in MACRO[macro]['models'] and day and (day >= FIRST_DAY.get(m, ''))]
+
 def lead_version(key: str) -> str | None:
-    ms = lead_models(macro_of_key(key), day_of(key))
-    return f"{globals()['LEAD_VERSION']}:{','.join(ms)}" if ms else None
+    macro, day = (macro_of_key(key), day_of(key))
+    ms, add = (lead_models(macro, day), added_models(macro, day))
+    if not ms and (not add):
+        return None
+    return f"{globals()['LEAD_VERSION']}:{','.join(ms)}" + (f"+{','.join(add)}" if add else '')
 
 def lead_matches(stamp: str | None) -> bool:
     return stamp is not None and stamp in (globals()['LEAD_VERSION'], _WHOLE_LEAD)

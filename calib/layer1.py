@@ -336,7 +336,7 @@ def run(D: dict, out: str) -> dict:
             md += train.md_table(f['table'], ['physics', 'constant', 'ml'])
         md += ['', train.splits_md(f['export']), f"Export check (max |trees − sklearn|): {f['check']:.2e}.", '']
     if by_macro:
-        md += ['## Which model is nearer where and when', '', "The observations' median ratio (cb: shift in m) and MAE per model, the forecast as it is; the nearest (lowest MAE) in bold. Each area's models against each other (the US's HRRR and GFS, Europe's ECMWF and ICON, ICON-D2 where its domain covers the box, on the sampled days).", '']
+        md += ['## Which model is nearer where and when', '', "The observations' median ratio (cb: shift in m) and MAE per model, the forecast as it is; the nearest (lowest MAE) in bold. Each area's models against each other (the US's HRRR and GFS, Europe's ECMWF and ICON, ICON-D2 where its domain covers the box, on the sampled days; AROME where its domain covers the box).", '']
         for macro, cmp_m in by_macro.items():
             if len(by_macro) > 1:
                 md += [f'### {common.MACRO_LABEL.get(macro, macro)}', '']

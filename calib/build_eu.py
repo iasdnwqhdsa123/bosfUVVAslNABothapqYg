@@ -10,9 +10,9 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common
-RUN_H = {'ecmwf': 0, 'icon': 0, 'icond2': 0}
-GRID = {'ecmwf': (-170.0, -54.9, 0.1), 'icon': (-170.0, -54.875, 0.125), 'icond2': (-3.94, 43.18, 0.02)}
-DOMAIN = {'icond2': (-3.94, 43.18, 20.34, 58.08)}
+RUN_H = {'ecmwf': 0, 'icon': 0, 'icond2': 0, 'arome': 0}
+GRID = {'ecmwf': (-170.0, -54.9, 0.1), 'icon': (-170.0, -54.875, 0.125), 'icond2': (-3.94, 43.18, 0.02), 'arome': (-12.0, 37.5, 0.025)}
+DOMAIN = {'icond2': (-3.94, 43.18, 20.34, 58.08), 'arome': (-12.0, 37.5, 16.0, 55.4)}
 ECMWF_025_FIRST = '2024-03-01'
 OM_DOMAIN, OM_CHUNK = ('ecmwf_ifs', 504)
 OM_RUN_BASE = 'https://openmeteo.s3.amazonaws.com/data_run/ecmwf_ifs'
@@ -180,15 +180,16 @@ def _ecmwf(a, hours: list[datetime]) -> int:
     sys.argv = ['build.py', '--model', 'ecmwf', '--out', a.out, '--force', '--workers', str(a.workers), f'--bbox={w},{s},{e},{n}']
     return build.main()
 
-def _icon(a, hours: list[datetime]) -> int:
-    import replay
+def _replay(a, hours: list[datetime]) -> int:
     bbox = [float(x) for x in a.bbox.split(',')]
     if not covers(a.model, bbox):
         print(f"{a.model}: the box is outside the model's domain", flush=True)
         return 2
-    if a.day < common.ICON_FIRST:
-        print(f"{a.model}: the archive's layout before {common.ICON_FIRST} isn't read (docs/replay.md, Older days)", flush=True)
+    first = common.FIRST_DAY.get(a.model, common.ICON_FIRST)
+    if a.day < first:
+        print(f"{a.model}: the archive's layout before {first} isn't read (docs/replay.md, Older days)", flush=True)
         return 2
+    import replay
     w, s, e, n = snap(bbox, a.model)
     utc_day = hours[0].strftime('%Y-%m-%d')
     if hours[-1].strftime('%Y-%m-%d') != utc_day:
@@ -214,6 +215,6 @@ def main() -> int:
         print(f'{a.model}: no lead runs read', flush=True)
         return 2
     hours = utc_hours(a.day, a.tz, a.from_local, a.to_local)
-    return _ecmwf(a, hours) if a.model == 'ecmwf' else _icon(a, hours)
+    return _ecmwf(a, hours) if a.model == 'ecmwf' else _replay(a, hours)
 if __name__ == '__main__':
     sys.exit(main())

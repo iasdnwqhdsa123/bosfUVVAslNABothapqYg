@@ -10,7 +10,7 @@ import build
 import om
 import sources
 BASE = 'https://openmeteo.s3.amazonaws.com/data'
-NT = {'dwd_icon_d2': 121, 'dwd_icon': 253}
+NT = {'dwd_icon_d2': 121, 'dwd_icon': 253, 'meteofrance_arome_france0025': 108}
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 UNIT = {'pressure_msl': 'hPa'}
 
@@ -187,7 +187,7 @@ class ArchiveSource(sources.OpenMeteo):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--model', required=True, choices=('icon', 'icond2'))
+    ap.add_argument('--model', required=True, choices=('icon', 'icond2', 'arome'))
     ap.add_argument('--day', required=True, help='UTC day, YYYY-MM-DD')
     ap.add_argument('--from-h', type=int, default=0, help='first UTC hour of the day')
     ap.add_argument('--to-h', type=int, default=23, help='last UTC hour of the day')

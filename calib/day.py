@@ -310,12 +310,27 @@ def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corre
     res = copy.deepcopy(rec)
     res['macro'], res['key'] = (macro, key)
     res['boxes'] = [b for b in res.get('boxes') or [] if not common.is_lead(b.get('model')) or b.get('model') in keep]
-    res['models'] = [m for m in res.get('models') or [res.get('model') or 'hrrr'] if not common.is_lead(m)] + leads
+    own = [m for m in res.get('models') or [res.get('model') or 'hrrr'] if not common.is_lead(m)]
+    added = [m for m in common.added_models(macro, day) if m not in own]
+    res['models'] = own + leads
     items = (res.get('flights') or []) + (res.get('short') or []) + (res.get('obs') or [])
     for m in {m for f in items for k in f if k.startswith('model_') for m in [k.split('_', 2)[-1] if k.startswith('model_c_') else k[6:]] if common.is_lead(m) and m not in keep} | {m for f in items for x in (f.get('legs') or []) + (f.get('climbs') or []) for m in x.get('models') or {} if common.is_lead(m) and m not in keep}:
         _drop_model(res, m, items)
     os.makedirs(work, exist_ok=True)
     built, new = ({m: prev[m] for m in keep}, 0)
+    res['added_new'] = []
+    for model in added:
+        if LEAD_DEADLINE is not None and time.time() > LEAD_DEADLINE:
+            common.note(f"{day} {model}: the shard's time is up; left for a later run")
+            break
+        _drop_model(res, model, items)
+        res['boxes'] = [b for b in res['boxes'] if b.get('model') != model]
+        _run_model(res, day, items, work, model, workers, grids, corrections)
+        res['models'].insert(len(own), model)
+        own.append(model)
+        res['grids'] = bool(res.get('grids')) or any((b.get('saved') for b in res['boxes'] if b.get('model') == model))
+        res['added_new'].append(model)
+        new += 1
     for model in [m for m in leads if m not in keep]:
         if not _run_model(res, day, items, work, model, workers, grids, corrections):
             break
@@ -439,7 +454,7 @@ def _merge_eval(results: list, B: dict, inputs: list, model: str, bi: int, suffi
         for c, e in zip(f.get('climbs') or [], r['points']):
             c.setdefault('models' + suffix, {})[model] = e.get('own')
         f.setdefault('probe_m' + ('c' if suffix else ''), {})[model] = {str(p['t']): None if e is None else {k: e.get(k) for k in track.PROBE_KEYS} for p, e in zip(inputs[r['ref']]['probes'], r.get('probes') or [])}
-BUILDER = {'hrrr': 'build_day.py', 'gfs': 'build_day.py', 'ecmwf': 'build_eu.py', 'icon': 'build_eu.py', 'icond2': 'build_eu.py'}
+BUILDER = {'hrrr': 'build_day.py', 'gfs': 'build_day.py', 'ecmwf': 'build_eu.py', 'icon': 'build_eu.py', 'icond2': 'build_eu.py', 'arome': 'build_eu.py'}
 LEAD_GRIDS = ('gfs', 'ecmwf')
 
 def build_command(day: str, B: dict, out: str, model: str, workers: int, work: str) -> list[str] | None:
@@ -512,11 +527,13 @@ def _drop_model(res: dict, model: str, items=None) -> None:
                 (x.get(mk) or {}).pop(model, None)
 
 def _finish_leads(res: dict, key: str, built: dict) -> None:
-    want = common.lead_models(res.get('macro') or common.macro_of_key(key), res.get('date') or common.day_of(key))
+    macro, day = (res.get('macro') or common.macro_of_key(key), res.get('date') or common.day_of(key))
+    want = common.lead_models(macro, day)
     res['leads_built'] = {m: v for m, v in built.items() if m in want}
     lb = [b for b in res['boxes'] if common.is_lead(b.get('model'))]
-    done = bool(want) and all((common.lead_matches(res['leads_built'].get(m)) for m in want))
-    res['lead_v'] = common.lead_version(key) if done and any((b.get('ok') for b in lb)) else None
+    done = all((common.lead_matches(res['leads_built'].get(m)) for m in want)) and (not want or any((b.get('ok') for b in lb)))
+    added = all((m in (res.get('models') or []) for m in common.added_models(macro, day)))
+    res['lead_v'] = common.lead_version(key) if done and added and (want or common.added_models(macro, day)) else None
 
 def _was_built(rec: dict, model: str, bi: int) -> bool:
     bs = [b for b in rec.get('boxes') or [] if b.get('model') == model]
@@ -539,7 +556,7 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
             info = {'model': model, 'box': bi, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False, 'saved': True}
             gdir = os.path.join(grids, key, f'{model}-box{bi}')
             why = grids_usable(gdir, B['bbox'], model)
-            if why == 'missing' and model in common.SAMPLED and (not _was_built(rec, model, bi)):
+            if why == 'missing' and (model in common.SAMPLED or model in common.PART_DOMAIN) and (not _was_built(rec, model, bi)):
                 continue
             if why == 'missing' and common.is_lead(model) and (not _was_built(rec, model, bi)):
                 continue

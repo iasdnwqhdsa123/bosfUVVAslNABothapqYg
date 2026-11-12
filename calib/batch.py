@@ -174,7 +174,9 @@ def _plan_day(P: dict, d: str, src: str) -> None:
         rec = common.read_json(fn)
         common.write_json(f'{out}/in/{d}.json.gz', {'day': d, 'src': src, 'flights': rec.get('flights') or [], 'short': rec.get('short') or [], 'obs': rec.get('obs') or [], 'rec': rec})
         items = (rec.get('flights') or []) + (rec.get('short') or [])
-        P['costs'][d] = max(1, len({f.get('region') for f in items})) * max(1, len(common.lead_models(common.macro_of_key(d), common.day_of(d))))
+        macro, day, lb = (common.macro_of_key(d), common.day_of(d), rec.get('leads_built') or {})
+        todo = [m for m in common.lead_models(macro, day) if not common.lead_matches(lb.get(m))] + [m for m in common.added_models(macro, day) if m not in (rec.get('models') or [])]
+        P['costs'][d] = max(1, len({f.get('region') for f in items})) * max(1, len(todo))
         P['srcs'][d] = src
         run['leads'] = run.get('leads', 0) + 1
         return
@@ -510,7 +512,7 @@ def _merge_lead(data: str, d: str, how: str, fn, state: dict, run: dict, months:
         prev['lv'] = res.get('lead_v')
         prev.pop('lv_tries', None)
         run['leads_ok' if res.get('lead_v') else 'leads_part'] = run.get('leads_ok' if res.get('lead_v') else 'leads_part', 0) + 1
-        if any((b.get('saved') for b in res['boxes'] if common.is_lead(b.get('model')))):
+        if any((b.get('saved') for b in res['boxes'] if common.is_lead(b.get('model')) or b.get('model') in (res.get('added_new') or []))):
             months.add(month_of(d))
         return
     if how != 'lost':
