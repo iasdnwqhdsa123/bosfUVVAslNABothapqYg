@@ -45,6 +45,8 @@ env:
   CALIB_GRID_FIELDS: "eval"
   CALIB_GRID_HOURS: "8-20"
   KEEP_DAYS: "60"
+  KEEP_COPIES: "3"
+  CROWDED_MONTHS: "3"
   CALIB_EU_SHARE: "0.4"
   CALIB_EU_FIRST: "120"
   CALIB_EU_ICON_SHARE: "1"
@@ -71,9 +73,13 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          RUN: ${{ steps.g.outputs.run }}
         run: |
-          stale="$(python3 calib/state.py list calib-grids- --older "$KEEP_DAYS" | python3 -c 'import json,sys; print(json.dumps(sorted(k[len("calib-grids-"):] for k in json.load(sys.stdin))))')" || stale="[]"
-          echo "bundles to upload again: $stale"
+          stale="$(python3 calib/state.py list calib-grids- --older "$KEEP_DAYS")" || stale="{}"
+          crowded="[]"
+          if [ "$RUN" = yes ]; then crowded="$(python3 calib/state.py crowded calib-grids- --over "$KEEP_COPIES" --max "$CROWDED_MONTHS")" || crowded="[]"; fi
+          stale="$(STALE="$stale" CROWDED="$crowded" python3 -c 'import json,os; p="calib-grids-"; print(json.dumps(sorted({k[len(p):] for k in json.loads(os.environ["STALE"])} | {k[len(p):] for k in json.loads(os.environ["CROWDED"])})))')" || stale="[]"
+          echo "bundles to upload again: $stale (crowded: $(echo "$crowded" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'))"
           echo "stale=$stale" >> "$GITHUB_OUTPUT"
       - name: Keep the data while paused
         id: keep
@@ -414,7 +420,7 @@ jobs:
         run: |
           mkdir -p /tmp/grids
           set +e
-          python3 calib/state.py fetch "calib-grids-$MONTH" /tmp/grids 2> /tmp/fetch.err
+          python3 calib/state.py fetch "calib-grids-$MONTH" /tmp/grids --id /tmp/base 2> /tmp/fetch.err
           rc=$?
           set -e
           if [ "$rc" = 3 ]; then echo "a new bundle"
@@ -446,11 +452,19 @@ jobs:
           rm -rf /tmp/built
           echo "$n box-days added; $(ls /tmp/grids | wc -l) in the bundle"
           [ "$(ls /tmp/grids | wc -l)" -gt 0 ] || { echo "::error::an empty bundle"; exit 1; }
+      - name: Fold in the older copies
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 calib/state.py fold "calib-grids-$MONTH" /tmp/grids --base-id /tmp/base --budget 900 --out /tmp/covered.json
+          echo "$(ls /tmp/grids | wc -l) days in the bundle"
       - name: Pack
         run: |
           mkdir -p /tmp/out
           python3 calib/state.py pack /tmp/grids "/tmp/out/calib-grids-$MONTH.enc"
           ls -la /tmp/out
+          date -u +%Y-%m-%dT%H:%M:%SZ > /tmp/packed_at
       - uses: actions/upload-artifact@v7
         with:
           name: calib-grids-${{ matrix.month }}
@@ -458,6 +472,35 @@ jobs:
           retention-days: 90
           compression-level: 0
           if-no-files-found: error
+      - name: Older copies deleted
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          [ -f /tmp/covered.json ] || { echo "nothing folded: none deleted"; exit 0; }
+          python3 calib/state.py tidy "calib-grids-$MONTH" --covered /tmp/covered.json --keep "$KEEP_COPIES" --after "$(cat /tmp/packed_at)"
+  tidy_data:
+    needs: [merge]
+    if: ${{ !cancelled() && needs.merge.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: The newest data
+        run: python3 calib/state.py fetch calib-data /tmp/data --id /tmp/base
+      - name: Older copies checked
+        run: python3 calib/state.py covered calib-data /tmp/data --base-id /tmp/base --keep "$KEEP_COPIES" --budget 900 --out /tmp/covered.json
+      - name: Older copies deleted
+        run: python3 calib/state.py tidy calib-data --covered /tmp/covered.json --keep "$KEEP_COPIES"
   relay:
     needs: [gate, plan, merge]
     if: ${{ always() && !cancelled() && needs.gate.outputs.run == 'yes' && needs.plan.outputs.chain != 'off' && inputs.after_failure != 'yes' && (needs.plan.result == 'failure' || needs.merge.result == 'failure') }}

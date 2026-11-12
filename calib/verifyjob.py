@@ -23,6 +23,10 @@ WORKFLOW = 'Forecast data'
 MIN_LEFT = 15
 MIN_SINCE = 10
 DEADLINE_BEFORE = 10
+ACCOUNT_JOBS = 20
+VERIFY_JOBS = 3
+HEADROOM = 4
+BUDGET_MIN = 60
 OLD_CIPHER = ['openssl', 'enc', '-d', '-aes-256-ctr', '-pbkdf2', '-pass', 'env:VERIFY_CARRY_KEY']
 
 def _verify():
@@ -69,25 +73,44 @@ def busy(repo: str, api=_api) -> int:
     runs = api(f'repos/{repo}/actions/runs?per_page=40', _tokens()[0]).get('workflow_runs', [])
     return sum((1 for r in runs if (r.get('name') or '').startswith(WORKFLOW) and r.get('status') != 'completed'))
 
+def jobs_going(repos: list[str], api=_api, me: str | None=None) -> tuple[int, int]:
+    me = str(me if me is not None else os.environ.get('GITHUB_RUN_ID', ''))
+    running = waiting = 0
+    for repo in repos:
+        ids = set()
+        for st in ('in_progress', 'queued'):
+            for r in api(f'repos/{repo}/actions/runs?status={st}&per_page=50', _tokens()[0]).get('workflow_runs', []):
+                ids.add(r['id'])
+        for i in sorted(ids):
+            if str(i) == me:
+                continue
+            for j in api(f'repos/{repo}/actions/runs/{i}/jobs?per_page=100', _tokens()[0]).get('jobs', []):
+                running += j.get('status') == 'in_progress'
+                waiting += j.get('status') in ('queued', 'waiting', 'pending', 'requested')
+    return (running, waiting)
+
 def window(slot_times: list[str], now: datetime) -> tuple[datetime, float, float]:
     times = [(now + timedelta(days=d)).replace(hour=int(s[:2]), minute=int(s[3:]), second=0, microsecond=0) for d in (-1, 0, 1) for s in slot_times]
     nxt, prev = (min((t for t in times if t > now)), max((t for t in times if t <= now)))
     deadline = nxt - timedelta(minutes=DEADLINE_BEFORE)
     return (deadline, (deadline - now).total_seconds() / 60, (now - prev).total_seconds() / 60)
 
-def gate(wait_min: float, slot_times=None, busy_fn=None, now_fn=None, sleep_fn=time.sleep, poll_s: float=60) -> tuple[bool, datetime]:
+def room(running: int, waiting: int) -> bool:
+    return waiting == 0 and running + VERIFY_JOBS <= ACCOUNT_JOBS - HEADROOM
+
+def gate(wait_min: float, slot_times=None, jobs_fn=None, now_fn=None, sleep_fn=time.sleep, poll_s: float=60) -> tuple[bool, datetime]:
     slot_times = slot_times or slots.forecast_slots()
     now_fn = now_fn or (lambda: datetime.now(UTC))
     t0 = now_fn()
     while True:
-        n = busy_fn()
+        running, waiting = jobs_fn()
         now = now_fn()
-        deadline, left, since = window(slot_times, now)
-        log(f'deadline {deadline:%H:%M}Z, {left:.0f} min left, {since:.0f} min since the last slot, forecast runs going: {n}')
-        if n == 0 and left >= MIN_LEFT and (since >= MIN_SINCE):
-            return (True, deadline)
+        _, _, since = window(slot_times, now)
+        log(f'jobs running: {running}, waiting for a runner: {waiting}; {since:.0f} min since the last slot')
+        if room(running, waiting) and since >= MIN_SINCE:
+            return (True, now + timedelta(minutes=BUDGET_MIN))
         if (now - t0).total_seconds() / 60 + poll_s / 60 > wait_min:
-            return (False, deadline)
+            return (False, now + timedelta(minutes=BUDGET_MIN))
         sleep_fn(poll_s)
 
 def _safe_extract(tar_path: str, dest: str) -> None:
@@ -441,14 +464,17 @@ def main(argv: list[str]) -> int:
             log(f"::warning::the forecast repo wasn't found ({e}): standing down")
             print('go=false')
             return 0
+        me = os.environ['GITHUB_REPOSITORY']
 
-        def busy_or_wait():
+        def jobs_or_full():
             try:
-                return busy(repo)
+                return jobs_going([repo, me])
             except Exception as e:
-                log(f"the forecast repo's runs didn't list ({e})")
-                return 1
-        go, deadline = gate(a.wait, busy_fn=busy_or_wait)
+                log(f"the runs didn't list ({e})")
+                return (ACCOUNT_JOBS, 1)
+        go, deadline = gate(a.wait, jobs_fn=jobs_or_full)
+        if not go:
+            log(f'::warning::Verify stood down: the runners had no room for {a.wait:.0f} min (next time)')
         print(f'deadline={deadline:%Y-%m-%dT%H:%MZ}')
         print(f"go={('true' if go else 'false')}")
     elif a.cmd == 'old':

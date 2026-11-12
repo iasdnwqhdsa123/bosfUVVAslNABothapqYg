@@ -97,6 +97,7 @@ jobs:
     timeout-minutes: 340
     strategy:
       fail-fast: false
+      max-parallel: 2  # (verifyjob.py VERIFY_JOBS: these and obs)
       matrix:
         include:
           - { model: hrrr, key: hrrr, part: "" }
