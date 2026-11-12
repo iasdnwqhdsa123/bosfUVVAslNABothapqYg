@@ -29,13 +29,13 @@ MODEL_LABEL = {'hrrr': 'HRRR', 'gfs': 'GFS', 'ecmwf': 'ECMWF', 'icon': 'ICON', '
 MACRO_LABEL = {'US': 'United States', 'EU': 'Europe'}
 EU_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_SHARE', '0.4') or 0.4)))
 EU_FIRST = max(0, int(os.environ.get('CALIB_EU_FIRST', '120') or 0))
-EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '0.25') or 0.25)))
+EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '1') or 0)))
 SAMPLED = {'icon', 'icond2'}
 ICON_FIRST = '2025-01-17'
 AROME_FIRST = '2025-01-14'
 FIRST_DAY = {'icon': ICON_FIRST, 'icond2': ICON_FIRST, 'arome': AROME_FIRST}
 PART_DOMAIN = {'icond2', 'arome'}
-ADDED = ('arome',)
+ADDED = ('icon', 'icond2', 'arome')
 EU_START = '2024-03-01'
 LEADS = {m: tuple((int(x) for x in ns.split('+') if x.strip().isdigit())) for m, _, ns in (p.partition(':') for p in os.environ.get('CALIB_LEADS', 'hrrr:1,gfs:1+3+5+7,ecmwf:1+3+5+7').split(',') if ':' in p)}
 LEAD_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_LEAD_SHARE', '1') or 0)))
@@ -225,7 +225,7 @@ def model_physics(model: str) -> str:
     return globals()['LEAD_VERSION'] if is_lead(model) else physics_version(model_macro(model))
 
 def added_models(macro: str, day: str | None) -> list[str]:
-    return [m for m in ADDED if m in MACRO[macro]['models'] and day and (day >= FIRST_DAY.get(m, ''))]
+    return [m for m in ADDED if m in MACRO[macro]['models'] and day and (day >= FIRST_DAY.get(m, '')) and (m not in SAMPLED or icon_sampled(day))]
 
 def lead_version(key: str) -> str | None:
     macro, day = (macro_of_key(key), day_of(key))

@@ -47,7 +47,7 @@ env:
   KEEP_DAYS: "60"
   CALIB_EU_SHARE: "0.4"
   CALIB_EU_FIRST: "120"
-  CALIB_EU_ICON_SHARE: "0.25"
+  CALIB_EU_ICON_SHARE: "1"
   CONTRAILS: "0"
 jobs:
   gate:
