@@ -24,6 +24,11 @@ on:
         type: choice
         options: ["on", "off"]
         default: "on"
+      after_failure:
+        description: "Asked for by a run that failed (relay; if this one fails too, the chain waits for the next cron)"
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
 permissions:
   contents: read
   actions: write
@@ -453,3 +458,34 @@ jobs:
           retention-days: 90
           compression-level: 0
           if-no-files-found: error
+  relay:
+    needs: [gate, plan, merge]
+    if: ${{ always() && !cancelled() && needs.gate.outputs.run == 'yes' && needs.plan.outputs.chain != 'off' && inputs.after_failure != 'yes' && (needs.plan.result == 'failure' || needs.merge.result == 'failure') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Next run, once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF: ${{ github.workflow_ref }}
+          DAYS: ${{ needs.plan.outputs.days }}
+          NEW: ${{ needs.plan.outputs.new }}
+        run: |
+          sleep 900
+          self="${SELF#*/.github/workflows/}"; self="${self%%@*}"
+          ids="$(for s in pending queued waiting requested; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$s&per_page=50" \
+              --jq ".workflow_runs[] | select(.path == \".github/workflows/$self\" or .path == \".github/workflows/train.yml\") | .id"
+          done | sort -u)"
+          n=0
+          for id in $ids; do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            st="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .status)"
+            case "$st" in
+              pending|queued|waiting|requested) echo "waiting: run $id ($st)"; n=$((n + 1)) ;;
+            esac
+          done
+          if [ "$n" -gt 0 ]; then echo "a run is waiting already: it goes next"; exit 0; fi
+          gh workflow run "$self" -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
+            -f days="${DAYS:-$DAYS_PER_RUN}" -f new_days="${NEW:-on}" -f chain=on -f after_failure=yes
+          echo "next run asked for, after this one's failure"
