@@ -84,19 +84,24 @@ def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrai
     cc_by = {q: out[f'cc{q}'] for q in (1000, 950, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200) if out.get(f'cc{q}') is not None}
     cc = np.stack([f(_cover_at(cc_by, q)) for q in p]) if cc_by else np.zeros(z.shape, np.float32)
     agl = z - zs[None]
+    L = len(p)
+    zm = np.nanmedian(np.where(np.isfinite(z), z, np.nan).reshape(L, -1), axis=1) if L and traffic is not None else np.zeros(0)
+    dz = np.maximum(z[1:] - z[:-1], 50.0)
+    del z
     ok = np.isfinite(agl) & (agl >= 300) & np.isfinite(t) & np.isfinite(td)
     dpd = np.where(ok, np.maximum(t - td, 0), np.inf)
+    del td
     th = _theta(t, p[:, None, None])
     spd = np.hypot(u, v)
-    dz = np.maximum(z[1:] - z[:-1], 50.0)
     n2 = G / (0.5 * (th[1:] + th[:-1])) * (th[1:] - th[:-1]) / dz
+    del th
     sh = np.hypot(u[1:] - u[:-1], v[1:] - v[:-1]) / dz
+    del dz
     with np.errstate(divide='ignore', invalid='ignore'):
         ri = n2 / np.maximum(sh * sh, 1e-10)
     n2k = np.concatenate([n2[:1], 0.5 * (n2[1:] + n2[:-1]), n2[-1:]])
     seen = low < SEEN_LOW
     cells = lambda km: int(round(km / max(grid_km, 0.1)))
-    L = len(p)
     dry = _near(rain, cells(LEN_NEAR_KM), ndimage.maximum_filter) < LEN_RAIN
     hills = _near(np.nan_to_num(relief), cells(LEN_RELIEF[1]), ndimage.maximum_filter)
     zi = f(out.get('zi'))
@@ -119,6 +124,7 @@ def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrai
             here = ok[k] & (agl[k] >= floor) & (spd[k] >= LEN_WIND) & (n2k[k] >= LEN_N2)
             lent |= here & (dpd[k] <= LEN_SPREAD) & (eta_ground >= np.maximum(LEN_ETA, LIFT_PER_K * dpd[k]))
     lent &= dry & (hills >= LEN_RELIEF[0]) & (low < LEN_LOW)
+    w = None
     refc, refd1 = (s.get('refc'), s.get('refd1'))
     spread2 = np.nan_to_num(s['t2'] - s['td2'])
     if refc is not None:
@@ -155,7 +161,6 @@ def spot(levels, lv, zs, s, out, relief, grid_km, el=None, traffic=None, contrai
     arc = (_near(core.astype(np.uint8), cells(ARC_KM), ndimage.maximum_filter) > 0) & ((gust >= ARC_GUST) | (gust - wind10 >= ARC_SPREAD))
     cav = np.zeros(shape, bool)
     if traffic is not None:
-        zm = np.nanmedian(np.where(np.isfinite(z), z, np.nan).reshape(L, -1), axis=1) if L else np.zeros(0)
         over = np.maximum.accumulate(np.nan_to_num(cc)[::-1], axis=0)[::-1]
         for k in range(L):
             above = over[k + 1] if k + 1 < L else zero

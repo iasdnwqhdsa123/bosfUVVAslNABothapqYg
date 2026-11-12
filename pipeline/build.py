@@ -755,7 +755,6 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     nanf = lambda a: np.full(zs.shape, np.nan, np.float32) if a is None else a
     el = sun_elevation(valid, lat2d, lon2d) if valid is not None and lon2d is not None else np.full(zs.shape, 45.0, np.float32)
     out.update(decks.organisation(prof, zs, s['t2'], s['td2'], s['ps'], s['u10'], s['v10'], nanf(out.get('sst')), hth, out['zi'], np.stack([out[f'cc{p}'] for p in P.CC_LEVELS]), P.level_heights(levels, lv['z']), nanf(out.get('cloudlow')), nanf(out.get('cloudmid')), nanf(out.get('cloudhigh')), np.where(np.isfinite(nanf(ceil)) & (nanf(ceil) < P.CEIL_NONE), nanf(ceil), np.nan), nanf(out.get('lowbase')), el))
-    out.update(spotted(levels, lv, zs, s, out, relief, grid_step, lat2d, lon2d, valid, el))
     sun_cu = None
     if SUNSET and valid is not None and (lon2d is not None):
         try:
@@ -763,6 +762,8 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
             sun_cu = sun_cumulus(prof, s, out, has_cu, lcl, base, tbase, band) if band.any() else None
         except Exception as e:
             log(f"  sunset's cumulus skipped: {e!r}")
+    del prof
+    out.update(spotted(levels, lv, zs, s, out, relief, grid_step, lat2d, lon2d, valid, el))
     out.update(sunsets(s, out, grid_step, lat2d, lon2d, valid, sun_cu))
     return out
 SPOTTING = os.environ.get('SPOTTING', '1') != '0'
@@ -1591,6 +1592,8 @@ def _process_hour(job, raw=None):
     if _kept(run, valid):
         log(f'  f{fh:03d} {valid:%a %HZ} kept (already computed from this run)')
         return valid
+    _turn_wait()
+    t0 = time.time()
     try:
         if isinstance(raw, Exception):
             raise raw
@@ -1638,6 +1641,7 @@ def _process_hour(job, raw=None):
     with open(stamp, 'w') as f:
         f.write(f'{run:%Y%m%d%H}')
     log(f'  f{fh:03d} {valid:%a %HZ} done in {time.time() - t0:.1f}s{_mem_note()}')
+    _turn_took(time.time() - t0)
     return valid
 
 def hour_fronts(parts, regrids, fh=0):
@@ -1759,6 +1763,29 @@ def _mem_note():
     except (OSError, ValueError):
         return ''
 LANE_STAGGER_S = 20
+SPACED_LANES = {'hrrr'}
+TURN_SHARE, TURN_FIRST_S, TURN_MAX_S = (0.5, 40.0, 150.0)
+_TURN = None
+
+def _turn_wait():
+    if _TURN is None:
+        return
+    lock, last, gap = _TURN
+    t_end = time.time() + TURN_MAX_S
+    while True:
+        with lock:
+            now = time.time()
+            if now - last.value >= gap.value or now >= t_end:
+                last.value = now
+                return
+            wait = gap.value - (now - last.value)
+        time.sleep(min(max(wait, 0.2), 5.0))
+
+def _turn_took(seconds):
+    if _TURN is not None and seconds > 0:
+        lock, _, gap = _TURN
+        with lock:
+            gap.value = min(TURN_SHARE * seconds, TURN_MAX_S)
 
 def _lane(jobs, results, stagger=0.0):
     from collections import deque
@@ -1810,6 +1837,9 @@ def process_lanes(jobs, workers, progress=None, run=1):
     import queue as _queue
     ctx = mp.get_context('fork')
     results = ctx.Queue()
+    global _TURN
+    src = _CTX.get('src')
+    _TURN = (ctx.Lock(), ctx.Value('d', 0.0, lock=False), ctx.Value('d', TURN_FIRST_S, lock=False)) if workers > 1 and src is not None and (src.id in SPACED_LANES) else None
     shares = lane_jobs(jobs, workers, run)
     procs = [ctx.Process(target=_lane, args=(shares[w], results, w * LANE_STAGGER_S), daemon=True) for w in range(workers)]
     for p in procs:
