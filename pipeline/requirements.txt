@@ -1,6 +1,12 @@
-numpy>=1.26
-scipy>=1.11
-eccodes>=2.37
-pillow>=10
-deflate>=0.7  # libdeflate: the tile PNGs and the hour store (tiles.py)
-omfiles>=1.2  # Open-Meteo's .om files (ICON; om.py)
+numpy==2.5.4
+scipy==1.18.1
+eccodes==2.50.1
+eccodeslib==2.50.0.34
+eckitlib==2.5.0.34
+findlibs==0.1.5
+pillow==13.0.0
+deflate==0.9.0  # libdeflate: the tile PNGs and the hour store (tiles.py)
+omfiles==1.2.0  # Open-Meteo's .om files (ICON; om.py)
+attrs==26.1.0
+cffi==2.1.1
+pycparser==3.12
