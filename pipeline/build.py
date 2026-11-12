@@ -756,7 +756,14 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     el = sun_elevation(valid, lat2d, lon2d) if valid is not None and lon2d is not None else np.full(zs.shape, 45.0, np.float32)
     out.update(decks.organisation(prof, zs, s['t2'], s['td2'], s['ps'], s['u10'], s['v10'], nanf(out.get('sst')), hth, out['zi'], np.stack([out[f'cc{p}'] for p in P.CC_LEVELS]), P.level_heights(levels, lv['z']), nanf(out.get('cloudlow')), nanf(out.get('cloudmid')), nanf(out.get('cloudhigh')), np.where(np.isfinite(nanf(ceil)) & (nanf(ceil) < P.CEIL_NONE), nanf(ceil), np.nan), nanf(out.get('lowbase')), el))
     out.update(spotted(levels, lv, zs, s, out, relief, grid_step, lat2d, lon2d, valid, el))
-    out.update(sunsets(s, out, grid_step, lat2d, lon2d, valid))
+    sun_cu = None
+    if SUNSET and valid is not None and (lon2d is not None):
+        try:
+            band = sunset.band(valid, lat2d, lon2d)[0]
+            sun_cu = sun_cumulus(prof, s, out, has_cu, lcl, base, tbase, band) if band.any() else None
+        except Exception as e:
+            log(f"  sunset's cumulus skipped: {e!r}")
+    out.update(sunsets(s, out, grid_step, lat2d, lon2d, valid, sun_cu))
     return out
 SPOTTING = os.environ.get('SPOTTING', '1') != '0'
 
@@ -779,15 +786,31 @@ def spotted(levels, lv, zs, s, out, relief, grid_step, lat2d, lon2d, valid, el):
         return {}
 SUNSET = os.environ.get('SUNSET', '1') != '0'
 
-def sunsets(s, out, grid_step, lat2d, lon2d, valid):
+def sunsets(s, out, grid_step, lat2d, lon2d, valid, cu=None):
     if not SUNSET or valid is None or lon2d is None:
         return {}
     try:
         nanf = lambda a: np.full(lat2d.shape, np.nan, np.float32) if a is None else a
-        return {'glow': sunset.glow(lat2d, lon2d, valid, nanf(out.get('cloudlow')), nanf(out.get('cloudmid')), nanf(out.get('cloudhigh')), out.get('rain'), s['t2'] - s['td2'], grid_step * 111.2)}
+        return {'glow': sunset.glow(lat2d, lon2d, valid, nanf(out.get('cloudlow')), nanf(out.get('cloudmid')), nanf(out.get('cloudhigh')), out.get('rain'), s['t2'] - s['td2'], grid_step * 111.2, *(cu or (None, None)))}
     except Exception as e:
         log(f'  sunset skipped: {e!r}')
         return {}
+SUN_CU_LOW = (5.0, 60.0)
+SUN_CU_DEPTH = 500.0
+
+def sun_cumulus(prof, s, out, has_cu, lcl, base, tbase, band):
+    lcc = s.get('lcc')
+    lcc = np.zeros_like(lcl) if lcc is None else np.nan_to_num(lcc, nan=0.0)
+    cud, od = (np.nan_to_num(out['cudepth'], nan=0.0), np.nan_to_num(out['overdev'], nan=0.0))
+    cover = np.where(has_cu & band, sky.cu_cover(cud, od, sky.cu_reach(out['zi'], lcl)), 0.0)
+    top = np.where(has_cu & band, lcl + cud, np.nan)
+    left = band & ~has_cu & (lcc >= SUN_CU_LOW[0]) & (lcc <= SUN_CU_LOW[1])
+    if left.any():
+        deep = P.cumulus_top(prof, base, tbase, left, mix=P.cumulus_mix(np.full(lcl.shape, np.nan, np.float32))) - base
+        tall = left & (deep >= SUN_CU_DEPTH)
+        cover = np.where(tall, lcc / 100.0, cover)
+        top = np.where(tall, lcl + deep, top)
+    return (cover.astype(np.float32), top.astype(np.float32))
 
 def cloud_rh(lv):
     if lv.get('rh_cloud') is not None:

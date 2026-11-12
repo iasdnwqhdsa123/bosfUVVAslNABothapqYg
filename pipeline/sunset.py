@@ -14,6 +14,10 @@ CLEAR = 0.22
 LIT = (0.35, 0.85, 1.0)
 HIDE = 0.9
 HAZE = (1.0, 4.0, 0.6)
+CU_VIEW_KM = 40.0
+CU_TOP_M, CU_LIT = ((1500.0, 3000.0, 6000.0), (0.25, 0.55, 0.9))
+CU_SCATTER = ((0.0, 0.1, 0.25, 0.5, 0.8, 1.0), (0.0, 0.6, 1.0, 1.0, 0.45, 0.25))
+CU_BLOCK = 0.25
 
 def sun_position(valid, lat, lon):
     doy = valid.timetuple().tm_yday
@@ -38,7 +42,7 @@ def band(valid, lat, lon):
     da = (a1 - a0 + 180) % 360 - 180
     return (mask, (a0 + np.nan_to_num(f) * da) % 360)
 
-def glow(lat, lon, valid, low, mid, high, rain=None, spread=None, grid_km=3.0):
+def glow(lat, lon, valid, low, mid, high, rain=None, spread=None, grid_km=3.0, cu=None, cutop=None):
     shape = lat.shape
     out = np.full(shape, np.nan, np.float32)
     mask, az = band(valid, lat, lon)
@@ -49,6 +53,14 @@ def glow(lat, lon, valid, low, mid, high, rain=None, spread=None, grid_km=3.0):
     from scipy import ndimage
     r = max(1, int(round(STEP_KM / max(grid_km, 0.1))))
     cov = [ndimage.uniform_filter(np.nan_to_num(np.asarray(c, dtype=np.float32)) / 100.0, size=r, mode='nearest') for c in (low, mid, high)]
+    cuc = cut = None
+    if cu is not None:
+        cuv = np.clip(np.nan_to_num(np.asarray(cu, dtype=np.float32)), 0, 1)
+        top = np.zeros(shape, np.float32) if cutop is None else np.nan_to_num(np.asarray(cutop, dtype=np.float32))
+        cuc = ndimage.uniform_filter(cuv, size=r, mode='nearest')
+        cut = ndimage.uniform_filter(cuv * top, size=r, mode='nearest')
+    deck = cov[0] if cuc is None else np.maximum(cov[0] - cuc, 0)
+    block = cov if cuc is None else [deck + CU_BLOCK * np.minimum(cuc, cov[0] + cuc), cov[1], cov[2]]
     dlat = float(lat[1, 0] - lat[0, 0]) if shape[0] > 1 else -grid_km / 111.2
     dlon = float(lon[0, 1] - lon[0, 0]) if shape[1] > 1 else grid_km / 111.2
     la, a = (np.radians(lat[iy, ix]), np.radians(az[iy, ix]))
@@ -73,15 +85,22 @@ def glow(lat, lon, valid, low, mid, high, rain=None, spread=None, grid_km=3.0):
             zr = ((d - tangent) * 1000.0) ** 2 / (2 * R_EARTH)
             k = 0 if zr < LOW_BAND else 1 if zr < MID_BAND else 2
             if k < own or d > tangent:
-                tau = tau + along(cov[k], d) * STEP_KM / BLOCK_KM[k]
+                tau = tau + along(block[k], d) * STEP_KM / BLOCK_KM[k]
             d += STEP_KM
         return np.exp(-tau)
-    seen = [canvas(cov[k], VIEW_KM[k]) for k in range(3)]
+    seen = [canvas(c, VIEW_KM[k]) for k, c in enumerate((deck, cov[1], cov[2]))]
     lit = [seen[k] * light(k, h) * LIT[k] for k, h in enumerate((LOW_M, MID_M, HIGH_M))]
+    seen_cu = cu_lit = 0.0
+    if cuc is not None:
+        seen_cu = canvas(cuc, CU_VIEW_KM)
+        tops = canvas(cut, CU_VIEW_KM) / np.maximum(seen_cu, 0.001)
+        w = np.clip((tops - CU_TOP_M[0]) / (CU_TOP_M[2] - CU_TOP_M[0]), 0, 1)
+        reach = light(0, LOW_M) * (1 - w) + light(1, MID_M) * w
+        cu_lit = np.interp(seen_cu, *CU_SCATTER) * np.interp(tops, CU_TOP_M, CU_LIT) * reach
     colour = 1 - (1 - lit[0]) * (1 - lit[1]) * (1 - lit[2])
-    covered = 1 - (1 - seen[0]) * (1 - seen[1]) * (1 - seen[2])
-    score = np.maximum(CLEAR * (1 - covered), colour)
-    over = cov[0][iy, ix]
+    covered = 1 - (1 - seen[0]) * (1 - seen[1]) * (1 - seen[2]) * (1 - seen_cu)
+    score = 1 - (1 - np.maximum(CLEAR * (1 - covered), colour)) * (1 - cu_lit)
+    over = deck[iy, ix]
     score = score * (1 - HIDE * over) + lit[0] * HIDE * over
     if rain is not None:
         score = score * np.where(np.nan_to_num(np.asarray(rain)[iy, ix]) >= 0.5, 0.5, 1.0)
