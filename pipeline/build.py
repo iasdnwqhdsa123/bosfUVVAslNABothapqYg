@@ -1929,16 +1929,27 @@ def _process_quarters(fh):
     log(f"  q{fh:03d} quarter hours {', '.join((f'{t:%H%M}' for t in done)) or 'none'} in {time.time() - t0:.1f}s")
     return done
 
+def _level_codes(grid, name, k):
+    if name in PEAK_FIELDS:
+        return downsample_peak(grid, k)
+    return downsample(grid, k, nearest=name in CLASS_FIELDS or name in SAMPLED_FIELDS, none=LEVEL_NONE.get(name), rms=_sqrt_from_zero(name))
+
 def _quarter_job(job):
-    rdir, qdir, day, stamps, name, tile = job
+    rdir, qdir, day, stamps, name, tile, levels = job
     frames = [np.load(os.path.join(qdir, f'{s}.npz')) for s in stamps]
     shape = frames[0]['t2'].shape
     stack = np.stack([f[name] if name in f.files else np.full(shape, 255, np.uint8) for f in frames])
     for f in frames:
         f.close()
-    return (f'q_{name}', _write_strips(stack, tile, os.path.join(rdir, day, f'q_{name}')))
+    keys = _write_strips(stack, tile, os.path.join(rdir, day, f'q_{name}'))
+    lkeys = {}
+    for k, ltile in levels:
+        lk = _write_strips(_level_codes(stack, name, k), ltile, os.path.join(rdir, f'o{k}', day, f'q_{name}'))
+        if lk:
+            lkeys[k] = lk
+    return (f'q_{name}', keys, lkeys)
 
-def write_quarters(rdir, qdir, times, tile, only=None, workers=1):
+def write_quarters(rdir, qdir, times, tile, only=None, workers=1, levels=()):
     days: dict[str, list] = {}
     for t in sorted(times):
         days.setdefault(day_key(t), []).append(t)
@@ -1949,12 +1960,15 @@ def write_quarters(rdir, qdir, times, tile, only=None, workers=1):
         for st in stamps:
             with np.load(os.path.join(qdir, f'{st}.npz')) as f:
                 files |= set(f.files)
-        jobs += [(rdir, qdir, day, stamps, n, tile) for n in QUARTER_FIELDS if (only is None or n in only) and n in files]
+        jobs += [(rdir, qdir, day, stamps, n, tile, tuple(levels)) for n in QUARTER_FIELDS if (only is None or n in only) and n in files]
     present: dict[str, set] = {}
-    for name, keys in run_jobs(_quarter_job, jobs, workers):
+    lpresent: dict[int, dict[str, set]] = {k: {} for k, _ in levels}
+    for name, keys, lkeys in run_jobs(_quarter_job, jobs, workers):
         if keys:
             present.setdefault(name, set()).update(keys)
-    return ({d: [t.strftime('%Y%m%d%H%M') for t in ts] for d, ts in days.items()}, present)
+        for k, lk in lkeys.items():
+            lpresent[k].setdefault(name, set()).update(lk)
+    return ({d: [t.strftime('%Y%m%d%H%M') for t in ts] for d, ts in days.items()}, present, lpresent)
 
 def quarter_manifest(qdays, qpresent):
     return {k: {'min': ENC[k[2:]][0], 'max': ENC[k[2:]][1], 'transform': ENC[k[2:]][2], 'tiles': sorted(v)} for k, v in sorted(qpresent.items())}
@@ -2182,7 +2196,7 @@ def _tile_job(job):
     keys = _write_strips(grid, tile, os.path.join(rdir, *path, name))
     lkeys = {}
     for k, ltile in levels if name not in LEVEL_SKIP else ():
-        lv = downsample_at_peak(grid, by, k) if day is not None and name in AT_PEAK else downsample_peak(grid, k) if name in PEAK_FIELDS else downsample(grid, k, nearest=name in CLASS_FIELDS or name in SAMPLED_FIELDS, none=LEVEL_NONE.get(name), rms=_sqrt_from_zero(name))
+        lv = downsample_at_peak(grid, by, k) if day is not None and name in AT_PEAK else _level_codes(grid, name, k)
         lk = _write_strips(lv, ltile, os.path.join(rdir, f'o{k}', *path, name))
         if lk:
             lkeys[k] = lk
@@ -2440,7 +2454,10 @@ def _publish_open(out, fbase, model, full, times, fields, cutoff, workers, point
                     hpts[st] = {k: p[k] for k in ('fields', 'tiles')}
     last_open = max(daily) if daily else times[0] - timedelta(hours=1)
     qtimes = [q for q in stored_quarters(os.path.join(base, '_quarters'), times[0], cutoff) if q <= last_open] if model == 'hrrr' else []
-    qdays, qpresent = write_quarters(rdir, os.path.join(base, '_quarters'), qtimes, tile, only=fields, workers=workers) if qtimes else ({}, {})
+    qdays, qpresent, qlp = write_quarters(rdir, os.path.join(base, '_quarters'), qtimes, tile, only=fields, workers=workers, levels=levels) if qtimes else ({}, {}, {})
+    for k, by_name in qlp.items():
+        for name, keys in by_name.items():
+            lpresent[k].setdefault(name, set()).update(keys)
     manifest = {**full, 'runId': free_id, 'tier': 'free', 'freeUntil': cutoff.isoformat(), 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'days': days, 'fields': {**{k: {**full['fields'][k], 'tiles': sorted(v)} for k, v in sorted(present.items()) if k in full['fields']}, **quarter_manifest(qdays, qpresent)}, 'quarters': qdays, 'levels': [{**lv, 'tiles': {k: sorted(v) for k, v in sorted(lpresent[lv['k']].items()) if k in full['fields']}} for lv in full.get('levels', [])], 'waveAltsFt': full.get('waveAltsFt', []) if any((k.startswith('wv') for k in present)) else [], 'points': pts, 'sounding': _free_soundings(rdir, os.path.join(base, full['runId']), full.get('sounding'), daily) if points else None, 'hours': hours, 'hourPoints': hpts, 'fronts': 1 if has_fronts else 0, 'pack': 1}
     with open(os.path.join(fbase, 'latest.json'), 'w') as f:
         json.dump(manifest, f, separators=(',', ':'))
@@ -2677,7 +2694,10 @@ def main():
     log(f'{src.id}: Cloud Layers hour to hour over {len(times)} hours ({n} decks held) in {_fmt_dur(time.time() - t1)}')
     days, present, lpresent = write_tiles(build_dir, hours_dir, times, tile, done[0], levels=levels, workers=args.workers)
     qtimes = stored_quarters(qdir, min(needed), max(needed), prune=True) if src.id == 'hrrr' else []
-    qdays, qpresent = write_quarters(build_dir, qdir, qtimes, tile, workers=args.workers) if qtimes else ({}, {})
+    qdays, qpresent, qlp = write_quarters(build_dir, qdir, qtimes, tile, workers=args.workers, levels=levels) if qtimes else ({}, {}, {})
+    for k, by_name in qlp.items():
+        for name, keys in by_name.items():
+            lpresent[k].setdefault(name, set()).update(keys)
     log(f'{src.id}: tiles for {len(times)} hours in {_fmt_dur(time.time() - t0)}')
     has_fronts = write_fronts(build_dir, hours_dir, times)
     t0 = time.time()
