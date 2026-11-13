@@ -13,6 +13,7 @@ TRAP = 0.5
 LAM = (3000.0, 15000.0)
 WIND = 7.0
 LIFT = 0.12
+OWN, LID, OWN_LOW = (0.15, 1.0, 20.0)
 CARRY, REACH, STEP = (90000.0, 150000.0, 10000.0)
 M_DEG = 111320.0
 ML_LEVELS = (600, 1000, 1500, 2000)
@@ -37,22 +38,27 @@ def _js_round(x):
 def classes(cls, wstar):
     return np.where((cls == sky.CS) & (np.nan_to_num(wstar, nan=0.0) >= sky.CU_MIN_WS), sky.BLUE, cls)
 
-def bars(cls, wstar, low, trap, lam, u, v, own, north, step):
+def bars(cls, wstar, low, trap, lam, u, v, own, north, step, lid=None):
     ny, nx = cls.shape
     tt = np.where(trap > 1, trap / 100.0, trap)
     U = np.hypot(u, v)
     with np.errstate(invalid='ignore'):
-        cand = np.isin(cls, CLASSES) & ~(np.nan_to_num(wstar, nan=-1.0) >= WSTAR) & (tt >= TRAP) & (lam >= LAM[0]) & (lam <= LAM[1]) & (U >= WIND) & np.isfinite(own)
+        trapped = (tt >= TRAP) & (lam >= LAM[0]) & (lam <= LAM[1])
+        lidded = np.zeros_like(trapped) if lid is None else (np.nan_to_num(own, nan=0.0) >= OWN) & (np.nan_to_num(lid, nan=-np.inf) >= LID)
+        cand = np.isin(cls, CLASSES) & ~(np.nan_to_num(wstar, nan=-1.0) >= WSTAR) & (U >= WIND) & np.isfinite(own) & (trapped | lidded)
     iy, ix = np.nonzero(cand)
     if not iy.size:
         return cand
     c0 = cls[iy, ix]
     lo = low(iy, ix) if callable(low) else low[iy, ix]
-    ok = ~np.isin(c0, (sky.NONE, sky.BLUE)) | (lo >= LOW)
-    iy, ix = (iy[ok], ix[ok])
+    with np.errstate(invalid='ignore'):
+        ok = ~np.isin(c0, (sky.NONE, sky.BLUE)) | (lo >= LOW)
+        on_lid = lidded[iy, ix] & (lo >= OWN_LOW)
+    iy, ix, on_lid = (iy[ok], ix[ok], on_lid[ok])
     best = carried(own, u, v, iy, ix, north, step)
+    yes = trapped[iy, ix] & (best >= LIFT) | on_lid
     out = np.zeros_like(cand)
-    out[iy[best >= LIFT], ix[best >= LIFT]] = True
+    out[iy[yes], ix[yes]] = True
     return out
 
 def riding(trap, lam, u, v, own):
@@ -98,7 +104,8 @@ def apply(cuclass, dec, own, grid, fine):
     ws = np.asarray(dec.get('wstar'), np.float64)
     lowf = np.asarray(dec.get('cloudlow'), np.float64)
     low = (lambda iy, ix: median_at(lowf, iy, ix)) if fine else lowf
-    b = bars(classes(cls, ws), ws, low, np.asarray(dec.get('wtrap'), np.float64), np.asarray(dec.get('wlam'), np.float64), np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64), own, float(grid['north']), float(grid['step']))
+    lid = dec.get('dth_m500')
+    b = bars(classes(cls, ws), ws, low, np.asarray(dec.get('wtrap'), np.float64), np.asarray(dec.get('wlam'), np.float64), np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64), own, float(grid['north']), float(grid['step']), None if lid is None else np.asarray(lid, np.float64))
     if not b.any():
         return None
     return np.where(b, CODE, cuclass).astype(np.uint8)
