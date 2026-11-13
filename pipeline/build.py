@@ -1861,7 +1861,8 @@ def process_lanes(jobs, workers, progress=None, run=1):
         p.join(timeout=10)
     return out
 QUARTER_MAX_FH = 18
-QUARTER_FIELDS = ('ceil', 'vis', 'refc', 'rain', 'ptype', 'u_sfc', 'v_sfc', 'gust', 't2', 'td2', 'ctop')
+QUARTER_FIELDS = ('ceil', 'vis', 'refc', 'rain', 'ptype', 'u_sfc', 'v_sfc', 'gust', 't2', 'td2', 'ctop', 'cape')
+QUARTER_MODELS = ('hrrr', 'icond2')
 SUBH_VARS = {'zs': ('HGT', 'surface'), 't2': ('TMP', '2 m above ground'), 'td2': ('DPT', '2 m above ground'), 'u10': ('UGRD', '10 m above ground'), 'v10': ('VGRD', '10 m above ground'), 'gust': ('GUST', 'surface'), 'vis': ('VIS', 'surface'), 'refc': ('REFC', 'entire atmosphere'), 'refd1': ('REFD', '1000 m above ground'), 'prate': ('PRATE', 'surface'), 'ceil': ('HGT', 'cloud ceiling'), 'ctop': ('HGT', 'cloud top'), 'crain': ('CRAIN', 'surface'), 'csnow': ('CSNOW', 'surface'), 'cfrzr': ('CFRZR', 'surface'), 'cicep': ('CICEP', 'surface')}
 
 def subh_url(run, fh):
@@ -1928,6 +1929,83 @@ def _process_quarters(fh):
         done.append(valid)
     log(f"  q{fh:03d} quarter hours {', '.join((f'{t:%H%M}' for t in done)) or 'none'} in {time.time() - t0:.1f}s")
     return done
+ICOND2_QUARTER = ('tot_prec', 'snow_gsp', 'snow_con', 'grau_gsp', 'cape_ml')
+ICOND2_SNOW = ('snow_gsp', 'snow_con', 'grau_gsp')
+
+def icond2_quarter_fields(m, k, inside, hour_ptypes=()):
+    nan = lambda a: np.where(inside, a, np.nan).astype(np.float32)
+    out = {}
+    if 'tot_prec' in m:
+        tp = m['tot_prec']
+        rain = np.maximum(np.nan_to_num(tp[k] - tp[k - 1], nan=0.0), 0.0) * 4.0
+        snow = sum((np.maximum(np.nan_to_num(m[n][k] - m[n][k - 1], nan=0.0), 0.0) for n in ICOND2_SNOW if n in m), np.zeros_like(rain))
+        share = np.where(rain > 0, snow * 4.0 / np.maximum(rain, 1e-06), 0.0)
+        ecmwf = np.select([share >= 0.8, share >= 0.2], [5, 7], 1)
+        ptype = P.precip_type(rain, ecmwf=ecmwf)
+        for hp in hour_ptypes:
+            ptype = np.where((ptype == 1) & (np.nan_to_num(hp, nan=0) == 5), 5, ptype)
+        out['rain'], out['ptype'] = (nan(rain), nan(ptype))
+    if 'cape_ml' in m:
+        out['cape'] = nan(np.maximum(np.nan_to_num(m['cape_ml'][k], nan=0.0), 0.0))
+    return out
+
+def _process_icond2_quarters(fh):
+    import dwd
+    import om
+    run, region, qdir, hours_dir, src = (_CTX[k] for k in ('run', 'region', 'quarters', 'hours', 'src'))
+    t0 = time.time()
+    hour = run + timedelta(hours=fh)
+    valid = [hour + timedelta(minutes=15 * k) for k in (1, 2, 3)]
+    stamps = [(os.path.join(qdir, f'{v:%Y%m%d%H%M}.npz'), os.path.join(qdir, f'{v:%Y%m%d%H%M}.run')) for v in valid]
+
+    def current(npz, stamp):
+        if _CTX.get('recompute') or not (os.path.exists(npz) and os.path.exists(stamp)):
+            return False
+        with open(stamp) as f:
+            return f.read().strip() == f'{run:%Y%m%d%H}'
+    if all((current(*s) for s in stamps)):
+        return valid
+    hpath = os.path.join(hours_dir, f'{hour:%Y%m%d%H}.npz')
+    if not os.path.exists(hpath):
+        return []
+    with np.load(hpath) as h:
+        inside = h['t2'] != 255 if 't2' in h.files else None
+        pt0 = sky.decode(h['ptype'], *ENC['ptype']) if 'ptype' in h.files else None
+    if inside is None:
+        return []
+    pts = [pt0]
+    nxt = os.path.join(hours_dir, f'{hour + timedelta(hours=1):%Y%m%d%H}.npz')
+    if os.path.exists(nxt):
+        with np.load(nxt) as h:
+            if 'ptype' in h.files:
+                pts.append(sky.decode(h['ptype'], *ENC['ptype']))
+    grid = om.Grid(*src.grid_def)
+    m = {}
+    with ThreadPoolExecutor(len(ICOND2_QUARTER)) as pool:
+        futs = {n: pool.submit(dwd.messages, dwd.single_url(run, fh, n)) for n in ICOND2_QUARTER}
+        for n, fut in futs.items():
+            try:
+                msgs = fut.result()
+            except Exception as e:
+                log(f'  q{fh:03d} {n} skipped: {e}')
+                continue
+            if len(msgs) == 4:
+                m[n] = [dwd.Field(grid, b).read(region) for b in msgs]
+    if 'tot_prec' not in m and 'cape_ml' not in m:
+        log(f"  q{fh:03d} quarter hours none (DWD's files not there)")
+        return []
+    done = []
+    for k, v, (npz, stamp) in zip((1, 2, 3), valid, stamps):
+        fields = icond2_quarter_fields(m, k, inside, [p for p in pts if p is not None])
+        q = {n: quantize(a, *ENC[n]) for n, a in fields.items() if n in ENC}
+        part = npz[:-4] + '.tmp.npz'
+        tiles.savez(part, q)
+        os.replace(part, npz)
+        with open(stamp, 'w') as f:
+            f.write(f'{run:%Y%m%d%H}')
+        done.append(v)
+    log(f"  q{fh:03d} quarter hours {', '.join((f'{t:%H%M}' for t in done))} in {time.time() - t0:.1f}s")
+    return done
 
 def _level_codes(grid, name, k):
     if name in PEAK_FIELDS:
@@ -1937,7 +2015,7 @@ def _level_codes(grid, name, k):
 def _quarter_job(job):
     rdir, qdir, day, stamps, name, tile, levels = job
     frames = [np.load(os.path.join(qdir, f'{s}.npz')) for s in stamps]
-    shape = frames[0]['t2'].shape
+    shape = frames[0][frames[0].files[0]].shape
     stack = np.stack([f[name] if name in f.files else np.full(shape, 255, np.uint8) for f in frames])
     for f in frames:
         f.close()
@@ -2453,7 +2531,7 @@ def _publish_open(out, fbase, model, full, times, fields, cutoff, workers, point
                 if p:
                     hpts[st] = {k: p[k] for k in ('fields', 'tiles')}
     last_open = max(daily) if daily else times[0] - timedelta(hours=1)
-    qtimes = [q for q in stored_quarters(os.path.join(base, '_quarters'), times[0], cutoff) if q <= last_open] if model == 'hrrr' else []
+    qtimes = [q for q in stored_quarters(os.path.join(base, '_quarters'), times[0], cutoff) if q <= last_open] if model in QUARTER_MODELS else []
     qdays, qpresent, qlp = write_quarters(rdir, os.path.join(base, '_quarters'), qtimes, tile, only=fields, workers=workers, levels=levels) if qtimes else ({}, {}, {})
     for k, by_name in qlp.items():
         for name, keys in by_name.items():
@@ -2558,7 +2636,7 @@ def main():
     ap.add_argument('--recompute', action='store_true', help='also recompute hours already computed from this run')
     ap.add_argument('--workers', type=int, default=int(os.environ.get('WORKERS', '3')))
     ap.add_argument('--free-only', action='store_true', help='only refresh the free 24 h window from stored hours')
-    ap.add_argument('--no-quarters', action='store_true', help="skip HRRR's 15-minute output")
+    ap.add_argument('--no-quarters', action='store_true', help="skip the 15-minute output (HRRR's, ICON-D2's)")
     ap.add_argument('--python-physics', action='store_true', help='physics.py, leelattice.py and runwave.py only (never their C++)')
     ap.add_argument('--shard', help="i/n: compute only share i (0…n-1) of the run's hours into the store, nothing published (shard_hours)")
     ap.add_argument('--run', help="YYYYMMDDHH: this run, not the newest complete one (the hour shards')")
@@ -2666,6 +2744,21 @@ def main():
                 with mp.get_context('fork').Pool(workers) as pool:
                     qdone = [t for part in pool.imap_unordered(_process_quarters, qjobs) for t in part]
             log(f'{src.id}: {len(qdone)} quarter hours from the 15-minute output in {_fmt_dur(time.time() - t0)}')
+    if src.id == 'icond2' and (not args.no_quarters):
+        os.makedirs(qdir, exist_ok=True)
+        _CTX['quarters'] = qdir
+        lo, hi = (min(needed), max(needed))
+        qjobs = [fh for fh in fhs if lo <= run + timedelta(hours=fh) <= hi and fh < src.max_fhour]
+        if qjobs:
+            t0 = time.time()
+            workers = max(1, min(args.workers, len(qjobs)))
+            if workers == 1:
+                qdone = [t for fh in qjobs for t in _process_icond2_quarters(fh)]
+            else:
+                import multiprocessing as mp
+                with mp.get_context('fork').Pool(workers) as pool:
+                    qdone = [t for part in pool.imap_unordered(_process_icond2_quarters, qjobs) for t in part]
+            log(f"{src.id}: {len(qdone)} quarter hours from DWD's 15-minute output in {_fmt_dur(time.time() - t0)}")
     window = {t.strftime('%Y%m%d%H') for t in needed}
     times = []
     for f in sorted(os.listdir(hours_dir)):
@@ -2693,7 +2786,7 @@ def main():
     n = hour_to_hour(hours_dir, times, region[4] <= sky.FINE_STEP, args.workers)
     log(f'{src.id}: Cloud Layers hour to hour over {len(times)} hours ({n} decks held) in {_fmt_dur(time.time() - t1)}')
     days, present, lpresent = write_tiles(build_dir, hours_dir, times, tile, done[0], levels=levels, workers=args.workers)
-    qtimes = stored_quarters(qdir, min(needed), max(needed), prune=True) if src.id == 'hrrr' else []
+    qtimes = stored_quarters(qdir, min(needed), max(needed), prune=True) if src.id in QUARTER_MODELS else []
     qdays, qpresent, qlp = write_quarters(build_dir, qdir, qtimes, tile, workers=args.workers, levels=levels) if qtimes else ({}, {}, {})
     for k, by_name in qlp.items():
         for name, keys in by_name.items():
