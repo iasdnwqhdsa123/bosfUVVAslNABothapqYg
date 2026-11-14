@@ -5,7 +5,7 @@ import re
 import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIN_GAP = 45
-OTHER = ['07:10', '19:10', '06:55', '18:55']
+OTHER = ['06:55', '18:55']
 
 def forecast_slots() -> list[str]:
     with open(os.path.join(HERE, '..', 'pipeline', 'check.py'), encoding='utf-8') as f:
