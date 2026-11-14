@@ -2079,6 +2079,20 @@ def level_grid(grid, k, tile=LEVEL_TILE):
     step = grid['step']
     nx, ny = (-(-grid['nx'] // k), -(-grid['ny'] // k))
     return {'west': round(grid['west'] + (k - 1) / 2 * step, 9), 'north': round(grid['north'] - (k - 1) / 2 * step, 9), 'step': round(k * step, 9), 'nx': nx, 'ny': ny, 'tile': tile, 'ntx': -(-nx // tile), 'nty': -(-ny // tile)}
+EDGE_TOL = 1 / 3
+
+def manifest_edge(hours_dir, times, grid):
+    for t in times:
+        try:
+            with np.load(os.path.join(hours_dir, f'{t:%Y%m%d%H}.npz')) as h:
+                if 'elevation' not in h.files:
+                    continue
+                el = h['elevation']
+        except (OSError, ValueError):
+            continue
+        lines = tiles.data_edge(el != 255, grid['west'], grid['north'], grid['step'])
+        return [[[round(a, 3), round(b, 3)] for a, b in tiles.simplify_line(ln, grid['step'] * EDGE_TOL)] for ln in lines]
+    return None
 
 def overview_manifest(grid, levels, lpresent):
     return [{'k': k, 'path': f'o{k}', 'grid': level_grid(grid, k, tile), 'tiles': {n: sorted(v) for n, v in sorted(lpresent.get(k, {}).items())}} for k, tile in levels]
@@ -2803,7 +2817,7 @@ def main():
     ntx = -(-len(lons) // tile)
     nty = -(-len(lats) // tile)
     grid = {'west': float(lons[0]), 'north': float(lats[0]), 'step': region[4], 'nx': len(lons), 'ny': len(lats), 'tile': tile, 'ntx': ntx, 'nty': nty}
-    manifest = {'model': src.id, 'label': src.label, 'run': run.isoformat(), 'runId': run_id, 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'complete': not args.max_hours and len(done) == len(fhs), 'older': older_runs(tail, times), 'grid': grid, 'levels': overview_manifest(grid, levels, lpresent), 'days': days, 'quarters': qdays, 'fields': {**{k: {'min': ENC[k][0], 'max': ENC[k][1], 'transform': ENC[k][2], 'tiles': sorted(v)} for k, v in sorted(present.items())}, **quarter_manifest(qdays, qpresent)}, 'heights': 'agl', 'sunGate': True, 'rainGate': True, 'cuNear': True, 'waveBars': True, 'bandsAgl': True, 'highAgl': True, 'bsRasp': True, 'windAltsFt': WIND_ALTS_FT, 'waveAltsFt': WAVE_ALTS_FT if 'wv12000' in present else [], 'notes': src.notes, 'points': points, 'sounding': soundings, 'fronts': 1 if has_fronts else 0, 'pack': 1, 'hourSegs': 1 if HOUR_SEGS else 0}
+    manifest = {'model': src.id, 'label': src.label, 'run': run.isoformat(), 'runId': run_id, 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'complete': not args.max_hours and len(done) == len(fhs), 'older': older_runs(tail, times), 'grid': grid, 'edge': manifest_edge(hours_dir, times, grid), 'levels': overview_manifest(grid, levels, lpresent), 'days': days, 'quarters': qdays, 'fields': {**{k: {'min': ENC[k][0], 'max': ENC[k][1], 'transform': ENC[k][2], 'tiles': sorted(v)} for k, v in sorted(present.items())}, **quarter_manifest(qdays, qpresent)}, 'heights': 'agl', 'sunGate': True, 'rainGate': True, 'cuNear': True, 'waveBars': True, 'bandsAgl': True, 'highAgl': True, 'bsRasp': True, 'windAltsFt': WIND_ALTS_FT, 'waveAltsFt': WAVE_ALTS_FT if 'wv12000' in present else [], 'notes': src.notes, 'points': points, 'sounding': soundings, 'fronts': 1 if has_fronts else 0, 'pack': 1, 'hourSegs': 1 if HOUR_SEGS else 0}
     shutil.rmtree(rdir, ignore_errors=True)
     os.replace(build_dir, rdir)
     with open(latest + '.tmp', 'w') as f:

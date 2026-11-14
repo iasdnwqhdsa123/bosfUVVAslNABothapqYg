@@ -1,6 +1,7 @@
 from __future__ import annotations
 import ctypes
 import io
+import math
 import os
 import struct
 import zlib
@@ -105,6 +106,77 @@ def downsample(codes, k, nearest=False, none=None, rms=False):
     out = np.empty(codes.shape[:-2] + (my, mx), np.uint8)
     f(_p(src), src.size // (ny * nx) if ny * nx else 0, ny, nx, k, -1 if none is None else int(none), int(bool(rms)), _p(out))
     return out
+_MID = ((0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5))
+_CORNER = ((0, 0, 8), (1, 0, 4), (1, 1, 2), (0, 1, 1))
+_CUTS = ((), ((3, 2),), ((2, 1),), ((3, 1),), ((0, 1),), ((0, 1), (3, 2)), ((0, 2),), ((0, 3),), ((0, 3),), ((0, 2),), ((0, 3), (2, 1)), ((0, 1),), ((3, 1),), ((1, 2),), ((3, 2),), ())
+
+def _edge_segs():
+    out = []
+    for c, segs in enumerate(_CUTS):
+        cs = []
+        for a, b in segs:
+            (ax, ay), (bx, by) = (_MID[a], _MID[b])
+            mx, my = ((ax + bx) / 2, (ay + by) / 2)
+            cx, cy, _ = sorted((p for p in _CORNER if c & p[2]), key=lambda p: math.hypot(p[0] - mx, p[1] - my))[0]
+            cs.append((a, b) if (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) < 0 else (b, a))
+        out.append(cs)
+    return out
+_EDGE_SEGS = _edge_segs()
+
+def data_edge(valid, west, north, step):
+    m = np.asarray(valid, bool)
+    ny, nx = m.shape
+    p = np.zeros((ny + 2, nx + 2), np.uint8)
+    p[1:-1, 1:-1] = m
+    c = p[:-1, :-1] * 8 + p[:-1, 1:] * 4 + p[1:, 1:] * 2 + p[1:, :-1]
+    K = 2 * ny + 8
+    key = lambda X, Y: (X + 2) * K + (Y + 2)
+
+    def mid(x, y, e):
+        return key(2 * x + 1, 2 * y) if e == 0 else key(2 * x + 2, 2 * y + 1) if e == 1 else key(2 * x + 1, 2 * y + 2) if e == 2 else key(2 * x, 2 * y + 1)
+    nxt = {}
+    ys, xs = np.nonzero((c != 0) & (c != 15))
+    for y, x in zip((ys - 1).tolist(), (xs - 1).tolist()):
+        for a, b in _EDGE_SEGS[c[y + 1, x + 1]]:
+            nxt[mid(x, y, a)] = mid(x, y, b)
+    ll = lambda k: [north - (k % K - 2) * 0.5 * step, west + (k // K - 2) * 0.5 * step]
+    lines = []
+    for start in list(nxt):
+        if start not in nxt:
+            continue
+        k, line = (start, [ll(start)])
+        while k in nxt:
+            n = nxt.pop(k)
+            line.append(ll(n))
+            k = n
+        if len(line) > 1:
+            lines.append(line)
+    return lines
+
+def simplify_line(pts, tol):
+    a = np.asarray(pts, np.float64)
+    if len(a) < 3:
+        return a.tolist()
+    closed = np.allclose(a[0], a[-1])
+    if closed:
+        f = int(np.argmax(np.hypot(*(a - a[0]).T)))
+        return simplify_line(a[:f + 1], tol)[:-1] + simplify_line(a[f:], tol)
+    keep = np.zeros(len(a), bool)
+    keep[[0, -1]] = True
+    stack = [(0, len(a) - 1)]
+    while stack:
+        i, j = stack.pop()
+        if j <= i + 1:
+            continue
+        d = a[j] - a[i]
+        n = math.hypot(*d)
+        r = a[i + 1:j] - a[i]
+        dist = np.abs(r[:, 0] * d[1] - r[:, 1] * d[0]) / n if n else np.hypot(*r.T)
+        k = int(np.argmax(dist))
+        if dist[k] > tol:
+            keep[i + 1 + k] = True
+            stack += [(i, i + 1 + k), (i + 1 + k, j)]
+    return a[keep].tolist()
 _SIG = b'\x89PNG\r\n\x1a\n'
 
 def png_filter_np(img):
