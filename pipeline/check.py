@@ -85,6 +85,11 @@ def published(url: str) -> dict | None:
     except Exception:
         return None
 
+def still_to_build(have: str | None, newest: datetime | None, want: str | None=None, no_out: bool=False, force: bool=False) -> bool:
+    if force or no_out or have is None or (newest is None):
+        return True
+    return f'{newest:%Y%m%d%H}' > have or bool(want and want > have)
+
 def map_data_due(ages: list, todo: list[str]) -> bool:
     if any((a is None for a in ages)):
         return True
@@ -102,7 +107,9 @@ def main():
     ap.add_argument('--outs', help='the models whose output (out-<model>) is on hand, comma-separated (and mapdata)')
     ap.add_argument('--force', action='store_true')
     ap.add_argument('--wait-for', choices=list(SOURCES), help="in that model's job: wait for --run until --until (writes landed=true|false)")
-    ap.add_argument('--run', help='with --wait-for: YYYYMMDDHH')
+    ap.add_argument('--still', choices=list(SOURCES), help="in that model's job, at its start: is its build still to do? (writes build=true|false)")
+    ap.add_argument('--no-out', action='store_true', help="with --still: the model's output isn't on hand (built anyway)")
+    ap.add_argument('--run', help='with --wait-for or --still: YYYYMMDDHH')
     ap.add_argument('--until', help='with --wait-for: ISO time')
     ap.add_argument('--missing-only', action='store_true', help="only build what isn't published (or on hand) at all")
     ap.add_argument('--all-models', action='store_true', help='build every model with a newer run (or no output on hand)')
@@ -120,6 +127,17 @@ def main():
     if not args.data_url:
         ap.error('--data-url is required')
     base = args.data_url.rstrip('/')
+    if args.still:
+        src = SOURCES[args.still]
+        cur = published(f'{base}/{src.id}/latest.json')
+        have = cur.get('runId') if cur and cur.get('complete') else None
+        newest = complete_run(src)
+        build = still_to_build(have, newest, args.run, args.no_out, args.force)
+        print(f"{src.id}: published {have or '-'}, newest complete {(f'{newest:%Y%m%d%H}' if newest else '-')}" + (f", its slot's run {args.run}" if args.run else '') + (', its output not on hand' if args.no_out else '') + (' → build' if build else " → built and published meanwhile (another run's job): not built again"))
+        if out:
+            with open(out, 'a') as f:
+                f.write(f"build={('true' if build else 'false')}\n")
+        return
     open_base = (args.open_url or base).rstrip('/')
     now = datetime.now(timezone.utc)
     slot = slot_at(now, args.slot if args.slot and re.fullmatch('\\d\\d:\\d\\d', args.slot) else None)

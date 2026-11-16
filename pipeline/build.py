@@ -2654,6 +2654,7 @@ def main():
     ap.add_argument('--force', action='store_true', help='publish again even if this run is already published')
     ap.add_argument('--recompute', action='store_true', help='also recompute hours already computed from this run')
     ap.add_argument('--workers', type=int, default=int(os.environ.get('WORKERS', '3')))
+    ap.add_argument('--write-workers', type=int, default=int(os.environ.get('WRITE_WORKERS') or 0) or None, help='processes for the tiles and packs (default: --workers)')
     ap.add_argument('--free-only', action='store_true', help='only refresh the free 24 h window from stored hours')
     ap.add_argument('--no-quarters', action='store_true', help="skip the 15-minute output (HRRR's, ICON-D2's)")
     ap.add_argument('--python-physics', action='store_true', help='physics.py, leelattice.py and runwave.py only (never their C++)')
@@ -2804,19 +2805,20 @@ def main():
     t1 = time.time()
     n = hour_to_hour(hours_dir, times, region[4] <= sky.FINE_STEP, args.workers)
     log(f'{src.id}: Cloud Layers hour to hour over {len(times)} hours ({n} decks held) in {_fmt_dur(time.time() - t1)}')
-    days, present, lpresent = write_tiles(build_dir, hours_dir, times, tile, done[0], levels=levels, workers=args.workers)
+    ww = max(args.workers, args.write_workers or 0)
+    days, present, lpresent = write_tiles(build_dir, hours_dir, times, tile, done[0], levels=levels, workers=ww)
     qtimes = stored_quarters(qdir, min(needed), max(needed), prune=True) if src.id in QUARTER_MODELS else []
-    qdays, qpresent, qlp = write_quarters(build_dir, qdir, qtimes, tile, workers=args.workers, levels=levels) if qtimes else ({}, {}, {})
+    qdays, qpresent, qlp = write_quarters(build_dir, qdir, qtimes, tile, workers=ww, levels=levels) if qtimes else ({}, {}, {})
     for k, by_name in qlp.items():
         for name, keys in by_name.items():
             lpresent[k].setdefault(name, set()).update(keys)
-    log(f'{src.id}: tiles for {len(times)} hours in {_fmt_dur(time.time() - t0)}')
+    log(f'{src.id}: tiles for {len(times)} hours in {_fmt_dur(time.time() - t0)} ({ww} processes)')
     has_fronts = write_fronts(build_dir, hours_dir, times)
     t0 = time.time()
-    points = write_points(build_dir, hours_dir, times, done[0], workers=args.workers)
+    points = write_points(build_dir, hours_dir, times, done[0], workers=ww)
     log(f"{src.id}: point packs ({(len(points['tiles']) if points else 0)}) in {_fmt_dur(time.time() - t0)}")
     t0 = time.time()
-    soundings = write_soundings(build_dir, hours_dir, times, src, workers=args.workers)
+    soundings = write_soundings(build_dir, hours_dir, times, src, workers=ww)
     if soundings:
         log(f"{src.id}: sounding packs ({sum((len(d['tiles']) for d in soundings['days'].values()))} blocks, {len(soundings['days'])} days) in {_fmt_dur(time.time() - t0)}")
     ntx = -(-len(lons) // tile)
