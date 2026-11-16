@@ -14,7 +14,7 @@ import common
 import report
 import track
 import train
-T3 = {'spacing': 2, 'spacingMin': 1.6, 'spacingMax': 3.1, 'spacingW': 2, 'spacingWeak': 0.525, 'spacingStrong': 0.27, 'minSpacing': 1200, 'maxSpacing': 6000, 'peak': 1.3, 'windward': 0.35, 'flowPeak': 0.25, 'crest': 0.2, 'slideEdge': 0.15, 'hillM': 120, 'minW': 0.5, 'suck': 0.25, 'suckFrom': 500, 'suckFull': 2500, 'suckDepth': 250}
+T3 = {'spacing': 2, 'spacingMin': 1.1, 'spacingMax': 3.1, 'spacingW': 2, 'spacingWeak': 0.525, 'spacingStrong': 0.6, 'minSpacing': 1200, 'maxSpacing': 6000, 'peak': 1.3, 'windward': 0.35, 'flowPeak': 0.25, 'crest': 0.2, 'slideEdge': 0.15, 'hillM': 120, 'minW': 0.5, 'suck': 0.25, 'suckFrom': 500, 'suckFull': 2500, 'suckDepth': 250}
 TRIGGER_RANGE = (-0.6, 1.6)
 TRIGGER_W = {'hill': 0.15, 'sun': 0.7, 'ground': 0.1, 'cover': 0.1, 'flat': 2}
 TRIGGER_FLAT = (30, 200)
