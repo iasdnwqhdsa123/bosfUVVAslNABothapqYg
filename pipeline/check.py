@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,11 @@ def wait_for(src, run: datetime, until: datetime) -> bool:
 
 def published(url: str) -> dict | None:
     try:
+        if url.startswith('s3://'):
+            e = os.environ.get
+            env = dict(os.environ, AWS_ACCESS_KEY_ID=e('DATA_S3_KEY') or e('ARCHIVE_S3_KEY') or '', AWS_SECRET_ACCESS_KEY=e('DATA_S3_SECRET') or e('ARCHIVE_S3_SECRET') or '', AWS_DEFAULT_REGION='auto', AWS_MAX_ATTEMPTS='3')
+            r = subprocess.run(['aws', '--endpoint-url', e('DATA_S3_ENDPOINT') or e('ARCHIVE_S3_ENDPOINT') or '', 's3', 'cp', url, '-'], env=env, capture_output=True, timeout=60)
+            return json.loads(r.stdout) if r.returncode == 0 else None
         req = urllib.request.Request(url, headers={'User-Agent': 'wx-pipeline/1.0', 'Cache-Control': 'no-cache'})
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.load(r)
@@ -90,7 +96,7 @@ FREE_EVERY = timedelta(hours=5)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--data-url')
+    ap.add_argument('--data-url', help="where the forecast is published: the data host's bucket's data/ (s3://<bucket>/data), or a URL")
     ap.add_argument('--open-url', help='where the open data (free, airspace) is published, if not under --data-url')
     ap.add_argument('--slot', help='the slot this run is for (HH:MM UTC; else the latest one by the clock)')
     ap.add_argument('--outs', help='the models whose output (out-<model>) is on hand, comma-separated (and mapdata)')
