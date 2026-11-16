@@ -432,7 +432,8 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
         env['CALIB_CORRECTIONS'] = corrections
     else:
         env.pop('CALIB_CORRECTIONS', None)
-    ok = _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, EVAL_TIMEOUT, logf, env)
+    left = _lead_left(model, EVAL_TIMEOUT)
+    ok = left > 30 and _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, left, logf, env)
     if not ok or not os.path.exists(fout):
         info['error'] = 'evaluate'
         info['why'] = LAST_FAIL['why']
@@ -473,6 +474,12 @@ def build_command(day: str, B: dict, out: str, model: str, workers: int, work: s
         cmd += ['--cache', os.path.join(work, 'eu-cache')]
     return cmd
 LEAD_DEADLINE = None
+LEAD_HARD = None
+
+def _lead_left(model: str, limit: float) -> float:
+    if not common.is_lead(model) or LEAD_HARD is None:
+        return limit
+    return min(limit, LEAD_HARD - time.time())
 
 def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int, grids: str | None=None, corrections: str | None=None) -> bool:
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
@@ -492,7 +499,14 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             common.note(f"{day} {model} box {B['region']}: outside the model's domain, not built")
             continue
         common.note(f"{day} {model} box {B['region']} {cmd[6]} flights {len(B['flights'])}")
-        built = _run(cmd, common.PIPELINE, BUILD_TIMEOUT, logf)
+        left = _lead_left(model, BUILD_TIMEOUT)
+        built = left > 60 and _run(cmd, common.PIPELINE, left, logf)
+        if not built and left < BUILD_TIMEOUT and (_lead_left(model, BUILD_TIMEOUT) < 90):
+            common.note(f"{day} {model}: the shard's hard stop; left for a later run")
+            shutil.rmtree(out, ignore_errors=True)
+            del res['boxes'][n0:]
+            _drop_model(res, model, flights)
+            return False
         base = os.path.join(out, common.base_model(model))
         if not built or not os.path.exists(f'{base}/latest.json'):
             info['error'] = 'build'
@@ -509,7 +523,14 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             except Exception as e:
                 common.note(f'{day} {model} box {bi}: grids not saved: {e!r}')
                 shutil.rmtree(os.path.join(grids, key, f'{model}-box{bi}'), ignore_errors=True)
-        if _eval_box(base, B, out, model, bi, info, logf, corrections):
+        ev = _eval_box(base, B, out, model, bi, info, logf, corrections)
+        if not ev and common.is_lead(model) and (LEAD_HARD is not None) and (LEAD_HARD - time.time() < 90):
+            common.note(f"{day} {model}: the shard's hard stop while scoring; left for a later run")
+            shutil.rmtree(out, ignore_errors=True)
+            del res['boxes'][n0:]
+            _drop_model(res, model, flights)
+            return False
+        if ev:
             info['ok'] = True
         res['boxes'].append(info)
         shutil.rmtree(out, ignore_errors=True)

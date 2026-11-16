@@ -276,10 +276,12 @@ def _fetch_grids(month: str, dest: str) -> bool:
         common.note(f'grids {month}: not fetched: {e!r}')
         return False
 LEAD_GRACE = 10
+LEAD_HARD = 56
 
 def build(a) -> int:
     t0 = time.time()
     dayrun.LEAD_DEADLINE = t0 + (a.minutes + LEAD_GRACE) * 60
+    dayrun.LEAD_HARD = t0 + LEAD_HARD * 60
     todo = common.read_json(f'{a.plan}/todo.json')
     mine = [j for j in todo['days'] if j['shard'] == a.shard]
     os.makedirs(f'{a.out}/days', exist_ok=True)
