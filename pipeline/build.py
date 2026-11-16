@@ -755,6 +755,11 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     nanf = lambda a: np.full(zs.shape, np.nan, np.float32) if a is None else a
     el = sun_elevation(valid, lat2d, lon2d) if valid is not None and lon2d is not None else np.full(zs.shape, 45.0, np.float32)
     out.update(decks.organisation(prof, zs, s['t2'], s['td2'], s['ps'], s['u10'], s['v10'], nanf(out.get('sst')), hth, out['zi'], np.stack([out[f'cc{p}'] for p in P.CC_LEVELS]), P.level_heights(levels, lv['z']), nanf(out.get('cloudlow')), nanf(out.get('cloudmid')), nanf(out.get('cloudhigh')), np.where(np.isfinite(nanf(ceil)) & (nanf(ceil) < P.CEIL_NONE), nanf(ceil), np.nan), nanf(out.get('lowbase')), el))
+    with np.errstate(invalid='ignore'):
+        tear = decks.shear_tear(out['twidth'], thermal_width(out['zi'], out['blapse'], np.nan, ~has_cu))
+        lo100 = np.hypot(out['u_g100'] - out['u_sfc'], out['v_g100'] - out['v_sfc']) if 'u_g100' in out else None
+    st = decks.street_rolls(np.nan_to_num(out['wstar'], nan=0.0), out['zi'], out['u_blavg'], out['v_blavg'], out['u_sfc'], out['v_sfc'], out['u_bltop'], out['v_bltop'], shear_lo=lo100, cap=out.get('dth_m200'), lid=out.get('dth_m500'), tear=tear, bars_relief=None if lat2d is None else decks.relief_round(zs, grid_step, lat2d))
+    out.update(decks.with_streets({k: out[k] for k in ('rowstr', 'rowdir', 'rowgap')}, st, nanf(out.get('cloudlow')), np.isfinite(nanf(out.get('sst')))))
     sun_cu = None
     if SUNSET and valid is not None and (lon2d is not None):
         try:

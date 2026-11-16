@@ -2,7 +2,9 @@ from __future__ import annotations
 import math
 import numpy as np
 import physics as P
-ROLLS = {'kappa': 0.4, 'z0_land': 0.1, 'z0_water': 0.0002, 'zL': (1.0, 3.0, 6.0, 60.0), 'shear': (0.4, 0.004), 'turnDeg': (30.0, 60.0), 'aspect': (2.5, 5.5), 'aspectZL': (2.0, 25.0), 'turn': 15.0, 'turnShear': 3.0}
+ROLLS = {'kappa': 0.4, 'z0_land': 0.1, 'z0_water': 0.0002, 'zL': (1.0, 3.0, 6.0, 60.0), 'shear': (0.4, 0.004), 'turnDeg': (30.0, 60.0), 'aspect': (2.5, 5.5), 'aspectZL': (2.0, 25.0), 'turn': 15.0, 'turnShear': 3.0, 'wind': (5.0, 8.0), 'lo': (0.5, 1.0, 3.0), 'cap': (0.4, 4.0), 'lid': (0.5, 3.0, 6.0), 'tear': (0.3, 1.0), 'on': 0.3}
+WAVE_BARS = {'km': 30.0, 'ratio': (2.0, 2.5)}
+SHEAR_TEAR = {'from': 4.5, 'full': 1.0}
 DECK_LOW = 25.0
 DECK_CC = 20.0
 DECK_THIN = 200.0
@@ -12,7 +14,7 @@ DECK_WIND = (1.5, 4.0)
 W_MIN = (0.15, 0.4)
 CELL_ASPECT = 12.0
 TOP_SHARE = (0.25, 0.5)
-DECK_SHOWN = (60.0, 75.0)
+STREETS_SHOWN = (60.0, 75.0)
 TOP = {'lw': 70.0, 'mid': 0.8, 'high': 0.4, 'sw': 60.0, 'eff': 0.4}
 SEA = {'ch': 0.0012, 'ce': 0.0012, 'u_min': 2.0}
 
@@ -90,6 +92,80 @@ def instability(wstar, u10, zi, z0):
         us = k * u10 / np.maximum(0.5, lz - psi_m(10.0 / L))
     return (k * (wstar / us) ** 3, us)
 
+def shear_tear(twidth, width0):
+    with np.errstate(invalid='ignore', divide='ignore'):
+        f = twidth / width0
+    t = np.clip((SHEAR_TEAR['from'] - (f - 0.55) / 0.09) / (SHEAR_TEAR['from'] - SHEAR_TEAR['full']), 0, 1)
+    return np.where(np.isfinite(f) & (twidth > 0) & (width0 > 0), t, 0.0)
+
+def relief_round(zs, step_deg, lat):
+    from scipy.ndimage import maximum_filter, minimum_filter
+    lat = np.asarray(lat, np.float64)
+    lat = lat[:, 0] if lat.ndim == 2 else lat
+    ry = max(1, int(round(WAVE_BARS['km'] / (step_deg * 111.2))))
+    rx = max(1, int(round(WAVE_BARS['km'] / (step_deg * 111.2 * math.cos(math.radians(float(np.nanmean(lat))))))))
+    z = np.nan_to_num(zs, nan=0.0)
+    size = (2 * ry + 1, 2 * rx + 1)
+    return (maximum_filter(z, size=size, mode='nearest') - minimum_filter(z, size=size, mode='nearest')).astype(np.float32)
+
+def street_rolls(wstar, zi, ub, vb, us, vs, ut, vt, shear_lo=None, cap=None, lid=None, tear=None, bars_relief=None):
+    R = ROLLS
+    f = lambda a: np.asarray(a, np.float64)
+    wstar, zi, ub, vb, us, vs, ut, vt = (f(a) for a in (wstar, zi, ub, vb, us, vs, ut, vt))
+    one = np.ones(wstar.shape)
+    opt = lambda a: np.full(wstar.shape, np.nan) if a is None else f(a)
+    shear_lo, cap, lid, bars_relief = (opt(a) for a in (shear_lo, cap, lid, bars_relief))
+    tear = np.zeros(wstar.shape) if tear is None else np.nan_to_num(f(tear), nan=0.0)
+    ok = (wstar > 0) & (zi > 0)
+    zi1 = np.where(ok, zi, 1500.0)
+    V, U10 = (np.hypot(ub, vb), np.hypot(us, vs))
+    zl, _ = instability(np.where(ok, wstar, 0.0), U10, zi1, R['z0_land'])
+    lz = np.log(np.maximum(zl, 1e-06))
+    a0, a1, b0, b1 = (math.log(x) for x in R['zL'])
+    f_in = smooth((lz - a0) / (a1 - a0))
+    f_out = 1 - smooth((lz - b0) / (b1 - b0))
+    f_wind = smooth((V - R['wind'][0]) / (R['wind'][1] - R['wind'][0]))
+    a, b = (U10, np.hypot(ut, vt))
+    both = (a > 0) & (b > 0)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        turn = np.degrees(np.arccos(np.clip((us * ut + vs * vt) / np.maximum(a * b, 1e-30), -1, 1)))
+    f_turn = np.where(both, 1 - smooth((turn - R['turnDeg'][0]) / (R['turnDeg'][1] - R['turnDeg'][0])) * smooth((np.minimum(a, b) - 1) / 2), 1.0)
+    sx, sy = (ut - us, vt - vs)
+    S = np.hypot(sx, sy)
+    f_shear = R['shear'][0] + (1 - R['shear'][0]) * smooth(S / zi1 / R['shear'][1])
+    part = lambda x, lo, v: np.where(np.isfinite(x), lo + (1 - lo) * v, one)
+    f_lo = part(shear_lo, R['lo'][0], smooth((shear_lo - R['lo'][1]) / (R['lo'][2] - R['lo'][1])))
+    f_cap = part(cap, R['cap'][0], smooth(cap / R['cap'][1]))
+    f_lid = part(lid, R['lid'][0], smooth((lid - R['lid'][1]) / (R['lid'][2] - R['lid'][1])))
+    f_tear = 1 - smooth((tear - R['tear'][0]) / (R['tear'][1] - R['tear'][0]))
+    with np.errstate(invalid='ignore', divide='ignore'):
+        rb = np.where(bars_relief > 0, zi1 / bars_relief, np.inf)
+    f_bars = smooth((rb - WAVE_BARS['ratio'][0]) / (WAVE_BARS['ratio'][1] - WAVE_BARS['ratio'][0]))
+    bars_from = f_in * f_out * f_wind * f_turn * f_shear * f_lo * f_cap * f_lid * f_tear
+    strength = np.where(ok, bars_from * f_bars, 0.0)
+    bars = ok & (rb < WAVE_BARS['ratio'][1]) & (bars_from >= R['on'])
+    t = np.clip(np.log(np.maximum(zl, 1e-06) / R['aspectZL'][0]) / math.log(R['aspectZL'][1] / R['aspectZL'][0]), 0, 1)
+    gap = (R['aspect'][0] + (R['aspect'][1] - R['aspect'][0]) * t) * zi1 / 1000.0
+    d = np.degrees(np.arctan2(ub * sy - vb * sx, ub * sx + vb * sy))
+    d = np.where(d > 90, d - 180, np.where(d < -90, d + 180, d))
+    by = np.where(S > 0, np.clip(d, -R['turn'], R['turn']) * np.clip(S / R['turnShear'], 0, 1), 0.0)
+    c, sn = (np.cos(np.radians(by)), np.sin(np.radians(by)))
+    ex, ey = (ub * c - vb * sn, ub * sn + vb * c)
+    ang = np.where(V > 0, np.degrees(np.arctan2(ex, ey)), np.degrees(np.arctan2(ub, vb))) % 180
+    return {'strength': strength.astype(np.float32), 'dir': ang.astype(np.float32), 'gap': gap.astype(np.float32), 'bars': bars}
+
+def with_streets(rows, st, low, water):
+    shown = 1 - smooth((np.nan_to_num(low, nan=0.0) - STREETS_SHOWN[0]) / (STREETS_SHOWN[1] - STREETS_SHOWN[0]))
+    own = rows['rowstr']
+    field = ~np.asarray(water, bool)
+    s = np.where(field, st['strength'] * shown, np.nan)
+    take = field & (np.nan_to_num(s, nan=-1.0) > np.nan_to_num(own, nan=0.0))
+    out = dict(rows)
+    out['rowstr'] = np.where(take, s, np.where(field & ~np.isfinite(own), 0.0, own)).astype(np.float32)
+    out['rowdir'] = np.where(take | field & ~np.isfinite(rows['rowdir']), st['dir'], rows['rowdir']).astype(np.float32)
+    out['rowgap'] = np.where(take | field & ~np.isfinite(rows['rowgap']), st['gap'], rows['rowgap']).astype(np.float32)
+    return out
+
 def organisation(prof, zs, t2, td2, ps, u10, v10, sst, heat_th, zi, cc, zc, low, mid, high, ceil, lowbase, sun_el):
     dbase, dtop = deck_bounds(prof, zs, cc, zc, low, ceil, lowbase, t2, td2)
     deck = np.isfinite(dtop)
@@ -126,9 +202,8 @@ def organisation(prof, zs, t2, td2, ps, u10, v10, sst, heat_th, zi, cc, zc, low,
         turn = np.degrees(np.arccos(np.clip((u10 * ut + v10 * vt) / np.maximum(a * b, 1e-06), -1, 1)))
     f_turn = 1 - smooth((turn - ROLLS['turnDeg'][0]) / (ROLLS['turnDeg'][1] - ROLLS['turnDeg'][0])) * smooth((np.minimum(a, b) - 1) / 2)
     f_w = smooth((w - W_MIN[0]) / (W_MIN[1] - W_MIN[0]))
-    shown = 1 - smooth((np.nan_to_num(low, nan=0.0) - DECK_SHOWN[0]) / (DECK_SHOWN[1] - DECK_SHOWN[0]))
     share = w_top3 / np.maximum(w_sfc3 + w_top3, 1e-09)
-    shown = shown * smooth((share - TOP_SHARE[0]) / (TOP_SHARE[1] - TOP_SHARE[0]))
+    shown = smooth((share - TOP_SHARE[0]) / (TOP_SHARE[1] - TOP_SHARE[0]))
     rows = f_in * (1 - past) * f_wind * f_shear * f_turn * f_w * shown
     cells = f_in * past * f_w
     rowstr = np.where(water, np.nan, np.where(rows >= cells, rows, 0.0))
