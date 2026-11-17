@@ -6,7 +6,6 @@ on:
   schedule:
     - cron: "17 0 * * *"
     - cron: "42 4 * * *"
-    - cron: "15 13 * * *"
   workflow_dispatch:
     inputs:
       days:
@@ -42,6 +41,7 @@ env:
   MINUTES: "20"
   BUILD_MINUTES: "40"
   SHARDS: "6"
+  SHARDS_MOST: "10"
   CALIB_GRID_FIELDS: "eval"
   CALIB_GRID_HOURS: "8-20"
   KEEP_DAYS: "60"
@@ -209,9 +209,16 @@ jobs:
           else
             echo "no corrections yet"
           fi
+      - name: Room
+        id: room
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 calib/room.py --base "$SHARDS" --most "$SHARDS_MOST" >> "$GITHUB_OUTPUT"
       - name: Plan
         id: plan
         env:
+          SHARDS: ${{ steps.room.outputs.shards || env.SHARDS }}
           DAYS: ${{ steps.opts.outputs.days }}
           NEW: ${{ steps.opts.outputs.new }}
           CORR: ${{ steps.corr.outputs.file }}
