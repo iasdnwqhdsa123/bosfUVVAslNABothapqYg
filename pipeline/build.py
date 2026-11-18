@@ -2607,18 +2607,55 @@ def older_runs(tail, times):
             out.append({'from': t.isoformat(), 'run': r.isoformat()})
     return out
 
+def compute_jobs(src, jobs, workers):
+    kept, first, rest = split_first(jobs)
+    results = {j: _process_hour(j) for j in kept}
+    if first is not None:
+        results[first] = _process_hour(first)
+    trim_malloc()
+    if rest:
+        workers = max(1, min(workers, len(rest)))
+        progress = Progress(src.id, len(rest))
+        if workers == 1:
+            for j in rest:
+                results[j] = _process_hour(j)
+                progress.tick()
+        else:
+            results.update(zip(rest, process_lanes(rest, workers, progress, run=LANE_RUN if src.between_to else 1)))
+    return results
+
+def fill_from_earlier(src, run, fhs, results, workers):
+    missing = [run + timedelta(hours=fh) for fh in fhs if results.get(fh) is None]
+    jobs = earlier_jobs(src, run, missing) if missing else []
+    if not jobs:
+        return []
+    log(f'{src.id}: {len(missing)} hours not out yet, {len(jobs)} from earlier runs ' + ', '.join(sorted({f'{r:%d %HZ}' for r, _ in jobs})))
+    got = compute_jobs(src, jobs, workers)
+    return [(r + timedelta(hours=fh), r) for r, fh in jobs if got.get((r, fh)) is not None]
+
 def backfill_jobs(src, run, needed, hours_dir):
     have = {f[:-4] for f in os.listdir(hours_dir) if f.endswith('.npz') and (not f.endswith('.tmp.npz'))}
     end = run + timedelta(hours=src.last_fh(run))
     jobs = []
     for t in needed:
         if t > end:
-            runs = candidate_runs(src, run, back_hours=25)
+            jobs += earlier_jobs(src, run, [t])
+            continue
         elif (t > run or (t == run and src.fstep(0))) or f'{t:%Y%m%d%H}' in have:
             continue
         else:
             runs = candidate_runs(src, t, back_hours=24)
         for r in runs:
+            fh = int((t - r).total_seconds() // 3600)
+            if r < run and 0 <= fh <= src.last_fh(r) and src.builds(fh):
+                jobs.append((r, fh))
+                break
+    return jobs
+
+def earlier_jobs(src, run, times):
+    jobs = []
+    for t in times:
+        for r in candidate_runs(src, run, back_hours=25):
             fh = int((t - r).total_seconds() // 3600)
             if r < run and 0 <= fh <= src.last_fh(r) and src.builds(fh):
                 jobs.append((r, fh))
@@ -2726,23 +2763,13 @@ def main():
     jobs += back
     end = run + timedelta(hours=src.last_fh(run))
     tail = sorted(((r + timedelta(hours=fh), r) for r, fh in back if r + timedelta(hours=fh) > end))
-    kept, first, rest = split_first(jobs)
-    results = {j: _process_hour(j) for j in kept}
-    if first is not None:
-        results[first] = _process_hour(first)
-    trim_malloc()
-    if rest:
-        workers = max(1, min(args.workers, len(rest)))
-        progress = Progress(src.id, len(rest))
-        if workers == 1:
-            for j in rest:
-                results[j] = _process_hour(j)
-                progress.tick()
-        else:
-            results.update(zip(rest, process_lanes(rest, workers, progress, run=LANE_RUN if src.between_to else 1)))
+    results = compute_jobs(src, jobs, args.workers)
     done = [t for t in (results.get(j) for j in fhs) if t is not None]
     if not done:
         raise SystemExit('no hours processed')
+    if not args.max_hours and shard is None:
+        filled = fill_from_earlier(src, run, fhs, results, args.workers)
+        tail = sorted(tail + filled)
     if shard is not None:
         log(f'{src.id}: shard {shard[0] + 1} of {shard[1]}: {len(done)} of {len(fhs)} hours computed')
         with open(os.path.join(hours_dir, 'SHARD_RUN'), 'w') as f:
