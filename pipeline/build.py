@@ -22,7 +22,7 @@ import sky
 import spotting
 import sunset
 import tiles
-from sources import OPEN_AHEAD_H, OPEN_SLACK_H, SOURCES, candidate_runs, latest_complete_run, needed_times
+from sources import OPEN_AHEAD_H, OPEN_SLACK_H, SOURCES, VIA, candidate_runs, latest_complete_run, needed_times
 from tiles import downsample, downsample_at_peak, downsample_peak
 REGIONS = {'hrrr': (-125.0, 24.0, -66.5, 50.0, 0.03), 'gfs': (-170.0, -54.75, 179.75, 70.0, 0.25), 'ecmwf': (-170.0, -54.9, 179.9, 70.0, 0.1), 'icon': (-170.0, -54.875, 179.75, 70.0, 0.125), 'icond2': (-3.94, 43.18, 20.34, 58.08, 0.02), 'arome': (-12.0, 37.5, 16.0, 55.4, 0.025)}
 KEEP = {'gfs': ((-130.0, 20.25, -52.0, 56.0), (-168.0, 59.0, -130.25, 70.0), (-163.0, 54.5, -148.0, 59.0), (-137.0, 54.5, -130.25, 59.0), (-25.0, 34.0, 44.75, 70.0), (-13.0, 27.0, 12.0, 34.0), (-76.0, -54.75, -53.0, -16.0), (-53.0, -34.0, -34.0, -2.0), (-82.0, -16.0, -66.0, 12.5), (11.0, -35.0, 36.0, -16.0), (165.0, -49.0, 179.75, -33.75), (112.0, -36.25, 124.0, -23.0), (130.5, -44.0, 155.0, -18.5), (72.0, 26.0, 97.0, 37.0), (24.0, 16.0, 63.5, 34.0), (44.75, 34.0, 63.5, 40.0), (97.0, 21.0, 123.0, 42.0), (128.5, 30.0, 146.0, 46.0))}
@@ -1242,6 +1242,7 @@ def add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d, levels=None):
 
 def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=None):
     raw = fetch_hour(src, run, fh) if raw is None else raw
+    regrid_holder['via'] = raw.pop(VIA, None) if isinstance(raw, dict) else None
     if regrid_holder.get('r') is None and hasattr(src, 'static_url'):
         regrid_holder['r'], regrid_holder['rot'] = (Regridder.identity(region), None)
     if regrid_holder.get('r') is None:
@@ -1261,7 +1262,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
     windows, parts = (regrid_holder['windows'], regrid_holder['parts'])
     boxes = regrid_holder['boxes']
     coords = [np.meshgrid(p.lats, p.lons, indexing='ij') for p in parts]
-    grib_msg = lambda m: isinstance(m, (bytes, bytearray, Blend))
+    grib_msg = lambda m: isinstance(m, (bytes, bytearray, Blend)) or getattr(m, 'threads', False)
     between = any((isinstance(m, Blend) for m in raw.values()))
 
     def sfc(nk):
@@ -1577,8 +1578,15 @@ def _kept(run, valid):
     npz, stamp = (os.path.join(hours_dir, f'{valid:%Y%m%d%H}{ext}') for ext in ('.npz', '.run'))
     if _CTX.get('recompute') or not (os.path.exists(npz) and os.path.exists(stamp)):
         return False
-    with open(stamp) as f:
-        return f.read().strip() == f'{run:%Y%m%d%H}'
+    return stamp_of(stamp)[0] == f'{run:%Y%m%d%H}'
+
+def stamp_of(path):
+    try:
+        with open(path) as f:
+            parts = f.read().split()
+    except OSError:
+        return ('', None)
+    return (parts[0] if parts else '', parts[1] if len(parts) > 1 else None)
 
 def _prefetch(job):
     run, fh, valid = _job_hour(job)
@@ -1608,6 +1616,7 @@ def _process_hour(job, raw=None):
     except Exception as e:
         log(f'  f{fh:03d} skipped: {e}')
         return None
+    via = holder.pop('via', None)
     rg, windows = (holder['r'], holder['windows'])
     if 'll' not in holder:
         holder['ll'] = (np.repeat(rg.lats[:, None], len(rg.lons), axis=1), np.repeat(rg.lons[None, :], len(rg.lats), axis=0))
@@ -1644,7 +1653,7 @@ def _process_hour(job, raw=None):
     tiles.savez(part, q)
     os.replace(part, npz)
     with open(stamp, 'w') as f:
-        f.write(f'{run:%Y%m%d%H}')
+        f.write(f'{run:%Y%m%d%H}' + (f' {via}' if via else ''))
     log(f'  f{fh:03d} {valid:%a %HZ} done in {time.time() - t0:.1f}s{_mem_note()}')
     _turn_took(time.time() - t0)
     return valid
@@ -2753,6 +2762,8 @@ def main():
     if src.id in KEEP:
         with open(kfile, 'w') as f:
             f.write(keep_now)
+    if hasattr(src, 'cache_dir'):
+        src.cache_dir = os.path.join(hours_dir, 'dwd')
     _CTX.update({'src': src, 'run': run, 'region': region, 'hours': hours_dir, 'holder': {}, 'recompute': args.recompute, 'pick_physics': not args.python_physics})
     if args.python_physics:
         runfields.NATIVE = False
@@ -2851,7 +2862,7 @@ def main():
     ntx = -(-len(lons) // tile)
     nty = -(-len(lats) // tile)
     grid = {'west': float(lons[0]), 'north': float(lats[0]), 'step': region[4], 'nx': len(lons), 'ny': len(lats), 'tile': tile, 'ntx': ntx, 'nty': nty}
-    manifest = {'model': src.id, 'label': src.label, 'run': run.isoformat(), 'runId': run_id, 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'complete': not args.max_hours and len(done) == len(fhs), 'older': older_runs(tail, times), 'grid': grid, 'edge': manifest_edge(hours_dir, times, grid), 'levels': overview_manifest(grid, levels, lpresent), 'days': days, 'quarters': qdays, 'fields': {**{k: {'min': ENC[k][0], 'max': ENC[k][1], 'transform': ENC[k][2], 'tiles': sorted(v)} for k, v in sorted(present.items())}, **quarter_manifest(qdays, qpresent)}, 'heights': 'agl', 'sunGate': True, 'rainGate': True, 'cuNear': True, 'waveBars': True, 'bandsAgl': True, 'highAgl': True, 'bsRasp': True, 'windAltsFt': WIND_ALTS_FT, 'waveAltsFt': WAVE_ALTS_FT if 'wv12000' in present else [], 'notes': src.notes, 'points': points, 'sounding': soundings, 'fronts': 1 if has_fronts else 0, 'pack': 1, 'hourSegs': 1 if HOUR_SEGS else 0}
+    manifest = {'model': src.id, 'label': src.label, 'run': run.isoformat(), 'runId': run_id, 'generated': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'complete': not args.max_hours and len(done) == len(fhs), 'older': older_runs(tail, times), 'grid': grid, 'edge': manifest_edge(hours_dir, times, grid), 'levels': overview_manifest(grid, levels, lpresent), 'days': days, 'quarters': qdays, 'fields': {**{k: {'min': ENC[k][0], 'max': ENC[k][1], 'transform': ENC[k][2], 'tiles': sorted(v)} for k, v in sorted(present.items())}, **quarter_manifest(qdays, qpresent)}, 'heights': 'agl', 'sunGate': True, 'rainGate': True, 'cuNear': True, 'waveBars': True, 'bandsAgl': True, 'highAgl': True, 'bsRasp': True, 'windAltsFt': WIND_ALTS_FT, 'waveAltsFt': WAVE_ALTS_FT if 'wv12000' in present else [], 'notes': src.notes_for({stamp_of(os.path.join(hours_dir, f'{t:%Y%m%d%H}.run'))[1] for t in times}) if hasattr(src, 'notes_for') else src.notes, 'points': points, 'sounding': soundings, 'fronts': 1 if has_fronts else 0, 'pack': 1, 'hourSegs': 1 if HOUR_SEGS else 0}
     shutil.rmtree(rdir, ignore_errors=True)
     os.replace(build_dir, rdir)
     with open(latest + '.tmp', 'w') as f:
