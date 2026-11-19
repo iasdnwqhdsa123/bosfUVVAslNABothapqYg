@@ -339,7 +339,7 @@ def points(days: list[dict], model: str, grids: Grids | None=None, bad: dict | N
                     continue
                 flon, flat, zr = foot_of(p['lon'], p['lat'], max(50.0, agl), e)
                 box = (gkey, m_, bi) if e['from'] == 'grid' else None
-                out.append({'label': 1, 'lon': flon, 'lat': flat, 'zr': zr, 't': c['_t0'], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': c.get('rate'), 'agl': agl, 'met': (p['lon'], p['lat']), 'box': box})
+                out.append({'label': 1, 'lon': flon, 'lat': flat, 'zr': zr, 't': c['_t0'], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': c.get('rate'), 'agl': agl, 'met': (p['lon'], p['lat']), 'z': p.get('z'), 'box': box})
                 if tr and i + 1 < len(cs):
                     t0, t1 = (c['_t1'], cs[i + 1]['_t0'])
                     last = None
@@ -354,7 +354,7 @@ def points(days: list[dict], model: str, grids: Grids | None=None, bad: dict | N
                         if agl_q < LOW_AGL:
                             continue
                         glon, glat, zr_q = foot_of(q[1], q[2], agl_q, e)
-                        out.append({'label': 0, 'lon': glon, 'lat': glat, 'zr': zr_q, 't': q[0], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': None, 'agl': agl_q, 'met': here, 'box': box})
+                        out.append({'label': 0, 'lon': glon, 'lat': glat, 'zr': zr_q, 't': q[0], 'date': d['date'], 'region': f['region'], 'fid': f['id'], 'pilot': f.get('pilot'), 'e': e, 'rate': None, 'agl': agl_q, 'met': here, 'z': q[3], 'box': box})
     return out
 
 def node_script() -> str | None:
@@ -413,6 +413,88 @@ def site_triggers(pts: list[dict], grids: 'Grids | None', work: str, max_tiles: 
     for fn in (fin, fout):
         os.remove(fn)
     return res
+PLACE_TILES = int(os.environ.get('CALIB_PLACE_TILES', '3000'))
+PLACE_BOX = 24
+PLACE_REACH_KM = 2.0
+PLACE_TIMEOUT = 20 * 60
+
+def placed_near(pts: list[dict], grids: 'Grids | None', work: str, cap: int=PLACE_TILES, seed: int=7) -> dict:
+    import satcheck
+    res = {'ran': False, 'points': 0, 'placed': 0, 'boxes': 0, 'failed': 0}
+    script = satcheck.node_script()
+    if not grids or not grids.root or (not script) or (cap <= 0):
+        return res
+    by = {}
+    for p in pts:
+        if p.get('box') and p.get('z') is not None and p.get('met'):
+            by.setdefault(p['box'], []).append(p)
+    keys = sorted(by)
+    random.Random(seed).shuffle(keys)
+    try:
+        names_all = satcheck.env_fields()
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as ex:
+        return {**res, 'error': str(ex)[-200:]}
+    res['ran'] = True
+    for n_box, key in enumerate(keys):
+        if res['placed'] >= cap:
+            break
+        gk, m_, bi = key
+        base, ps = (os.path.join(grids.root, gk, f'{m_}-box{bi}'), by[key])
+        try:
+            m = common.read_json(os.path.join(base, 'latest.json'))
+            zs = {os.path.basename(f)[:-4]: f for f in glob.glob(os.path.join(base, '_hours', '*.npz'))}
+            stamp_t = lambda s: datetime.strptime(s[:10], '%Y%m%d%H').replace(tzinfo=timezone.utc).timestamp()
+            want = sorted((s for s in zs if any((abs(stamp_t(s) - p['t']) <= 5400 for p in ps))))
+            if not want:
+                continue
+            loaded = [np.load(zs[s]) for s in want]
+            names, planes = ([], [])
+            for name in names_all:
+                vs = [satcheck.decode(m, z, name) for z in loaded]
+                if any((v is not None for v in vs)):
+                    names.append(name)
+                    planes.append(vs)
+            ny, nx = (m['grid']['ny'], m['grid']['nx'])
+            d = os.path.join(work, f'near-{n_box}')
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, 'env.bin'), 'wb') as fh:
+                for k in range(len(want)):
+                    for vs in planes:
+                        v = vs[k]
+                        fh.write((v if v is not None else np.full((ny, nx), np.nan, np.float32)).astype(np.float32).tobytes())
+            with open(os.path.join(d, 'env.json'), 'w') as fh:
+                json.dump({'grid': m['grid'], 'stamps': want, 'fields': names, 'tiles': [], 'px': satcheck.PIX_KM}, fh)
+            with open(os.path.join(d, 'points.json'), 'w') as fh:
+                json.dump({'points': [{'i': i, 'lat': p['met'][1], 'lon': p['met'][0], 't': p['t'] * 1000, 'z0': p['z'], 'z1': p['z'], 'g': p['z'] - p['agl']} for i, p in enumerate(ps)], 'max': min(PLACE_BOX, cap - res['placed']), 'reach': PLACE_REACH_KM}, fh)
+            r = subprocess.run(['node', '--max-old-space-size=4000', script, 'near', d, os.path.join(d, 'points.json'), os.path.join(d, 'out.json')], capture_output=True, text=True, timeout=PLACE_TIMEOUT, cwd=common.HERE)
+            if r.returncode or not os.path.exists(os.path.join(d, 'out.json')):
+                res['failed'] += 1
+                continue
+            o = common.read_json(os.path.join(d, 'out.json'))
+            for q in o.get('points') or []:
+                t3 = q.get('t3d')
+                if t3 and t3.get('d') is not None:
+                    ps[q['i']]['t3d'] = {'d': t3['d'], 'best': t3.get('best') or 0.0, 'n': t3.get('n') or 0}
+                    res['points'] += 1
+            res['placed'] += int(o.get('placed') or 0)
+            res['boxes'] += 1
+            for f in ('env.bin', 'points.json', 'out.json'):
+                os.remove(os.path.join(d, f))
+        except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+            res['failed'] += 1
+    return res
+
+def placed_table(F: list[dict], groups: dict) -> list[dict]:
+    from layer1 import auc
+    tab = []
+    for name, sel in groups.items():
+        rs = [r for r in F if r.get('t3d') and sel(r)]
+        y = [r['label'] for r in rs]
+        if len(rs) < 30 or sum(y) < 5 or len(rs) - sum(y) < 5:
+            continue
+        med = lambda lab: float(np.median([r['t3d']['d'] for r in rs if r['label'] == lab]))
+        tab.append({'group': name, 'n': len(rs), 'climbs': int(sum(y)), 'auc_near': auc([-r['t3d']['d'] for r in rs], y), 'auc_best': auc([r['t3d']['best'] for r in rs], y), 'auc_n': auc([r['t3d']['n'] for r in rs], y), 'd_climbs': med(1), 'd_glides': med(0)})
+    return tab
 
 def featurize(pts: list[dict], T: Terrain, site: bool=False) -> list[dict]:
     out = []
@@ -539,6 +621,11 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
     res['site'] = {**st, 'used': bool(site), 'grid_points': n_grid}
     how = f"{st['points']} of {n_grid} points with grids ({st['tiles']} tiles, {st['failed']} that wouldn't load, {st['days_left_out']} days left out for the tile budget)" if st.get('ran') else f"not run ({st.get('error') or 'no node, script or grids'})"
     md += ["The site's trigger: " + how + ('; trained on it.' if site else '; too few: the terrain-only copy instead.'), '']
+    try:
+        pl = placed_near(pts, G, os.path.join(out, 'place-work'))
+    except (RuntimeError, OSError) as ex:
+        pl = {'ran': False, 'error': str(ex)[-200:]}
+    res['placed'] = pl
     F = featurize(pts, T, site=bool(site))
     score_key, feats = ('site', FEATURES_SITE) if site else ('trig', FEATURES)
     res['points'] = res['rows'] = len(F)
@@ -565,6 +652,14 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
             ys = [r['label'] for r in rs]
             if len(rs) >= 30 and 5 <= sum(ys) <= len(rs) - 5:
                 md += [f'On {name} alone: ' + ', '.join((f'{k} {_f(_auc([r[k] if r.get(k) is not None else 0.0 for r in rs], ys), 3)}' for k in SITE_PARTS)) + '.', '']
+    md += ['', "## The 3D map's placed thermals against where the gliders met the air", '']
+    if not pl.get('ran'):
+        md += [f"Not run ({pl.get('error') or 'no saved grids, no node or no script'}).", '']
+    else:
+        pt = placed_table(F, groups_of(F))
+        res['placed']['scores'] = pt
+        md += [f"The thermals as the 3D map places them close up (zoom-12 terrain, drawn by chance at the forecast's spacing, by their trigger in hills; the day's forecast; no ground cover, no learned hotspots), {pl['placed']} tile-hours of {pl['boxes']} boxes ({pl['failed']} failed), {pl['points']} points. Nothing traced: the glider's own position against the placed cores at its height (their lean taken). AUC 0.5: the climbs no nearer a placed thermal than the ground glided over.", '', f'| Group | points | climbs | nearer a placed core: AUC | the strongest within {PLACE_REACH_KM:g} km: AUC | how many within it: AUC | median km, climbs / glides |', '|---|---|---|---|---|---|---|']
+        md += [f"| {r['group']} | {r['n']} | {r['climbs']} | {_f(r['auc_near'], 3)} | {_f(r['auc_best'], 3)} | {_f(r['auc_n'], 3)} | {r['d_climbs']:.2f} / {r['d_glides']:.2f} |" for r in pt] + ['']
     sp = spacing_rows(pts)
     if sp:
         q = lambda xs, p: float(np.percentile(xs, p))
