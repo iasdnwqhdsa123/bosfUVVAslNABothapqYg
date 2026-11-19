@@ -30,6 +30,10 @@ def dewpoint_from_rh(t, rh):
 
 def theta(t, p):
     return (t + K0) * (1000.0 / p) ** KAPPA
+LN1000 = math.log(1000.0)
+
+def exner(lnp):
+    return np.exp(KAPPA * (lnp - LN1000))
 _CELLS: dict[int, np.ndarray] = {}
 
 def levels_below(z, zq):
@@ -109,7 +113,7 @@ class Profile:
         w = np.clip((zq - z0) / np.maximum(z1 - z0, 0.001), 0, 1)
         return ((lo, hi, zq.shape), w)
 
-    def at(self, zq, *names):
+    def at(self, zq, *names, raw=False):
         cols = {}
         out = []
         for n in names:
@@ -120,7 +124,7 @@ class Profile:
             a = getattr(self, n)
             a0, a1 = (take_level(a, lo, shape), take_level(a, hi, shape))
             val = a0 + w * (a1 - a0)
-            out.append(np.exp(val) if n == 'lnp' else val)
+            out.append(np.exp(val) if n == 'lnp' and (not raw) else val)
         return out if len(out) > 1 else out[0]
 
 def parcel_ml_depth(prof: Profile, excess):
@@ -415,6 +419,79 @@ ENTRAIN_MIN, ENTRAIN_MAX = (0.0001, 0.001)
 def cumulus_mix(twidth, step=CU_STEP):
     r = np.where(np.isfinite(twidth), np.asarray(twidth, np.float32), 1000.0)
     return (np.clip(0.2 / np.maximum(r, 1.0), ENTRAIN_MIN, ENTRAIN_MAX) * step).astype(np.float32)
+CORE_STEPS = 52
+CORE_END = 1.3
+CORE_AT = (0.8, 1.0)
+CORE_REF = (0.2, 0.6)
+CORE_EXCESS = 1.0
+CORE_START = 0.1
+CORE_EPS = 0.4
+CORE_DRAG = 2.0
+CORE_SMOOTH = (0.05, 0.2)
+CORE_MAX = 1.5
+
+def core_inputs(depth, twidth, active, th_ml=None):
+    act = np.asarray(active, bool)
+    D = np.where(act, np.maximum(depth, 100.0), 100.0).astype(np.float32)
+    dx = CORE_END / CORE_STEPS
+    dz = D * np.float32(dx)
+    r = np.where(np.isfinite(twidth), np.asarray(twidth, np.float32), 1000.0)
+    half = np.clip(0.5 * r / D, CORE_SMOOTH[0], CORE_SMOOTH[1])
+    if th_ml is None:
+        return (act, dz, half, None, 0)
+    return (act, dz, half, (np.asarray(th_ml, np.float32) + CORE_EXCESS).astype(np.float32), int(round(CORE_START / dx)))
+
+def core_shape(prof: Profile, depth, twidth, active, th_ml=None, with_top=False):
+    shape = np.shape(depth)
+    act, dz, half, th, k0 = core_inputs(depth, twidth, active, th_ml)
+    dx = CORE_END / CORE_STEPS
+    z0 = prof.z[0].astype(np.float32)
+    lp = prof.lnp[0]
+    p = np.exp(lp)
+    rp = mixing_ratio(prof.td[0], p)
+    if th is None:
+        th = (prof.t[0] + K0) / exner(lp) + CORE_EXCESS
+    else:
+        lp = prof.at(z0 + dz * k0, 'lnp', raw=True)
+    tp = (th * exner(lp) - K0).astype(np.float32)
+    sat = np.zeros(shape, bool)
+    w2 = np.zeros(shape, np.float32)
+    dead = ~act
+    ref = np.zeros(shape, np.float32)
+    stop = np.full(shape, np.nan, np.float32)
+    acc = [np.zeros(shape, np.float32) for _ in CORE_AT]
+    cnt = [np.zeros(shape, np.float32) for _ in CORE_AT]
+    for k in range(k0 + 1, CORE_STEPS + 1):
+        x = k * dx
+        z = z0 + dz * k
+        eps = CORE_EPS / (dz * k)
+        mix = np.minimum(eps * dz, 0.9)
+        te, lp, tde = prof.at(z, 't', 'lnp', 'td', raw=True)
+        p, ex = (np.exp(lp), exner(lp))
+        re = mixing_ratio(tde, p)
+        th = th + mix * ((te + K0) / ex - th)
+        rp = np.where(sat, rp, rp + mix * (re - rp))
+        tdry = th * ex - K0
+        tmoist = cloud_mix(tp - moist_lapse(tp, p) * dz, te, tde, p, mix)
+        sat = sat | (rp >= mixing_ratio(tdry, p))
+        tp = np.where(sat, tmoist, tdry)
+        rv = np.where(sat, mixing_ratio(tp, p), rp)
+        tv_e = (te + K0) * (1 + 0.61 * re)
+        b = G * ((tp + K0) * (1 + 0.61 * rv) - tv_e) / tv_e
+        w2 = w2 + dz * (2 * b - 2 * CORE_DRAG * eps * w2)
+        stop = np.where(np.isnan(stop) & ~dead & (w2 <= 0), x, stop)
+        dead = dead | (w2 <= 0)
+        w2 = np.where(dead, 0, w2).astype(np.float32)
+        w = np.sqrt(w2)
+        if CORE_REF[0] <= x <= CORE_REF[1]:
+            ref = np.maximum(ref, w)
+        for i, at in enumerate(CORE_AT):
+            near = np.abs(x - at) <= half + 1e-06
+            acc[i] = acc[i] + np.where(near, w, 0)
+            cnt[i] = cnt[i] + near
+    ok = act & (ref > 0.05)
+    out = [np.where(ok, np.clip(a / np.maximum(c, 1) / np.maximum(ref, 1e-06), 0, CORE_MAX), np.nan).astype(np.float32) for a, c in zip(acc, cnt)]
+    return (out, np.where(ok, stop, np.nan)) if with_top else out
 EA_P = (850.0, 450.0)
 EA_FLOOR = (300.0, 1500.0)
 EA_RH_MIN = 60.0

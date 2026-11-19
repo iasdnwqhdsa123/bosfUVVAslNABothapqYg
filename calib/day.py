@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import common
 import track
-FIELDS = ['wstar', 'depth', 'cubase', 'cudepth', 'twidth', 'blapse', 'zi', 'densalt', 'rain', 'overdev', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'u_blavg', 'v_blavg', 'ridge', 'u_g300', 'v_g300', 'nlow', 'elevation', 'sink', 't2']
+FIELDS = ['wstar', 'depth', 'cubase', 'cudepth', 'twidth', 'blapse', 'zi', 'densalt', 'rain', 'overdev', 'sun', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'u_blavg', 'v_blavg', 'ridge', 'u_g300', 'v_g300', 'nlow', 'elevation', 'sink', 't2', 'core8', 'core10']
 PAD_LON, PAD_LAT = (1.5, 1.2)
 BUILD_TIMEOUT, EVAL_TIMEOUT = (25 * 60, 15 * 60)
 GRID_FIELDS = os.environ.get('CALIB_GRID_FIELDS', 'all')

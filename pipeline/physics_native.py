@@ -10,7 +10,7 @@ import physics as _py
 from physics import *
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, 'native')
-FLAGS = ['-O3', '-std=c++17', '-shared', '-fPIC', '-ffp-contract=off', '-fno-math-errno']
+FLAGS = ['-O3', '-std=c++17', '-shared', '-fPIC', '-ffp-contract=off', '-fno-math-errno', '-fno-trapping-math']
 MAX_LEVELS = 62
 _F = ctypes.POINTER(ctypes.c_float)
 _I32 = ctypes.POINTER(ctypes.c_int32)
@@ -122,19 +122,19 @@ class Profile(_py.Profile):
         n = self.zs.size
         return _CProfile(n, self.z.shape[0], self.zw.shape[0], ptr(self.z), ptr(self.lnp), ptr(self.t), ptr(self.td), ptr(self.zw), ptr(self.u), ptr(self.v), ptr(self.zs))
 
-    def at(self, zq, *names):
+    def at(self, zq, *names, raw=False):
         if not getattr(self, 'native', False):
-            return super().at(zq, *names)
+            return super().at(zq, *names, raw=raw)
         shape = self.zs.shape
         q = grid_f32(zq, shape)
         cols = [getattr(self, n, None) for n in names]
         if q is None or any((f32(a) is None for a in cols)):
-            return super().at(zq, *names)
+            return super().at(zq, *names, raw=raw)
         outs = [np.empty(shape, np.float32) for _ in names]
         wind = np.array([n in ('u', 'v') for n in names], np.int32)
         cp = self.c()
         lib().cx_profile_at(ctypes.byref(cp), ptr(q), len(names), (_F * len(names))(*[ptr(a) for a in cols]), wind.ctypes.data_as(_I32), (_F * len(names))(*[ptr(o) for o in outs]))
-        outs = [np.exp(o) if n == 'lnp' else o for n, o in zip(names, outs)]
+        outs = [np.exp(o) if n == 'lnp' and (not raw) else o for n, o in zip(names, outs)]
         return outs if len(outs) > 1 else outs[0]
 
 def column_at(z, a, zq):
@@ -148,18 +148,20 @@ def column_at(z, a, zq):
 def is_native(prof):
     return isinstance(prof, Profile) and getattr(prof, 'native', False)
 _exp_mode = []
+_exp_equal = {}
+
+def _exp_matches(mode):
+    if mode not in _exp_equal:
+        f = cfunc('cx_np_exp', [ctypes.c_int64, _F, ctypes.c_int32, _F])
+        x = np.concatenate([np.linspace(-40, 12, 200001, dtype=np.float32), np.random.default_rng(0).uniform(-40, 12, 50000).astype(np.float32)])
+        out = np.empty_like(x)
+        f(x.size, ptr(x), mode, ptr(out))
+        _exp_equal[mode] = bool(np.array_equal(out, np.exp(x)))
+    return _exp_equal[mode]
 
 def _np_exp_mode():
     if not _exp_mode:
-        f = cfunc('cx_np_exp', [ctypes.c_int64, _F, ctypes.c_int32, _F])
-        x = np.concatenate([np.linspace(-40, 12, 200001, dtype=np.float32), np.random.default_rng(0).uniform(-40, 12, 50000).astype(np.float32)])
-        ref, out, mode = (np.exp(x), np.empty_like(x), None)
-        for m in (1, 0):
-            f(x.size, ptr(x), m, ptr(out))
-            if np.array_equal(out, ref):
-                mode = m
-                break
-        _exp_mode.append(mode)
+        _exp_mode.append(next((m for m in (1, 0) if _exp_matches(m)), None))
     return _exp_mode[0]
 
 def _py_number(x):
@@ -179,6 +181,36 @@ def cumulus_top(prof, zbase, tbase, active, step=_py.CU_STEP, max_above=10000.0,
     cp = prof.c()
     f(ctypes.byref(cp), ptr(zbase), ptr(tbase), active.ctypes.data, float(step), max(steps, 0), mode, None if mix is None else mix.ctypes.data, ptr(out))
     return out
+_CORE_MAX_AT = 8
+
+def core_shape(prof, depth, twidth, active, th_ml=None, with_top=False):
+
+    def fallback():
+        return _py.core_shape(prof, depth, twidth, active, th_ml, with_top)
+    vp, i32, f64 = (ctypes.c_void_p, ctypes.c_int32, ctypes.c_double)
+    f = cfunc('cx_core_shape', [ctypes.POINTER(_CProfile), vp, _F, _F, _F, i32, i32, f64, f64, f64, i32, ctypes.POINTER(f64), _F, i32, ctypes.POINTER(_F), _F])
+    at = _py.CORE_AT
+    consts = (_py.CORE_END, _py.CORE_START, _py.CORE_EXCESS, _py.CORE_EPS, _py.CORE_DRAG, _py.CORE_MAX, _py.KAPPA, _py.LN1000, *_py.CORE_REF, *at)
+    if f is None or not is_native(prof) or prof.z.shape[0] < 2 or (np.shape(depth) != prof.zs.shape) or (type(_py.CORE_STEPS) is not int) or (not 0 < _py.CORE_STEPS < 2 ** 31) or (len(_py.CORE_REF) != 2) or (not all((_py_number(c) for c in consts))) or (not 1 <= len(at) <= _CORE_MAX_AT):
+        return fallback()
+    shape = prof.zs.shape
+    act, dz, half, th, k0 = _py.core_inputs(depth, twidth, active, th_ml)
+    try:
+        act = np.ascontiguousarray(np.broadcast_to(act, shape))
+    except ValueError:
+        return fallback()
+    th_ = None if th is None else grid_f32(np.asarray(th), shape)
+    if not all_f32([dz, half], shape) or (th is not None and th_ is None) or (not 0 <= k0 < 2 ** 31):
+        return fallback()
+    mode = _np_exp_mode()
+    if mode is None or (mode == 1 and (not _exp_matches(2))):
+        return fallback()
+    outs = [np.empty(shape, np.float32) for _ in at]
+    top = np.empty(shape, np.float32) if with_top else None
+    kc = np.array([_py.KAPPA, _py.LN1000, _py.CORE_EXCESS, _py.CORE_EPS, 2 * _py.CORE_DRAG, _py.CORE_MAX], np.float32)
+    cp = prof.c()
+    f(ctypes.byref(cp), act.ctypes.data, ptr(dz), ptr(half), ptr(th_), k0, _py.CORE_STEPS, _py.CORE_END / _py.CORE_STEPS, float(_py.CORE_REF[0]), float(_py.CORE_REF[1]), len(at), (f64 * len(at))(*[float(a) for a in at]), ptr(kc), mode, (_F * len(at))(*[ptr(o) for o in outs]), ptr(top))
+    return (outs, top) if with_top else outs
 _LAYER_COLS = {'t': 0, 'td': 1, 'u': 2, 'v': 3}
 
 def layer_mean(prof, zb, zt, names, n=8):
