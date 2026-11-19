@@ -21,12 +21,15 @@ EU_FLAT_REGIONS = {'Germany-Benelux', 'Poland-Czech'}
 FLAT_REGIONS |= EU_FLAT_REGIONS
 ALPS_BOXES = ((5.0, 45.3, 16.8, 48.1), (5.0, 43.7, 7.8, 45.3), (9.5, 44.9, 13.5, 45.3))
 EU_BOX = (-25.0, 34.0, 44.75, 71.5)
-MACRO = {'US': {'models': tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr,gfs').split(',') if m)) or ('hrrr',), 'tz': 'America/Chicago'}, 'EU': {'models': tuple((m for m in os.environ.get('CALIB_EU_MODELS', 'ecmwf,icon,icond2,arome').split(',') if m)) or ('ecmwf',), 'tz': 'Europe/Berlin'}}
-REGION_MACRO = {**{r: 'US' for r in set(REGION.values())}, **{r: 'EU' for r in set(EU_REGION.values())}}
+MACRO = {'US': {'models': tuple((m for m in os.environ.get('CALIB_MODELS', 'hrrr,gfs').split(',') if m)) or ('hrrr',), 'tz': 'America/Chicago'}, 'EU': {'models': tuple((m for m in os.environ.get('CALIB_EU_MODELS', 'ecmwf,icon,icond2,arome').split(',') if m)) or ('ecmwf',), 'tz': 'Europe/Berlin'}, 'SH': {'models': tuple((m for m in os.environ.get('CALIB_SH_MODELS', 'gfs,icon').split(',') if m)) or ('gfs',), 'tz': 'Australia/Sydney'}}
+SH_REGIONS = (('Namibia-Botswana', (11.0, -28.6, 20.0, -16.0), 'Africa/Windhoek'), ('Namibia-Botswana', (20.0, -24.8, 26.0, -16.0), 'Africa/Windhoek'), ('Namibia-Botswana', (26.0, -22.2, 29.5, -16.0), 'Africa/Windhoek'), ('South-Africa', (14.0, -35.0, 36.0, -22.0), 'Africa/Johannesburg'), ('W-Australia', (112.0, -36.25, 124.0, -23.0), 'Australia/Perth'), ('SE-Australia', (130.5, -44.0, 155.0, -33.5), 'Australia/Melbourne'), ('E-Australia', (130.5, -33.5, 155.0, -18.5), 'Australia/Sydney'), ('New-Zealand', (165.0, -49.0, 179.75, -33.75), 'Pacific/Auckland'), ('Argentina-Chile', (-76.0, -54.75, -53.0, -16.0), 'America/Argentina/Buenos_Aires'), ('Brazil', (-53.0, -34.0, -34.0, -2.0), 'America/Sao_Paulo'))
+SH_TZ = {r: tz for r, _, tz in SH_REGIONS}
+US_BOX = (-125.0, 24.0, -66.5, 50.0)
+REGION_MACRO = {**{r: 'US' for r in set(REGION.values())}, **{r: 'EU' for r in set(EU_REGION.values())}, **{r: 'SH' for r in SH_TZ}}
 MODEL_INDEX = {'hrrr': 0, 'gfs': 1, 'ecmwf': 2, 'icon': 3, 'icond2': 4, 'arome': 5}
 MODEL_MACRO = {'hrrr': 'US', 'gfs': 'US', 'ecmwf': 'EU', 'icon': 'EU', 'icond2': 'EU', 'arome': 'EU'}
 MODEL_LABEL = {'hrrr': 'HRRR', 'gfs': 'GFS', 'ecmwf': 'ECMWF', 'icon': 'ICON', 'icond2': 'ICON-D2', 'arome': 'AROME'}
-MACRO_LABEL = {'US': 'United States', 'EU': 'Europe'}
+MACRO_LABEL = {'US': 'United States', 'EU': 'Europe', 'SH': 'Southern hemisphere'}
 EU_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_SHARE', '0.4') or 0.4)))
 EU_FIRST = max(0, int(os.environ.get('CALIB_EU_FIRST', '120') or 0))
 EU_ICON_SHARE = min(1.0, max(0.0, float(os.environ.get('CALIB_EU_ICON_SHARE', '1') or 0)))
@@ -93,7 +96,7 @@ def models_for(regions, day: str | None=None, lead: bool=True) -> tuple:
     out = []
     for a in sorted({macro_of(r) for r in regions} or {'US'}):
         for m in MACRO[a]['models']:
-            if m in out or (m in SAMPLED and (not (day and icon_sampled(day)))) or (m in FIRST_DAY and (not (day and day >= FIRST_DAY[m]))):
+            if m in out or (m in SAMPLED and a == 'EU' and (not (day and icon_sampled(day)))) or (m in FIRST_DAY and (not (day and day >= FIRST_DAY[m]))):
                 continue
             out.append(m)
     if day and lead:
@@ -152,6 +155,23 @@ def eu_region(country: str | None, lon: float | None=None, lat: float | None=Non
     if in_alps(lon, lat):
         return 'Alps'
     return EU_REGION.get(country or '')
+
+def sh_region(lon: float, lat: float) -> str | None:
+    return next((r for r, (w, s, e, n), _ in SH_REGIONS if w <= lon <= e and s <= lat <= n), None)
+
+def place_region(lon: float, lat: float) -> tuple[str | None, str | None, str | None]:
+    r = sh_region(lon, lat)
+    if r:
+        return (r, SH_TZ[r], None)
+    c = nearest_country(lon, lat)
+    if c:
+        r = eu_region(c, lon, lat)
+        return (r, EU_TZ.get(c) or MACRO['EU']['tz'], c) if r else (None, None, None)
+    w, s, e, n = US_BOX
+    if w <= lon <= e and s <= lat <= n:
+        st_ = nearest_state(lon, lat)
+        return (REGION[st_], TZ.get(st_) or MACRO['US']['tz'], st_)
+    return (None, None, None)
 
 def load_aircraft() -> dict:
     with open(os.path.join(HERE, 'aircraft.json'), encoding='utf-8') as f:
@@ -214,15 +234,19 @@ def _version_of(paths: list[str], skip: bool=True) -> str:
 _PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'runfields_native', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
 PHYSICS_FILES = _PIPELINE_FILES + [os.path.join(HERE, 'build_day.py')]
 PHYSICS_FILES_EU = _PIPELINE_FILES + [os.path.join(PIPELINE, 'om.py'), os.path.join(PIPELINE, 'replay.py'), os.path.join(HERE, 'build_eu.py')]
+PHYSICS_FILES_SH = PHYSICS_FILES_EU + [os.path.join(HERE, 'build_sh.py')]
 PHYSICS_VERSION = _version_of(PHYSICS_FILES)
 PHYSICS_VERSION_EU = _version_of(PHYSICS_FILES_EU)
-_WHOLE = {'US': _version_of(PHYSICS_FILES, skip=False), 'EU': _version_of(PHYSICS_FILES_EU, skip=False)}
+PHYSICS_VERSION_SH = _version_of(PHYSICS_FILES_SH)
+_WHOLE = {'US': _version_of(PHYSICS_FILES, skip=False), 'EU': _version_of(PHYSICS_FILES_EU, skip=False), 'SH': _version_of(PHYSICS_FILES_SH, skip=False)}
 PHYSICS_FILES_LEAD = PHYSICS_FILES_EU + [os.path.join(HERE, 'build_lead.py')]
 LEAD_VERSION = _version_of(PHYSICS_FILES_LEAD)
 _WHOLE_LEAD = _version_of(PHYSICS_FILES_LEAD, skip=False)
 
-def model_physics(model: str) -> str:
-    return globals()['LEAD_VERSION'] if is_lead(model) else physics_version(model_macro(model))
+def model_physics(model: str, region: str | None=None) -> str:
+    if is_lead(model):
+        return globals()['LEAD_VERSION']
+    return physics_version('SH' if macro_of(region) == 'SH' else model_macro(model))
 
 def added_models(macro: str, day: str | None) -> list[str]:
     return [m for m in ADDED if m in MACRO[macro]['models'] and day and (day >= FIRST_DAY.get(m, '')) and (m not in SAMPLED or icon_sampled(day))]
@@ -265,13 +289,13 @@ def physics_matches(stamp: str | None, macro: str='US') -> bool:
     mine = fp.get(physics_version(macro))
     return mine is not None and fp.get(stamp) == mine
 
-def model_physics_matches(stamp: str | None, model: str) -> bool:
+def model_physics_matches(stamp: str | None, model: str, region: str | None=None) -> bool:
     if is_lead(model):
         return stamp is not None and stamp in (globals()['LEAD_VERSION'], _WHOLE_LEAD)
-    return physics_matches(stamp, model_macro(model))
+    return physics_matches(stamp, 'SH' if macro_of(region) == 'SH' else model_macro(model))
 
 def physics_version(macro: str='US') -> str:
-    return globals()['PHYSICS_VERSION_EU'] if macro == 'EU' else globals()['PHYSICS_VERSION']
+    return globals()[{'EU': 'PHYSICS_VERSION_EU', 'SH': 'PHYSICS_VERSION_SH'}.get(macro, 'PHYSICS_VERSION')]
 SCORE_FILES = [os.path.join(HERE, f) for f in ('evaluate.js', 'lines.js', 'site.js', 'gbm.js', 'corrections.mjs')] + glob.glob(os.path.join(ROOT, 'public', 'js', 'shared', '*')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'ridgex.js')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'png*.js'))
 SCORE_VERSION = _version_of(SCORE_FILES)
 

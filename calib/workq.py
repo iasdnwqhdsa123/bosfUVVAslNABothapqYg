@@ -104,15 +104,20 @@ def free_days(state: dict, n: int, pending=(), cv: str | None=None) -> list[tupl
             out.append((d, 'seed'))
     return out
 
+def collector_keys(state: dict) -> set:
+    c = state.get('collector') or {}
+    return {k for k, v in (c.get('items') or {}).items() if (v or {}).get('n')} | set(c.get('done') or {})
+
 def _new_days(state: dict, today: date, seed: set, macro: str):
     start = START if macro == 'US' else EU_START
     last = today - timedelta(days=RECENT_LAG)
     recent = [(last - timedelta(days=k)).isoformat() for k in range(RECENT_DAYS) if last - timedelta(days=k) >= start]
     span = (last - start).days
     rest = spread([(start + timedelta(days=i)).isoformat() for i in range(span + 1)])
+    theirs = collector_keys(state)
     for s in dict.fromkeys(recent + rest):
         k = common.day_key(s, macro)
-        if flying(date.fromisoformat(s)) and k not in seed and _open(state, k):
+        if flying(date.fromisoformat(s)) and k not in seed and _open(state, k) and (k not in theirs):
             yield k
 
 def _new_keys(state: dict, today: date, seed: set, eu_share: float | None=None):

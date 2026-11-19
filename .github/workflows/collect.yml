@@ -51,6 +51,8 @@ env:
   CALIB_EU_FIRST: "120"
   CALIB_EU_ICON_SHARE: "1"
   CONTRAILS: "0"
+  CALIB_COLLECTOR_DAYS: "8"
+  CALIB_COLLECTOR_3D: "64"
 jobs:
   gate:
     runs-on: ubuntu-24.04
@@ -215,6 +217,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 calib/room.py --base "$SHARDS" --most "$SHARDS_MOST" >> "$GITHUB_OUTPUT"
+      - name: Collector climbs
+        continue-on-error: true
+        env:
+          THERMALS_PULL_URL: ${{ secrets.THERMALS_PULL_URL }}
+          THERMALS_PULL_SECRET: ${{ secrets.THERMALS_PULL_SECRET }}
+        run: |
+          mkdir -p /tmp/plan/logs
+          python3 calib/collector.py pull --data /tmp/data --out /tmp/plan 2>> "/tmp/plan/logs/stderr-$GITHUB_RUN_ID-collector.log"
       - name: Plan
         id: plan
         env:
@@ -223,6 +233,7 @@ jobs:
           NEW: ${{ steps.opts.outputs.new }}
           CORR: ${{ steps.corr.outputs.file }}
           CALIB_FINGERPRINTS: /tmp/data/fingerprints.json:/tmp/plan/fingerprints.json
+          CALIB_TERRAIN_CACHE: /tmp/terrain
         run: |
           mkdir -p /tmp/plan/logs
           extra=""

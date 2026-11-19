@@ -6,6 +6,7 @@ import os
 import shutil
 import time
 from datetime import datetime, timezone
+import collector
 import common
 import day as dayrun
 import run as runmod
@@ -110,6 +111,19 @@ def plan(a) -> int:
     common.log(f"{len(wg)} WeGlide days to plan ({sum((s == 'revisit' for _, s in wg))} chosen from again, {sum((common.macro_of_key(d) == 'EU' for d, _ in wg))} Europe's); WeGlide: {used} requests today, {budget} this run")
     for d, src in wg:
         _plan_day(P, d, src)
+    try:
+        cw = collector.plan_days(data, out, state, today, corr_v, pend | set(P['costs']), n=min(collector.MAX_DAYS, max(0, a.days - len(P['costs']))))
+    except collector.Overlap:
+        raise
+    except Exception as e:
+        common.note(f'collector: not planned: {e!r}')
+        common.log(f'collector: not planned ({type(e).__name__}: details in the encrypted log)')
+        cw = []
+    for wid, src, cost in cw:
+        P['costs'][wid], P['srcs'][wid] = (cost, src)
+        P['seen'].add(wid)
+    if cw:
+        common.log(f"collector: {len(cw)} days of its climbs to plan ({sum((s == 'collector-rescore' for _, s, _ in cw))} scored again)")
     free = [x for x in doable(workq.free_days(state, a.days, pend, corr_v), pend, new_ok) if x[0] not in P['seen']][:max(0, a.days - len(P['costs']))]
     common.log(f"{len(free)} days without a request to plan ({sum((s == 'seed' for _, s in free))} from the seed, {sum((s == 'redo' for _, s in free))} built again, {sum((s == 'rescore' for _, s in free))} scored again, {sum((s == 'lead' for _, s in free))} for their earlier runs, {sum((d in pend for d, _ in free))} waiting)")
     for d, src in free:
@@ -307,7 +321,18 @@ def build(a) -> int:
         work = os.path.join(a.work, f'd{i}')
         try:
             short = inp.get('short') or []
-            if j['src'] == 'lead':
+            if j['src'] in ('collector', 'collector-rescore'):
+
+                def fetch(m, dest):
+                    if m not in fetched:
+                        fetched[m] = _fetch_grids(m, dest)
+                    return fetched[m]
+                res = collector.build_one(j, inp, work, a.workers, grids_out, grids_in, fetch, corr)
+                common.write_json(f'{a.out}/days/{d}.json.gz', res)
+                status['built'].append(d)
+                okb = sum((b.get('ok', False) for b in runmod.own(res)))
+                common.log(f"day {i + 1}/{len(mine)} ({('collector, scored again' if res.get('rescored_at') else 'collector')}): {len(res.get('collector') or [])} climbs, {okb}/{len(res['boxes'])} boxes")
+            elif j['src'] == 'lead':
                 res = dayrun.lead_day(inp['rec'], work, a.workers, grids_out, corr)
                 common.write_json(f'{a.out}/days/{d}.json.gz', res)
                 status['built'].append(d)
@@ -399,6 +424,9 @@ def merge(a) -> int:
         prev = state['done'].get(d, {})
         inp = common.read_json(f'{a.plan}/in/{d}.json.gz')
         stored = False
+        if src.startswith('collector'):
+            collector.merge_one(data, d, how, fn, state, run, months)
+            continue
         if src == 'rescore':
             _merge_rescore(data, d, how, fn, state, run, months)
             continue
@@ -461,6 +489,7 @@ def merge(a) -> int:
                     os.remove(pf)
             else:
                 common.write_json(pf, {'day': d, 'flights': inp['flights'], 'short': inp.get('short') or [], 'ac': inp.get('ac')})
+    collector.store_pulled(a.plan, data)
     for p in glob.glob(f'{a.plan}/lists/*.json.gz'):
         os.makedirs(f'{data}/lists', exist_ok=True)
         shutil.copyfile(p, f'{data}/lists/{os.path.basename(p)}')

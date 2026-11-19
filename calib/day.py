@@ -110,6 +110,8 @@ def local_hours(day: str, tz: str, a: int | None=None, b: int | None=None) -> li
 def probe_times(f: dict) -> list[dict]:
     kind = f.get('kind')
     lon, lat = f['tp']
+    if kind == 'collector':
+        return []
     if kind == 'short':
         a, b = track.times_of(f)
         if a is None:
@@ -131,7 +133,7 @@ def clean(f: dict) -> dict:
     if 'legs' in f:
         g['legs'] = [{k: v for k, v in L.items() if k not in ('models', 'models_c')} for L in f.get('legs') or []]
     if 'climbs' in f:
-        g['climbs'] = [{k: v for k, v in c.items() if k not in ('models', 'models_c')} for c in f.get('climbs') or []]
+        g['climbs'] = [{k: v for k, v in c.items() if k not in ('models', 'models_c', 'near')} for c in f.get('climbs') or []]
     return g
 IEM = 'https://mesonet.agron.iastate.edu'
 OBS_GAP, OBS_MAX = (2.0, 40)
@@ -299,6 +301,9 @@ def categorize(L: dict) -> str:
         return 'wave'
     return 'thermal'
 
+def items_of(rec: dict) -> list[dict]:
+    return (rec.get('flights') or []) + (rec.get('short') or []) + (rec.get('obs') or []) + (rec.get('collector') or [])
+
 def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corrections: str | None=None) -> dict:
     import copy
     day = rec['date']
@@ -313,7 +318,7 @@ def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corre
     own = [m for m in res.get('models') or [res.get('model') or 'hrrr'] if not common.is_lead(m)]
     added = [m for m in common.added_models(macro, day) if m not in own]
     res['models'] = own + leads
-    items = (res.get('flights') or []) + (res.get('short') or []) + (res.get('obs') or [])
+    items = items_of(res)
     for m in {m for f in items for k in f if k.startswith('model_') for m in [k.split('_', 2)[-1] if k.startswith('model_c_') else k[6:]] if common.is_lead(m) and m not in keep} | {m for f in items for x in (f.get('legs') or []) + (f.get('climbs') or []) for m in x.get('models') or {} if common.is_lead(m) and m not in keep}:
         _drop_model(res, m, items)
     os.makedirs(work, exist_ok=True)
@@ -341,12 +346,14 @@ def lead_day(rec: dict, work: str, workers: int=2, grids: str | None=None, corre
     res['lead_new'] = new
     return res
 
-def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None, grids: str | None=None, corrections: str | None=None) -> dict:
+def run_day(day: str, flights: list[dict], work: str, models=('hrrr',), workers: int=2, short=None, obs=None, grids: str | None=None, corrections: str | None=None, collector=None) -> dict:
     models = tuple(models)
-    macro = common.macro_of_items(flights + list(short or []))
+    macro = common.macro_of_items(flights + list(short or []) + list(collector or []))
     res = {'version': common.DAY_VERSION, 'date': day, 'macro': macro, 'key': common.day_key(day, macro), 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short or [], 'obs': obs or [], 'physics_v': common.physics_version(macro), 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': False}
+    if collector:
+        res['collector'] = collector
     os.makedirs(work, exist_ok=True)
-    items = flights + res['short'] + res['obs']
+    items = items_of(res)
     built = {}
     for model in models:
         if _run_model(res, day, items, work, model, workers, grids, corrections) and common.is_lead(model):
@@ -376,8 +383,15 @@ def local_hour_of(stamp: str, tz: str) -> int:
 
 def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours: str=GRID_HOURS) -> dict:
     os.makedirs(os.path.join(dest, '_hours'), exist_ok=True)
+    extra = set()
+    if meta.get('collector'):
+        try:
+            import satcheck
+            extra = set(satcheck.env_fields())
+        except Exception:
+            fields = 'all'
     lo, hi = (int(x) for x in hours.split('-')) if hours != 'all' else (0, 23)
-    keep_names = None if fields == 'all' else sorted(set(FIELDS) | set(SAVE_ALSO))
+    keep_names = None if fields == 'all' else sorted(set(FIELDS) | set(SAVE_ALSO) | extra)
     names = set()
     for fn in sorted(glob.glob(f'{base}/_hours/*.npz')):
         stamp = os.path.basename(fn)[:-4]
@@ -393,7 +407,7 @@ def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours:
             names.update(arrays)
             np.savez_compressed(os.path.join(dest, '_hours', f'{stamp}.npz'), **arrays)
     shutil.copyfile(f'{base}/latest.json', os.path.join(dest, 'latest.json'))
-    out = {**meta, 'physics_v': common.model_physics(meta.get('model')), 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
+    out = {**meta, 'physics_v': common.model_physics(meta.get('model'), meta.get('region')), 'built_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'fields': sorted(names), 'hours': hours}
     common.write_json(os.path.join(dest, 'meta.json'), out, indent=1)
     return out
 
@@ -402,7 +416,7 @@ def grids_usable(gdir: str, bbox: list, model: str) -> str | None:
     if not os.path.exists(mp) or not os.path.exists(os.path.join(gdir, 'latest.json')) or (not glob.glob(os.path.join(gdir, '_hours', '*.npz'))):
         return 'missing'
     m = common.read_json(mp)
-    if not common.model_physics_matches(m.get('physics_v'), model):
+    if not common.model_physics_matches(m.get('physics_v'), model, m.get('region')):
         return 'physics'
     if m.get('model') != model or [round(float(v), 2) for v in m.get('bbox') or []] != [round(float(v), 2) for v in bbox]:
         return 'box'
@@ -418,6 +432,10 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
         common.note(f'dump failed: {e!r}')
         info['error'] = 'dump'
         return False
+    near = None
+    if any((f.get('kind') == 'collector' for f in B['flights'])):
+        import collector
+        near = collector.place3d(base, B, out, logf, info)
     for p in os.listdir(base):
         if not p.startswith('fields.'):
             q = os.path.join(base, p)
@@ -440,6 +458,9 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
         return False
     ev = common.read_json(fout)
     _merge_eval(ev['flights'], B, inputs, model, bi, '')
+    if near:
+        import collector
+        collector.merge3d(B, model, near)
     if ev.get('flights_c'):
         _merge_eval(ev['flights_c'], B, inputs, model, bi, '_c')
         info['corrected'] = True
@@ -456,15 +477,21 @@ def _merge_eval(results: list, B: dict, inputs: list, model: str, bi: int, suffi
             c.setdefault('models' + suffix, {})[model] = e.get('own')
         f.setdefault('probe_m' + ('c' if suffix else ''), {})[model] = {str(p['t']): None if e is None else {k: e.get(k) for k in track.PROBE_KEYS} for p, e in zip(inputs[r['ref']]['probes'], r.get('probes') or [])}
 BUILDER = {'hrrr': 'build_day.py', 'gfs': 'build_day.py', 'ecmwf': 'build_eu.py', 'icon': 'build_eu.py', 'icond2': 'build_eu.py', 'arome': 'build_eu.py'}
+SH_BUILDER = 'build_sh.py'
 LEAD_GRIDS = ('gfs', 'ecmwf')
 
 def build_command(day: str, B: dict, out: str, model: str, workers: int, work: str) -> list[str] | None:
     bbox = ','.join((f'{v:.2f}' for v in B['bbox']))
     base, lead = (common.base_model(model), common.lead_of(model))
-    script = BUILDER.get(base, 'build_day.py')
+    sh = common.macro_of(B['region']) == 'SH'
+    if sh and (lead is not None or base not in ('gfs', 'icon')):
+        return None
+    script = SH_BUILDER if sh else BUILDER.get(base, 'build_day.py')
     if lead is not None and script == 'build_day.py':
         script = 'build_lead.py'
     cmd = ['python3', os.path.join(common.HERE, script), '--day', day, '--tz', B['tz'], f'--bbox={bbox}', '--out', out, '--model', base, '--workers', str(workers)]
+    if sh:
+        return cmd + ['--cache', os.path.join(work, 'sh-cache')]
     if lead is not None:
         cmd += ['--lead', str(lead)] + (['--area', common.macro_of(B['region'])] if script == 'build_lead.py' else [])
     if script == 'build_eu.py':
@@ -518,7 +545,7 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             try:
                 gdir = os.path.join(grids, key, f'{model}-box{bi}')
                 shutil.rmtree(gdir, ignore_errors=True)
-                save_grids(base, gdir, {'day': day, 'key': key, 'model': model, 'region': B['region'], 'bbox': B['bbox'], 'tz': B['tz'], 'box': bi})
+                save_grids(base, gdir, {'day': day, 'key': key, 'model': model, 'region': B['region'], 'bbox': B['bbox'], 'tz': B['tz'], 'box': bi, **({'collector': True} if any((f.get('kind') == 'collector' for f in B['flights'])) else {})})
                 info['saved'] = True
             except Exception as e:
                 common.note(f'{day} {model} box {bi}: grids not saved: {e!r}')
@@ -537,14 +564,14 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
     return True
 
 def _drop_model(res: dict, model: str, items=None) -> None:
-    items = items if items is not None else (res.get('flights') or []) + (res.get('short') or []) + (res.get('obs') or [])
+    items = items if items is not None else items_of(res)
     for f in items:
         f.pop(f'model_{model}', None)
         f.pop(f'model_c_{model}', None)
         for pk in ('probe_m', 'probe_mc'):
             (f.get(pk) or {}).pop(model, None)
         for x in (f.get('legs') or []) + (f.get('climbs') or []):
-            for mk in ('models', 'models_c'):
+            for mk in ('models', 'models_c', 'near'):
                 (x.get(mk) or {}).pop(model, None)
 
 def _finish_leads(res: dict, key: str, built: dict) -> None:
@@ -565,13 +592,16 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
     flights = [clean(f) for f in rec.get('flights') or []]
     short = [clean(f) for f in rec.get('short') or []]
     obs = [clean(f) for f in rec.get('obs') or []]
-    macro = rec.get('macro') or common.macro_of_items(flights + short)
+    coll = [clean(f) for f in rec.get('collector') or []]
+    macro = rec.get('macro') or common.macro_of_items(flights + short + coll)
     key = rec.get('key') or common.day_key(day, macro)
-    models = tuple(rec.get('models') or common.models_for({f.get('region') for f in flights + short}, day))
+    models = tuple(rec.get('models') or common.models_for({f.get('region') for f in flights + short + coll}, day))
     res = {**rec, 'version': common.DAY_VERSION, 'macro': macro, 'key': key, 'models': list(models), 'model': models[0], 'boxes': [], 'flights': flights, 'short': short, 'obs': obs, 'physics_v': common.physics_version(macro), 'score_v': common.SCORE_VERSION, 'corr_v': corr_version(corrections), 'grids': True, 'rescored_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    if coll:
+        res['collector'] = coll
     os.makedirs(work, exist_ok=True)
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
-    items = flights + short + obs
+    items = flights + short + obs + coll
     for model in models:
         for bi, B in enumerate(boxes(items)):
             info = {'model': model, 'box': bi, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False, 'saved': True}

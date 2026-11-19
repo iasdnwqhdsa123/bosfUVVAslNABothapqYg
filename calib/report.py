@@ -7,6 +7,7 @@ import statistics as st
 import sys
 from collections import Counter, defaultdict
 from datetime import date
+import collector
 import common
 import rows
 import track
@@ -361,6 +362,9 @@ def build(data: str, days_csv: str | None=None, model: str | None=None) -> str:
         sec, per = _area_sections(by_macro[m], state, pilots, prim[m], models_in(by_macro[m]))
         out += sec
         per_all += per
+    cdays = collector.load_days(data)
+    if cdays or (state.get('collector') or {}).get('fetched'):
+        out += collector.section(cdays, state)
     fp = os.path.join(data, 'failures.json')
     if os.path.exists(fp):
         fl = common.read_json(fp)
