@@ -19,7 +19,7 @@ concurrency:
 jobs:
   train:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 350
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
       CALIB_TERRAIN_CACHE: /tmp/terrain
