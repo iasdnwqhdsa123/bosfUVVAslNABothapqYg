@@ -13,7 +13,7 @@ import run as runmod
 import state as statemod
 import weglide
 import workq
-MAX_RUNS_A_DAY = 40
+MAX_RUNS_A_DAY = 60
 MIN_REQUESTS = 20
 KEEP_LOGS = 80
 RESCORE_COST = 0.3
