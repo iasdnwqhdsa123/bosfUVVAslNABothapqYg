@@ -41,6 +41,10 @@ jobs:
           [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
           mkdir -p /tmp/data
           python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/fetch.err || { echo "::error::no data to train on"; exit 1; }
+      - name: Room on the disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h / | tail -1
       - name: Restore the grids
         env:
           GITHUB_TOKEN: ${{ github.token }}
