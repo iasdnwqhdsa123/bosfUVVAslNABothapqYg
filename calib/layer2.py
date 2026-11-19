@@ -511,7 +511,8 @@ def featurize(pts: list[dict], T: Terrain, site: bool=False) -> list[dict]:
         if site:
             row.update({k: p['site'].get(k) for k in SITE_PARTS})
             row['site'] = p['site']['site']
-            row['flat'] = p['site']['flat'] if p['site'].get('flat') is not None else row['flat']
+            if row.get('flat') is None:
+                row['flat'] = tf['flat']
         out.append(row)
     return out
 
