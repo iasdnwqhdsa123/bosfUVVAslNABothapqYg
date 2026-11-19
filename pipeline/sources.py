@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -233,13 +234,14 @@ class ICON(OpenMeteo):
     def fetch(self, run, fh, sel):
         import dwdicon
         keys = list(sel)
-        if dwdicon.has_run(run):
-            try:
-                out = dwdicon.fetch_step(run, fh, self.prev_step(fh), keys, self.cache_dir)
-                out[VIA] = 'dwd'
-                return out
-            except Exception as e:
-                print(f"  f{fh:03d}: DWD's files not read ({e!r})"[:200] + ": Open-Meteo's copy", flush=True)
+        if ICON_DWD_FIRST or not (grib.exists(self.url(run, fh)) and grib.exists(self.url(run, fh, '_model-level'))):
+            if dwdicon.has_run(run):
+                try:
+                    out = dwdicon.fetch_step(run, fh, self.prev_step(fh), keys, self.cache_dir)
+                    out[VIA] = 'dwd'
+                    return out
+                except Exception as e:
+                    print(f"  f{fh:03d}: DWD's files not read ({e!r})"[:200] + ": Open-Meteo's copy", flush=True)
         out = super().fetch(run, fh, keys)
         out[VIA] = 'om'
         return out
@@ -249,6 +251,7 @@ class ICON(OpenMeteo):
         if dwd and om:
             return [f"{self.notes[0]}; some hours from Open-Meteo's copy of it (CC BY 4.0)", *self.notes[1:]]
         return [self.om_notes[0], *self.notes[1:]] if om else list(self.notes)
+ICON_DWD_FIRST = os.environ.get('ICON_DWD_FIRST', '0') == '1'
 VIA = ('_via', '')
 
 @dataclass
