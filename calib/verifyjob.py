@@ -24,9 +24,19 @@ MIN_LEFT = 15
 MIN_SINCE = 10
 DEADLINE_BEFORE = 10
 ACCOUNT_JOBS = 20
-VERIFY_JOBS = 3
 HEADROOM = 4
 BUDGET_MIN = 60
+SAMPLES = [{'model': 'hrrr', 'key': 'hrrr', 'part': ''}, {'model': 'gfs', 'key': 'gfs', 'part': ''}, {'model': 'ecmwf', 'key': 'ecmwf-0', 'part': '0/2'}, {'model': 'ecmwf', 'key': 'ecmwf-1', 'part': '1/2'}, {'model': 'icon', 'key': 'icon', 'part': ''}, {'model': 'icond2', 'key': 'icond2', 'part': ''}]
+SAMPLE_AT_ONCE = 3
+SHARE_MIN = 30
+VERIFY_JOBS = 1 + SAMPLE_AT_ONCE
+
+def samples(run_number: int) -> list[dict]:
+    k = run_number % len(SAMPLES)
+    return SAMPLES[k:] + SAMPLES[:k]
+
+def share(deadline: datetime, now: datetime) -> datetime:
+    return min(deadline, now + timedelta(minutes=SHARE_MIN))
 OLD_CIPHER = ['openssl', 'enc', '-d', '-aes-256-ctr', '-pbkdf2', '-pass', 'env:VERIFY_CARRY_KEY']
 
 def _verify():
@@ -454,6 +464,8 @@ def main(argv: list[str]) -> int:
     (p.add_argument('--old-scores'), p.add_argument('--new-scores'), p.add_argument('--out', required=True))
     p = sub.add_parser('prune')
     (p.add_argument('name'), p.add_argument('--keep', type=int, default=3))
+    p = sub.add_parser('share')
+    p.add_argument('--deadline', required=True)
     a = ap.parse_args(argv)
     if a.cmd == 'source':
         print(source())
@@ -476,6 +488,7 @@ def main(argv: list[str]) -> int:
         if not go:
             log(f'::warning::Verify stood down: the runners had no room for {a.wait:.0f} min (next time)')
         print(f'deadline={deadline:%Y-%m-%dT%H:%MZ}')
+        print(f"samples={json.dumps(samples(int(os.environ.get('GITHUB_RUN_NUMBER') or 0)), separators=(',', ':'))}")
         print(f"go={('true' if go else 'false')}")
     elif a.cmd == 'old':
         return 0 if old(a.repo, a.name, a.dir) else 3
@@ -491,6 +504,9 @@ def main(argv: list[str]) -> int:
         compare(a.old, a.new, a.old_scores, a.new_scores, a.out)
     elif a.cmd == 'prune':
         log(f'{a.name}: {prune(a.name, a.keep)} older deleted')
+    elif a.cmd == 'share':
+        d = datetime.strptime(a.deadline, '%Y-%m-%dT%H:%MZ').replace(tzinfo=timezone.utc)
+        print(f'{share(d, datetime.now(timezone.utc)):%Y-%m-%dT%H:%MZ}')
     return 0
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))

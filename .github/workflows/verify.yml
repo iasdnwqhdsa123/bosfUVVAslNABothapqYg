@@ -19,6 +19,7 @@ jobs:
     outputs:
       go: ${{ steps.when.outputs.go }}
       deadline: ${{ steps.when.outputs.deadline }}
+      samples: ${{ steps.when.outputs.samples }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -97,15 +98,9 @@ jobs:
     timeout-minutes: 340
     strategy:
       fail-fast: false
-      max-parallel: 2  # (verifyjob.py VERIFY_JOBS: these and obs)
+      max-parallel: 3  # (verifyjob.py SAMPLE_AT_ONCE; VERIFY_JOBS: these and obs)
       matrix:
-        include:
-          - { model: hrrr, key: hrrr, part: "" }
-          - { model: gfs, key: gfs, part: "" }
-          - { model: ecmwf, key: ecmwf-0, part: "0/2" }
-          - { model: ecmwf, key: ecmwf-1, part: "1/2" }
-          - { model: icon, key: icon, part: "" }
-          - { model: icond2, key: icond2, part: "" }
+        include: ${{ fromJSON(needs.gate.outputs.samples) }}
     env:
       KEY: ${{ matrix.key }}
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -131,7 +126,9 @@ jobs:
           python3 calib/verifyjob.py check state "$KEY"
       - name: Rebuild and sample ${{ matrix.model }}'s runs
         continue-on-error: true
-        run: cd pipeline && python verify.py sample --model "${{ matrix.model }}" --state ../state --deadline "${{ needs.gate.outputs.deadline }}" ${{ matrix.part && format('--part {0}', matrix.part) || '' }}
+        run: |
+          d="$(python3 calib/verifyjob.py share --deadline "${{ needs.gate.outputs.deadline }}")"
+          cd pipeline && python verify.py sample --model "${{ matrix.model }}" --state ../state --deadline "$d" ${{ matrix.part && format('--part {0}', matrix.part) || '' }}
       - name: Pack
         if: always() && steps.restore.outcome == 'success'
         run: |
