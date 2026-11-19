@@ -2696,7 +2696,7 @@ def main():
     ap.add_argument('--days', type=int)
     ap.add_argument('--bbox', help='west,south,east,north override (testing)')
     ap.add_argument('--step', type=float)
-    ap.add_argument('--max-hours', type=int, help='limit valid times (testing)')
+    ap.add_argument('--max-hours', type=int, help="limit valid times (testing; with --run, from that run's day, not today)")
     ap.add_argument('--utc-hours', help='with --max-hours: the UTC hours taken (e.g. 12,13,14; 18,19,20 without)')
     ap.add_argument('--keep-runs', type=int, default=1)
     ap.add_argument('--tile', type=int)
@@ -2723,7 +2723,8 @@ def main():
         region[:4] = [float(x) for x in args.bbox.split(',')]
     if args.step:
         region[4] = args.step
-    needed = needed_times(src, args.days)
+    test_from = datetime.strptime(args.run, '%Y%m%d%H').replace(tzinfo=timezone.utc) if args.run and args.max_hours else None
+    needed = needed_times(src, args.days, now=test_from)
     run, fhs = pick_run(src, needed, args.run)
     if args.max_hours:
         hrs = tuple((int(x) for x in args.utc_hours.split(','))) if args.utc_hours else (18, 19, 20)
