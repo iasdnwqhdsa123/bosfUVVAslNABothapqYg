@@ -7,14 +7,18 @@ CEIL_NONE_JS = 5990.0
 WB = 14
 CODE = sky.CLASS_CODE0 + WB - sky.CB
 CLASSES = (sky.NONE, sky.BLUE, 2, 3, sky.SC, sky.ST)
-LOW = 10.0
+DECK = 40.0
+THIN = (10.0, 0.4, 4.5)
+RAIN = 0.2
+DEEP = (50.0, 50.0)
+WET, WET_AGL = ((80.0, 1.0), 3000)
 WSTAR = 1.6
 BARS_ZI = 1000.0
 TRAP = 0.5
 LAM = (3000.0, 15000.0)
 WIND = 7.0
 LIFT = 0.12
-OWN, LID, OWN_LOW = (0.15, 1.0, 20.0)
+OWN, LID = (0.15, 1.0)
 CARRY, REACH, STEP = (90000.0, 150000.0, 10000.0)
 M_DEG = 111320.0
 ML_LEVELS = (600, 1000, 1500, 2000)
@@ -39,7 +43,7 @@ def _js_round(x):
 def classes(cls, wstar):
     return np.where((cls == sky.CS) & (np.nan_to_num(wstar, nan=0.0) >= sky.CU_MIN_WS), sky.BLUE, cls)
 
-def bars(cls, wstar, low, trap, lam, u, v, own, north, step, lid=None, zi=None):
+def bars(cls, wstar, low, trap, lam, u, v, own, north, step, lid=None, zi=None, spread=None, rain=None, mid=None, high=None, dry=None):
     ny, nx = cls.shape
     tt = np.where(trap > 1, trap / 100.0, trap)
     U = np.hypot(u, v)
@@ -52,14 +56,23 @@ def bars(cls, wstar, low, trap, lam, u, v, own, north, step, lid=None, zi=None):
     iy, ix = np.nonzero(cand)
     if not iy.size:
         return cand
-    c0 = cls[iy, ix]
     lo = low(iy, ix) if callable(low) else low[iy, ix]
     with np.errstate(invalid='ignore'):
-        ok = ~np.isin(c0, (sky.NONE, sky.BLUE)) | (lo >= LOW)
-        on_lid = lidded[iy, ix] & (lo >= OWN_LOW)
-    iy, ix, on_lid = (iy[ok], ix[ok], on_lid[ok])
+        ok = lo >= THIN[0]
+    iy, ix, lo = (iy[ok], ix[ok], lo[ok])
     best = carried(own, u, v, iy, ix, north, step)
-    yes = trapped[iy, ix] & (best >= LIFT) | on_lid
+    at = lambda a: a[iy, ix]
+    with np.errstate(invalid='ignore'):
+        ok = lo >= DECK
+        if spread is not None:
+            ok |= (best >= THIN[1]) & (at(spread) <= THIN[2])
+        if rain is not None:
+            ok &= ~(at(rain) >= RAIN)
+        if mid is not None and high is not None:
+            ok &= ~((at(mid) >= DEEP[0]) & (at(high) >= DEEP[1]))
+        if mid is not None and dry is not None:
+            ok &= ~((at(mid) >= WET[0]) & (at(dry) < WET[1]))
+    yes = ok & (trapped[iy, ix] & (best >= LIFT) | lidded[iy, ix])
     out = np.zeros_like(cand)
     out[iy[yes], ix[yes]] = True
     return out
@@ -107,8 +120,10 @@ def apply(cuclass, dec, own, grid, fine):
     ws = np.asarray(dec.get('wstar'), np.float64)
     lowf = np.asarray(dec.get('cloudlow'), np.float64)
     low = (lambda iy, ix: median_at(lowf, iy, ix)) if fine else lowf
-    lid = dec.get('dth_m500')
-    b = bars(classes(cls, ws), ws, low, np.asarray(dec.get('wtrap'), np.float64), np.asarray(dec.get('wlam'), np.float64), np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64), own, float(grid['north']), float(grid['step']), None if lid is None else np.asarray(lid, np.float64), None if dec.get('zi') is None else np.asarray(dec.get('zi'), np.float64))
+    arr = lambda a: None if a is None else np.asarray(a, np.float64)
+    zi = arr(dec.get('zi'))
+    spread = ml_spread({m: arr(dec.get(f'dpd_g{m}')) for m in ML_LEVELS}, np.full(lowf.shape, np.nan) if zi is None else zi)
+    b = bars(classes(cls, ws), ws, low, np.asarray(dec.get('wtrap'), np.float64), np.asarray(dec.get('wlam'), np.float64), np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64), own, float(grid['north']), float(grid['step']), arr(dec.get('dth_m500')), zi, spread=spread, rain=arr(dec.get('rain')), mid=arr(dec.get('cloudmid')), high=arr(dec.get('cloudhigh')), dry=arr(dec.get(f'dpd_g{WET_AGL}')))
     if not b.any():
         return None
     return np.where(b, CODE, cuclass).astype(np.uint8)
