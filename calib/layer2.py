@@ -456,9 +456,22 @@ def score_table(F: list[dict], score_key: str, groups: dict) -> list[dict]:
         s = [r[score_key] for r in rs]
         tab.append({'group': name, 'n': len(rs), 'climbs': int(sum(y)), 'auc': auc(s, y), 'top': top_decile(s, y)})
     return tab
+TRACED_M = [(0, 300), (300, 1000), (1000, 1000000000.0)]
+
+def traced_m(r: dict) -> float | None:
+    m = r.get('met')
+    if not m or m[0] is None or m[1] is None:
+        return None
+    return 1000.0 * track.dist_km((m[0], m[1]), (r['lon'], r['lat']))
 
 def groups_of(F: list[dict]) -> dict:
     gs = {'all': lambda r: True, 'flat': lambda r: r['flat'] > 0.5, 'hills/mountains': lambda r: r['flat'] <= 0.5, 'cumulus': lambda r: r['cu'] > 0, 'blue': lambda r: r['cu'] == 0}
+    for a, b in TRACED_M:
+        name = f'traced {a}–{b} m' if b < 100000000.0 else f'traced over {a} m'
+        near = (lambda a, b: lambda r: traced_m(r) is not None and a <= traced_m(r) < b)(a, b)
+        gs[name] = near
+        gs[f'flat, {name}'] = (lambda near: lambda r: r['flat'] > 0.5 and near(r))(near)
+        gs[f'hills/mountains, {name}'] = (lambda near: lambda r: r['flat'] <= 0.5 and near(r))(near)
     for a, b in report.WIND_BANDS:
         gs[f"wind {a}–{(b if b < 99 else '+')}"] = (lambda a, b: lambda r: a <= r['wind'] < b)(a, b)
     for a, b in report.HOURS:
@@ -502,7 +515,7 @@ def fit(F: list[dict], features: list[str]=FEATURES, score_key: str='trig') -> d
     e['version'] = date.today().isoformat()
     chk = train.export_check(e, m, X)
     trig = np.array([r[score_key] for r in F])
-    return {'export': e, 'rows': int(len(y)), 'days': int(len(set(g))), 'check': chk, 'auc_ml': auc(p_ml, y), 'auc_trig': auc(trig, y), 'top_ml': top_decile(p_ml, y), 'top_trig': top_decile(trig, y), 'train_dropped': train.crossval.dropped, 'auc_noday': None if p_nd is None else auc(p_nd, y), 'top_noday': None if p_nd is None else top_decile(p_nd, y)}
+    return {'export': e, 'oof': p_ml, 'rows': int(len(y)), 'days': int(len(set(g))), 'check': chk, 'auc_ml': auc(p_ml, y), 'auc_trig': auc(trig, y), 'top_ml': top_decile(p_ml, y), 'top_trig': top_decile(trig, y), 'train_dropped': train.crossval.dropped, 'auc_noday': None if p_nd is None else auc(p_nd, y), 'top_noday': None if p_nd is None else top_decile(p_nd, y)}
 
 def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None) -> dict:
     md = [f"Each climb traced down the wind to its trigger point (the 3D thermals' lean at the height the glider met it); negatives along the glides between climbs (every {NEG_KM:g} km, over {LOW_AGL} m up), traced the same way: ground flown over without circling. The site's Thermal Triggers as the map works them out (the site's own code on zoom-12 tiles, the land cover from Esri's imagery and ESA WorldCover, water and the shore, the airflow over the terrain, its shadow, the forecast's W*, wind, heating, snow and soil at the hour), where the point's day has its grids saved; the terrain-only copy here (hill, sunlit slope, windward slope, flat land) beside it. Each scored against them: AUC (0.5 = chance) and the top decile's hit rate against the base rate (lift). Then a tree model P(climb | cell, hour) on the site's score, its terms and the layer-1 air, cross-validated by day. Layer 3 sees the planner on that air, not where the thermals were: nothing here is counted again there.", '']
@@ -547,6 +560,11 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
         from layer1 import auc as _auc
         y = [r['label'] for r in F]
         md += ["Each of the map's terms alone (AUC; below 0.5: the climbs where it's lower): " + ', '.join((f'{k} {_f(_auc([r[k] if r.get(k) is not None else 0.0 for r in F], y), 3)}' for k in SITE_PARTS)) + '.', '']
+        for name, sel in (('flat', lambda r: r['flat'] > 0.5), ('hills/mountains', lambda r: r['flat'] <= 0.5)):
+            rs = [r for r in F if sel(r)]
+            ys = [r['label'] for r in rs]
+            if len(rs) >= 30 and 5 <= sum(ys) <= len(rs) - 5:
+                md += [f'On {name} alone: ' + ', '.join((f'{k} {_f(_auc([r[k] if r.get(k) is not None else 0.0 for r in rs], ys), 3)}' for k in SITE_PARTS)) + '.', '']
     sp = spacing_rows(pts)
     if sp:
         q = lambda xs, p: float(np.percentile(xs, p))
@@ -565,7 +583,17 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
         with open(os.path.join(out, 'triggers.json'), 'w') as fh:
             json.dump(f['export'], fh, separators=(',', ':'))
         md += [f"{f['rows']} points, {f['days']} days; each fold's training {f['train_dropped']:.0%} smaller for the test rows' days. AUC: the site's score {f['auc_trig']:.3f}, the trees {f['auc_ml']:.3f} (out of fold); top decile lift: {f['top_trig']['lift']:.2f} against {f['top_ml']['lift']:.2f}." + (f" Without the day of year: AUC {f['auc_noday']:.3f}, top decile lift {f['top_noday']['lift']:.2f}." if f.get('auc_noday') is not None else ''), '', train.splits_md(f['export']), f"Export check (max |trees − sklearn|): {f['check']:.2e}. triggers.json: features {', '.join(f['export']['features'])}.", '']
-        res['cv'] = {k: v for k, v in f.items() if k != 'export'}
+        from layer1 import auc as _auc2
+        gt = []
+        for name, sel in groups_of(F).items():
+            idx = [i for i, r in enumerate(F) if sel(r) and math.isfinite(float(f['oof'][i]))]
+            ys = [F[i]['label'] for i in idx]
+            if len(idx) < 30 or sum(ys) < 5 or len(idx) - sum(ys) < 5:
+                continue
+            gt.append({'group': name, 'n': len(idx), 'climbs': int(sum(ys)), 'auc_site': _auc2([F[i][score_key] for i in idx], ys), 'auc_ml': _auc2([float(f['oof'][i]) for i in idx], ys)})
+        md += ["By group, the site's score against the trees (out of fold): could anything learned from these terms place thermals there better than the map does?", '', "| Group | points | climbs | the site's AUC | the trees' AUC |", '|---|---|---|---|---|']
+        md += [f"| {r['group']} | {r['n']} | {r['climbs']} | {_f(r['auc_site'], 3)} | {_f(r['auc_ml'], 3)} |" for r in gt] + ['']
+        res['cv'] = {**{k: v for k, v in f.items() if k not in ('export', 'oof')}, 'groups': gt}
     return _finish(out, md, res)
 
 def _finish(out: str, md: list[str], res: dict) -> dict:
