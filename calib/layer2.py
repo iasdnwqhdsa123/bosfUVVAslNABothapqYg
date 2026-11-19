@@ -277,7 +277,7 @@ class Grids:
                 info = common.read_json(os.path.join(base, 'fields.json'))
                 g = info['grid']
                 nf = len(info['fields'])
-                arr = np.fromfile(os.path.join(base, 'fields.bin'), dtype=np.float32).reshape(len(info['stamps']), nf, g['ny'], g['nx'])
+                arr = np.memmap(os.path.join(base, 'fields.bin'), dtype=np.float32, mode='r', shape=(len(info['stamps']), nf, g['ny'], g['nx']))
                 stamps = [int(datetime.strptime(s, '%Y%m%d%H').replace(tzinfo=timezone.utc).timestamp()) for s in info['stamps']]
                 B = {'g': g, 'fi': {n: i for i, n in enumerate(info['fields'])}, 'arr': arr, 'stamps': stamps}
         self.boxes[k] = B
