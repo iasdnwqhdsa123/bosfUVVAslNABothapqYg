@@ -393,12 +393,13 @@ def storm_says(s, rain, refc):
         return np.maximum(np.nan_to_num(s['refmax'], nan=0), 0 if refc is None else refc) >= STORM_DBZ - 10
     return np.ones(np.shape(rain), bool)
 
-def cumulus_forms(ws, zi, lcl, cover=None):
+def cumulus_forms(ws, zi, lcl, cover=None, flat_min=None):
     reach = (ws > 0.5) & (lcl < zi)
     if cover is None or np.all(np.isnan(cover)):
         return reach & (zi - lcl > CU_MARGIN_NO_CLOUD)
     c = np.nan_to_num(cover, nan=0)
     near = (ws > 0.5) & (lcl >= zi) & (lcl < zi + np.maximum(CU_OVERSHOOT * zi, CU_OVERSHOOT_MIN)) & (c < CU_LOW_BROKEN)
+    near &= c >= (CU_MIN_LOW_CLOUD if flat_min is None else flat_min)
     return (reach | near) & (c >= CU_MIN_LOW_CLOUD)
 LOW_AGL, MID_AGL = (2000.0, 7000.0)
 
@@ -579,7 +580,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     ccl = cloud_levels(s, lv, levels, tops, rh_out=ccl_rh)
     p_base = prof.at(zs + 2 + lcl, 'lnp')
     cu_cover = cumulus_cover(p_base, s['ps'], tops, [s.get('lcc'), s.get('mcc'), s.get('hcc')], np.stack([ccl[f'cc{p}'] for p in P.CC_LEVELS]))
-    has_cu = cumulus_forms(ws, zi, lcl, cu_cover)
+    has_cu = cumulus_forms(ws, zi, lcl, cu_cover, s.get('cu_flat_min'))
     zi = np.where(~has_cu & (ws > 0.5) & (zi > lcl + BLUE_OVER_LCL), lcl + BLUE_OVER_LCL, zi)
     depth = np.where(has_cu, lcl, np.where(ws > 0, zi, 0))
     d = np.maximum(np.where(has_cu, lcl, zi), 100)
@@ -1438,6 +1439,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         add_contrails(s, lv, hi, hi_ok, src, valid, lat2d, lon2d, use_levels)
         s['hub_m'] = src.hub_m
         s['hpbl_season'] = src.hpbl_season
+        s['cu_flat_min'] = src.cu_flat_min_cloud
         if src.derive:
             s = src.derive(s)
         rnsw, rnlw = (s.pop('rnsw', None), s.pop('rnlw', None))

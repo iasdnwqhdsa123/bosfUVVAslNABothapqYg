@@ -286,7 +286,7 @@ def centres(grid, mslp):
         e = ext(np.where(np.isfinite(p), p, np.inf if sign < 0 else -np.inf), size=size, mode='nearest')
         ys, xs = np.nonzero((p == e) & np.isfinite(p) & (sign * (p - mean) >= CENTRE_HPA))
         for y, x in zip(ys.tolist(), xs.tolist()):
-            if y < 2 or x < 2 or y > ny - 3 or (x > nx - 3):
+            if y < 2 or x < 2 or y > ny - 3 or (x > nx - 3) or (not np.isfinite(raw[y - 2:y + 3, x - 2:x + 3]).all()):
                 continue
             ry, rx = (max(1, int(round(sy * CENTRE_RAW_KM / CENTRE_KM))), max(1, int(round(sx * CENTRE_RAW_KM / CENTRE_KM))))
             box = raw[max(0, y - ry):y + ry + 1, max(0, x - rx):x + rx + 1]
