@@ -80,8 +80,11 @@ jobs:
           restore-keys: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-
       - name: Layer 2, the place
         run: |
+          ( while sleep 60; do echo "resources: memory $(free -m | awk '/^Mem:/{print $3 " of " $2}') MB used, disk $(df -m /tmp | awk 'NR==2{print $3 " of " $2}') MB"; done ) &
+          mon=$!
           python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage place --grids /tmp/grids 2>> /tmp/model/stderr.log \
             || echo "::error::layer 2 failed (details in the encrypted log)"
+          kill $mon 2> /dev/null || true
       - name: Keep the land cover
         if: always()
         uses: actions/cache/save@v6
