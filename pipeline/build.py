@@ -1601,6 +1601,15 @@ def _prefetch(job):
         return fetch_hour(_CTX['src'], run, fh)
     except Exception as e:
         return e
+_AIR = None
+
+def air_corrected(q, lat2d, lon2d, valid, model, step):
+    global _AIR
+    import aircorr
+    if _AIR is None:
+        _AIR = aircorr.prepare(aircorr.load())
+        log(f"air corrections on (version {_AIR.get('version')}, built {_AIR.get('built')})")
+    return aircorr.correct_codes(q, ENC, quantize, lat2d, lon2d, valid, model, step, _AIR)
 
 def _process_hour(job, raw=None):
     src, region, hours_dir, holder = (_CTX[k] for k in ('src', 'region', 'hours', 'holder'))
@@ -1654,6 +1663,8 @@ def _process_hour(job, raw=None):
     trim_malloc()
     q.update(sky.cloud_overview(q, ENC, region[4] <= sky.FINE_STEP))
     q.update(_run_fields(q, lat2d, lon2d, region, valid))
+    if os.environ.get('AIR_CORRECTIONS', '0') == '1':
+        q.update(air_corrected(q, lat2d, lon2d, valid, src.id, region[4]))
     part = os.path.join(hours_dir, f'{valid:%Y%m%d%H}.tmp.npz')
     tiles.savez(part, q)
     os.replace(part, npz)

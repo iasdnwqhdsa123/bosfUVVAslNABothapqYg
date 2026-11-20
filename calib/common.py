@@ -181,6 +181,9 @@ def aircraft_version(types: dict | None=None) -> str:
     return hashlib.sha256(json.dumps(types if types is not None else load_aircraft(), sort_keys=True).encode()).hexdigest()[:12]
 DAY_VERSION = 3
 DAY_BUILD_SKIP = {'build.py': {'write_free', '_free_soundings', '_publish_open', 'free_ahead', 'hour_token'}}
+NEVER_BUILT = {'build.py': {'air_corrected', '_AIR'}}
+NEVER_BUILT_IF = 'AIR_CORRECTIONS'
+NEVER_BUILT_FILES = {'gbm.cpp'}
 
 def _stripped(path: str, skip: bool=True) -> str:
     with open(path, encoding='utf-8') as f:
@@ -190,12 +193,13 @@ def _stripped(path: str, skip: bool=True) -> str:
             tree = ast.parse(text)
         except SyntaxError:
             return text
-        drop = DAY_BUILD_SKIP.get(os.path.basename(path), set()) if skip else set()
+        drop = (DAY_BUILD_SKIP.get(os.path.basename(path), set()) if skip else set()) | NEVER_BUILT.get(os.path.basename(path), set())
         if drop:
-            tree.body = [x for x in tree.body if not (isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)) and x.name in drop)]
+            tree.body = [x for x in tree.body if not (isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)) and x.name in drop) and (not (isinstance(x, ast.Assign) and all((isinstance(n, ast.Name) and n.id in drop for n in x.targets))))]
         for node in ast.walk(tree):
             body = getattr(node, 'body', None)
             if isinstance(body, list) and body and all((isinstance(x, ast.stmt) for x in body)):
+                body[:] = [x for x in body if not (isinstance(x, ast.If) and NEVER_BUILT_IF in ast.unparse(x.test))]
                 body[:] = [x for x in body if not (isinstance(x, ast.Expr) and isinstance(x.value, ast.Constant) and isinstance(x.value.value, str))]
                 if not body and (not isinstance(node, ast.Module)):
                     body.append(ast.Pass())
@@ -231,7 +235,7 @@ def _version_of(paths: list[str], skip: bool=True) -> str:
             found = True
             h.update(os.path.basename(p).encode() + b'\x00' + _stripped(p, skip).encode() + b'\x00')
     return h.hexdigest()[:12] if found else 'none'
-_PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'runfields_native', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
+_PIPELINE_FILES = [os.path.join(PIPELINE, f'{m}.py') for m in ('build', 'physics', 'physics_native', 'sky', 'runfields', 'runfields_native', 'leelattice', 'runwave', 'shade', 'sources', 'grib', 'fronts', 'pack')] + [p for p in glob.glob(os.path.join(PIPELINE, 'native', '*.cpp')) if os.path.basename(p) not in NEVER_BUILT_FILES] + glob.glob(os.path.join(PIPELINE, 'native', '*.h'))
 PHYSICS_FILES = _PIPELINE_FILES + [os.path.join(HERE, 'build_day.py')]
 PHYSICS_FILES_EU = _PIPELINE_FILES + [os.path.join(PIPELINE, 'om.py'), os.path.join(PIPELINE, 'replay.py'), os.path.join(HERE, 'build_eu.py')]
 PHYSICS_FILES_SH = PHYSICS_FILES_EU + [os.path.join(HERE, 'build_sh.py')]
