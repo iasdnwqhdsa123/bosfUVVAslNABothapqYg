@@ -6,6 +6,8 @@ import os
 import random
 import struct
 import subprocess
+import sys
+import time
 import urllib.request
 import zlib
 from datetime import date, datetime, timezone
@@ -603,6 +605,8 @@ def fit(F: list[dict], features: list[str]=FEATURES, score_key: str='trig') -> d
 def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None) -> dict:
     md = [f"Each climb traced down the wind to its trigger point (the 3D thermals' lean at the height the glider met it); negatives along the glides between climbs (every {NEG_KM:g} km, over {LOW_AGL} m up), traced the same way: ground flown over without circling. The site's Thermal Triggers as the map works them out (the site's own code on zoom-12 tiles, the land cover from Esri's imagery and ESA WorldCover, water and the shore, the airflow over the terrain, its shadow, the forecast's W*, wind, heating, snow and soil at the hour), where the point's day has its grids saved; the terrain-only copy here (hill, sunlit slope, windward slope, flat land) beside it. Each scored against them: AUC (0.5 = chance) and the top decile's hit rate against the base rate (lift). Then a tree model P(climb | cell, hour) on the site's score, its terms and the layer-1 air, cross-validated by day. Layer 3 sees the planner on that air, not where the thermals were: nothing here is counted again there.", '']
     res = {'scores': None, 'cv': None, 'points': 0, 'rows': 0}
+    t0 = time.time()
+    phase = lambda name: print(f'layer 2: {name} done, {(time.time() - t0) / 60:.1f} min in', file=sys.stderr, flush=True)
     if D['days'] is None:
         md += ["No day files (exported rows only): the climbs' positions and the tracks aren't in them. Nothing scored.", '']
         return _finish(out, md, res)
@@ -612,6 +616,7 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
     if not pts:
         md += ["No climbs with the forecast's wind and layer at them (the day files hold no sampled u, v, W*, zi per climb).", '']
         return _finish(out, md, res)
+    phase(f'{len(pts)} points traced')
     T = terrain or Terrain(os.environ.get('CALIB_TERRAIN_CACHE') or os.path.join(out, 'terrain'))
     try:
         st = site_triggers(pts, G, os.path.join(out, 'trigger-work'))
@@ -622,12 +627,15 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
     res['site'] = {**st, 'used': bool(site), 'grid_points': n_grid}
     how = f"{st['points']} of {n_grid} points with grids ({st['tiles']} tiles, {st['failed']} that wouldn't load, {st['days_left_out']} days left out for the tile budget)" if st.get('ran') else f"not run ({st.get('error') or 'no node, script or grids'})"
     md += ["The site's trigger: " + how + ('; trained on it.' if site else '; too few: the terrain-only copy instead.'), '']
+    phase("the site's trigger")
     try:
         pl = placed_near(pts, G, os.path.join(out, 'place-work'))
     except (RuntimeError, OSError) as ex:
         pl = {'ran': False, 'error': str(ex)[-200:]}
     res['placed'] = pl
+    phase('the 3D placement')
     F = featurize(pts, T, site=bool(site))
+    phase(f"{len(F)} points' terrain")
     score_key, feats = ('site', FEATURES_SITE) if site else ('trig', FEATURES)
     res['points'] = res['rows'] = len(F)
     n_pos = sum((r['label'] for r in F))
@@ -671,7 +679,9 @@ def run(D: dict, out: str, grids: str | None=None, terrain: Terrain | None=None)
         if st_:
             md += [f"Climb flown / the placed core's peak (CORE {T3['peak']} × the model's W*): median {math.exp(q(st_, 50)):.2f} (IQR {math.exp(q(st_, 25)):.2f}–{math.exp(q(st_, 75)):.2f}); layer 1's W* correction is what moves this.", '']
         res['spacing'] = {'n': len(sp), 'flown_med_km': q(fl, 50), 'placed_med_km': q(pl, 50), 'ratio_med': math.exp(q(ratio, 50))}
+    phase('the scores')
     f = fit(F, feats, score_key)
+    phase('the trees')
     md += ['## P(climb | cell, hour): the trees against the score', '']
     if not f:
         md += [f"Too few points ({len(F)} on {len({r['date'] for r in F})} days) for a model.", '']

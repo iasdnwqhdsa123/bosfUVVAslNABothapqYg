@@ -26,6 +26,7 @@ jobs:
       CALIB_TRIGGER_TILES: "30000"
       TRIGGER_COVER_CACHE: /tmp/cover
     steps:
+      - run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
@@ -86,8 +87,8 @@ jobs:
         run: |
           ( while sleep 60; do echo "resources: memory $(free -m | awk '/^Mem:/{print $3 " of " $2}') MB used, disk $(df -m /tmp | awk 'NR==2{print $3 " of " $2}') MB"; done ) &
           mon=$!
-          python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage place --grids /tmp/grids 2>> /tmp/model/stderr.log \
-            || echo "::error::layer 2 failed (details in the encrypted log)"
+          timeout "$(( 350 * 60 - ($(date +%s) - JOB_T0) - 6 * 60 ))s" python3 calib/train.py /tmp/data /tmp/model "$DATASET" --stage place --grids /tmp/grids 2>> /tmp/model/stderr.log \
+            || echo "::error::layer 2 failed or ran out of time (details in the encrypted log)"
           kill $mon 2> /dev/null || true
       - name: Keep the land cover
         if: always()
