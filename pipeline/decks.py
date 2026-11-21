@@ -2,8 +2,9 @@ from __future__ import annotations
 import math
 import numpy as np
 import physics as P
-ROLLS = {'kappa': 0.4, 'z0_land': 0.1, 'z0_water': 0.0002, 'zL': (1.0, 3.0, 6.0, 60.0), 'shear': (0.4, 0.004), 'turnDeg': (30.0, 60.0), 'aspect': (2.5, 5.5), 'aspectZL': (2.0, 25.0), 'turn': 15.0, 'turnShear': 3.0, 'wind': (5.0, 8.0), 'lo': (0.5, 1.0, 3.0), 'cap': (0.4, 4.0), 'lid': (0.5, 3.0, 6.0), 'tear': (0.3, 1.0), 'on': 0.3}
+ROLLS = {'kappa': 0.4, 'z0_land': 0.1, 'z0_water': 0.0002, 'zL': (1.0, 3.0, 6.0, 60.0), 'shear': (0.4, 0.004), 'turnDeg': (30.0, 60.0), 'aspect': (2.5, 5.5), 'aspectZL': (2.0, 25.0), 'wind': (5.0, 8.0), 'lo': (0.5, 1.0, 3.0), 'cap': (0.4, 4.0), 'lid': (0.5, 3.0, 6.0), 'tear': (0.3, 1.0), 'on': 0.3}
 WAVE_BARS = {'km': 30.0, 'ratio': (2.0, 2.5)}
+DECK_TURN = (15.0, 3.0)
 SHEAR_TEAR = {'from': 4.5, 'full': 1.0}
 DECK_LOW = 25.0
 DECK_CC = 20.0
@@ -146,12 +147,7 @@ def street_rolls(wstar, zi, ub, vb, us, vs, ut, vt, shear_lo=None, cap=None, lid
     bars = ok & (rb < WAVE_BARS['ratio'][1]) & (bars_from >= R['on'])
     t = np.clip(np.log(np.maximum(zl, 1e-06) / R['aspectZL'][0]) / math.log(R['aspectZL'][1] / R['aspectZL'][0]), 0, 1)
     gap = (R['aspect'][0] + (R['aspect'][1] - R['aspect'][0]) * t) * zi1 / 1000.0
-    d = np.degrees(np.arctan2(ub * sy - vb * sx, ub * sx + vb * sy))
-    d = np.where(d > 90, d - 180, np.where(d < -90, d + 180, d))
-    by = np.where(S > 0, np.clip(d, -R['turn'], R['turn']) * np.clip(S / R['turnShear'], 0, 1), 0.0)
-    c, sn = (np.cos(np.radians(by)), np.sin(np.radians(by)))
-    ex, ey = (ub * c - vb * sn, ub * sn + vb * c)
-    ang = np.where(V > 0, np.degrees(np.arctan2(ex, ey)), np.degrees(np.arctan2(ub, vb))) % 180
+    ang = np.degrees(np.arctan2(ub, vb)) % 180
     return {'strength': strength.astype(np.float32), 'dir': ang.astype(np.float32), 'gap': gap.astype(np.float32), 'bars': bars}
 
 def with_streets(rows, st, low, water):
@@ -211,7 +207,7 @@ def organisation(prof, zs, t2, td2, ps, u10, v10, sst, heat_th, zi, cc, zc, low,
     sang = np.arctan2(sx, sy)
     d = (sang - ang + math.pi) % (2 * math.pi) - math.pi
     d = np.where(d > math.pi / 2, d - math.pi, np.where(d < -math.pi / 2, d + math.pi, d))
-    turn_by = np.clip(d, -math.radians(ROLLS['turn']), math.radians(ROLLS['turn'])) * np.clip(np.hypot(sx, sy) / ROLLS['turnShear'], 0, 1)
+    turn_by = np.clip(d, -math.radians(DECK_TURN[0]), math.radians(DECK_TURN[0])) * np.clip(np.hypot(sx, sy) / DECK_TURN[1], 0, 1)
     rowdir = np.degrees(ang + turn_by) % 180
     t = np.clip((lz - math.log(ROLLS['aspectZL'][0])) / (math.log(ROLLS['aspectZL'][1]) - math.log(ROLLS['aspectZL'][0])), 0, 1)
     aspect = ROLLS['aspect'][0] + (ROLLS['aspect'][1] - ROLLS['aspect'][0]) * t
