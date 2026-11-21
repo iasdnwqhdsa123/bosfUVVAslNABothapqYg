@@ -24,6 +24,12 @@ M_DEG = 111320.0
 ML_LEVELS = (600, 1000, 1500, 2000)
 CLOUD_K, CLOUD_X0, CLOUD_W, CLOUD_MAX = (1.5, -0.3, 0.7, 0.95)
 SUN_LOSS = 0.5
+RES_STEP = 0.05
+RES_HALF, RES_DS = (24.0, 3.0)
+RES_LAM = (9.0, 10.5, 12.0, 13.5, 15.0, 17.0, 19.0, 21.5, 24.0)
+RES_ACROSS = (-12.0, -6.0, 6.0, 12.0)
+RES_AMP, RES_FRAC, RES_COH, RES_RUNS = (25.0, 0.5, 0.5, 2)
+RES_BOX, RES_TRAIN = (5, 40)
 
 def deck_top(ceiltop, ceil, cubase, cudepth, zi, zs):
     ct = np.where(np.isfinite(ceiltop) & np.isfinite(ceil) & (ceil < CEIL_NONE_JS), ceiltop, np.nan)
@@ -111,6 +117,113 @@ def median_at(a, iy, ix):
             m = np.nanmedian(st, axis=0)
     return np.where(np.isfinite(a[iy, ix]), m, np.nan)
 
+def _box_sum(a, r):
+    ny, nx = a.shape
+    t = np.zeros((ny + 1, nx + 1), np.float64)
+    t[1:, 1:] = np.cumsum(np.cumsum(a, 0), 1)
+    y0, y1 = (np.clip(np.arange(ny) - r, 0, ny), np.clip(np.arange(ny) + r + 1, 0, ny))
+    x0, x1 = (np.clip(np.arange(nx) - r, 0, nx), np.clip(np.arange(nx) + r + 1, 0, nx))
+    return t[y1][:, x1] - t[y0][:, x1] - t[y1][:, x0] + t[y0][:, x0]
+
+def _box_range(a, r):
+    from scipy.ndimage import maximum_filter, minimum_filter
+    ok = np.isfinite(a)
+    hi = maximum_filter(np.where(ok, a, -np.inf), size=2 * r + 1, mode='constant', cval=-np.inf)
+    lo = minimum_filter(np.where(ok, a, np.inf), size=2 * r + 1, mode='constant', cval=np.inf)
+    with np.errstate(invalid='ignore'):
+        return np.where(np.isfinite(hi), hi - lo, -np.inf)
+
+def resolved(low, u, v, north, step, chunk=100000):
+    ny, nx = low.shape
+    out = np.zeros((ny, nx), bool)
+    if step > RES_STEP:
+        return out
+    U = np.hypot(u, v)
+    with np.errstate(invalid='ignore'):
+        cand = np.isfinite(low) & (U >= WIND) & (_box_range(low, RES_BOX) >= RES_AMP)
+    iy_all, ix_all = np.nonzero(cand)
+    if not iy_all.size:
+        return out
+    n = int(round(2 * RES_HALF / RES_DS)) + 1
+    ss = np.array([-RES_HALF + RES_DS * k for k in range(n)])
+    hann = np.array([0.5 - 0.5 * math.cos(2 * math.pi * k / (n - 1)) for k in range(n)])
+    w2 = float(sum((h * h for h in hann))) * 0.5
+    tt = float(sum((s * s for s in ss)))
+    flag = np.zeros((ny, nx), bool)
+    for c0 in range(0, iy_all.size, chunk):
+        iy, ix = (iy_all[c0:c0 + chunk], ix_all[c0:c0 + chunk])
+        uu, vv, UU = (u[iy, ix], v[iy, ix], U[iy, ix])
+        ex, ey = (uu / UU, vv / UU)
+        kx = 1000.0 / (M_DEG * np.cos((north - iy * step) * math.pi / 180) * step)
+        ky = 1000.0 / (M_DEG * step)
+
+        def prof(c):
+            P = np.empty((n, iy.size))
+            for k in range(n):
+                jx = _js_round(ix + (ex * ss[k] - ey * c) * kx).astype(np.int64)
+                jy = _js_round(iy - (ey * ss[k] + ex * c) * ky).astype(np.int64)
+                inside = (jx >= 0) & (jy >= 0) & (jx < nx) & (jy < ny)
+                P[k] = np.where(inside, low[np.clip(jy, 0, ny - 1), np.clip(jx, 0, nx - 1)], np.nan)
+            ok = np.isfinite(P)
+            cnt = ok.sum(0)
+            tot = np.zeros(iy.size)
+            for k in range(n):
+                tot = tot + np.where(ok[k], P[k], 0.0)
+            m = np.where(cnt > 0, tot / np.maximum(cnt, 1), 0.0)
+            return np.where(ok, P - m, 0.0)
+        pa = prof(0.0)
+        b = np.zeros(iy.size)
+        for k in range(n):
+            b = b + pa[k] * ss[k]
+        b = b / tt
+        for k in range(n):
+            pa[k] = pa[k] - ss[k] * b
+        ea = np.zeros(iy.size)
+        for k in range(n):
+            ea = ea + pa[k] * pa[k]
+        ea = ea / n
+        best = np.zeros(iy.size)
+        for lam in RES_LAM:
+            a, bb = (np.zeros(iy.size), np.zeros(iy.size))
+            for k in range(n):
+                a = a + pa[k] * (math.cos(2 * math.pi * ss[k] / lam) * hann[k])
+                bb = bb + pa[k] * (math.sin(2 * math.pi * ss[k] / lam) * hann[k])
+            best = np.maximum(best, (a * a + bb * bb) / w2)
+        frac = best / np.maximum(ea, 1e-06)
+        amp = np.sqrt(2 * ea)
+        hi, lo = (pa > amp / 2, pa < -amp / 2)
+        crests = hi[0].astype(int) + (hi[1:] & ~hi[:-1]).sum(0)
+        gaps = lo[0].astype(int) + (lo[1:] & ~lo[:-1]).sum(0)
+        keep = (amp >= RES_AMP) & (frac >= RES_FRAC) & (crests >= RES_RUNS) & (gaps >= RES_RUNS)
+        if not keep.any():
+            continue
+        iy, ix, ex, ey, kx, pa = (iy[keep], ix[keep], ex[keep], ey[keep], kx[keep], pa[:, keep])
+        coh = np.zeros(iy.size)
+        sp = np.zeros(iy.size)
+        for k in range(n):
+            sp = sp + pa[k] * pa[k]
+        for c in RES_ACROSS:
+            q = prof(c)
+            sq, spq = (np.zeros(iy.size), np.zeros(iy.size))
+            for k in range(n):
+                sq = sq + q[k] * q[k]
+                spq = spq + pa[k] * q[k]
+            coh = coh + spq / np.sqrt(np.maximum(sp * sq, 1e-06))
+        coh = coh / len(RES_ACROSS)
+        flag[iy, ix] = coh >= RES_COH
+    return _box_sum(flag.astype(np.float64), RES_BOX) >= RES_TRAIN
+
+def _deck(lo, at, rain, mid, high, dry):
+    with np.errstate(invalid='ignore'):
+        ok = lo >= DECK
+        if rain is not None:
+            ok &= ~(at(rain) >= RAIN)
+        if mid is not None and high is not None:
+            ok &= ~((at(mid) >= DEEP[0]) & (at(high) >= DEEP[1]))
+        if mid is not None and dry is not None:
+            ok &= ~((at(mid) >= WET[0]) & (at(dry) < WET[1]))
+    return ok
+
 def apply(cuclass, dec, own, grid, fine):
     need = ('wtrap', 'wlam', 'u_wl', 'v_wl', 'wstar', 'cloudlow')
     if any((dec.get(n) is None for n in need)):
@@ -124,6 +237,14 @@ def apply(cuclass, dec, own, grid, fine):
     zi = arr(dec.get('zi'))
     spread = ml_spread({m: arr(dec.get(f'dpd_g{m}')) for m in ML_LEVELS}, np.full(lowf.shape, np.nan) if zi is None else zi)
     b = bars(classes(cls, ws), ws, low, np.asarray(dec.get('wtrap'), np.float64), np.asarray(dec.get('wlam'), np.float64), np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64), own, float(grid['north']), float(grid['step']), arr(dec.get('dth_m500')), zi, spread=spread, rain=arr(dec.get('rain')), mid=arr(dec.get('cloudmid')), high=arr(dec.get('cloudhigh')), dry=arr(dec.get(f'dpd_g{WET_AGL}')))
+    uw, vw = (np.asarray(dec.get('u_wl'), np.float64), np.asarray(dec.get('v_wl'), np.float64))
+    train = resolved(lowf, uw, vw, float(grid['north']), float(grid['step']))
+    iy, ix = np.nonzero(train & np.isin(classes(cls, ws), CLASSES) & np.isfinite(uw) & np.isfinite(vw) & ~b)
+    if iy.size:
+        lo = low(iy, ix) if callable(low) else low[iy, ix]
+        ok = _deck(lo, lambda a: a[iy, ix], arr(dec.get('rain')), arr(dec.get('cloudmid')), arr(dec.get('cloudhigh')), arr(dec.get(f'dpd_g{WET_AGL}')))
+        b = b.copy()
+        b[iy[ok], ix[ok]] = True
     if not b.any():
         return None
     return np.where(b, CODE, cuclass).astype(np.uint8)
