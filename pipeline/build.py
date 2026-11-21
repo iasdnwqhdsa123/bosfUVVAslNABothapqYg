@@ -133,6 +133,7 @@ LEVEL_TILE = 200
 DECODE_THREADS = 4
 CLASS_FIELDS = {'ptype', 'fltcat', 'sinkby', 'cuclass', 'cusky', 'spot1', 'spot2'}
 WIND_ALTS_FT = [2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000, 18000, 24000, 30000]
+WIND_LOW_FT = [1000]
 WAVE_ALTS_FT = [6000, 8000, 10000, 12000, 14000, 18000, 24000]
 SAMPLED_FIELDS = {f'wv{ft}' for ft in WAVE_ALTS_FT} | {'wlow', 'vis', 'cucover', 'cuwide', 'cueff'}
 PEAK_FIELDS = {'overdev', 'refc', 'showers', 'wrun', 'wtop'}
@@ -161,7 +162,7 @@ for name in STAB_NAMES:
 for m in COL_AGL_M:
     ENC[f'dpd_g{m}'] = (0, 40, None)
 WIND_ENC, WIND_ENC_ALOFT, WIND_ALOFT_FT = ((-60, 60, None), (-100, 100, None), 12000)
-for key in ['sfc', 'blavg', 'bltop'] + [f'a{ft}' for ft in WIND_ALTS_FT] + [f'g{m}' for m in WIND_AGL_M + COL_WIND_M]:
+for key in ['sfc', 'blavg', 'bltop'] + [f'a{ft}' for ft in WIND_LOW_FT + WIND_ALTS_FT] + [f'g{m}' for m in WIND_AGL_M + COL_WIND_M]:
     enc = WIND_ENC_ALOFT if key.startswith('a') and int(key[1:]) >= WIND_ALOFT_FT else WIND_ENC
     ENC[f'u_{key}'] = enc
     ENC[f'v_{key}'] = enc
@@ -666,7 +667,7 @@ def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
         w = np.clip(1 - z / pump['depth'], 0, 1)
         out[f'u_{key}'] = out[f'u_{key}'] + w * pump['u']
         out[f'v_{key}'] = out[f'v_{key}'] + w * pump['v']
-    for ft in WIND_ALTS_FT:
+    for ft in WIND_LOW_FT + WIND_ALTS_FT:
         z = np.full_like(zs, ft * P.FT)
         u, v = prof.at(z, 'u', 'v')
         below = z < zs + 30
@@ -2485,7 +2486,7 @@ def hour_token(model, run_id, stamp, secret=None):
         _MASKED.add(tok)
     return tok
 _MASKED: set = set()
-FREE_FIELDS = {'wstar', 'depth', 'zi', 'cubase', 'cudepth', 'overdev', 'rain', 'showers', 'sun', 'ptype', 'cape', 'bs', 'densalt', 'core8', 'core10', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'accas', *(f'cc{p}' for p in P.CC_LEVELS), 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'bumpy', 'ceil', 'lowbase', 'vis', 'fltcat', *sky.FIELDS, 'rowstr', 'rowdir', 'rowgap', 'wdeck', 'dtop', 't2', 'td2', 'sst', 'mslp', 'gust', 'pm25', 'spot1', 'spot2', 'glow', *(f'{c}_a{ft}' for ft in WIND_ALTS_FT for c in ('u', 'v')), *(f'{c}_g{m}' for m in WIND_AGL_M for c in ('u', 'v'))}
+FREE_FIELDS = {'wstar', 'depth', 'zi', 'cubase', 'cudepth', 'overdev', 'rain', 'showers', 'sun', 'ptype', 'cape', 'bs', 'densalt', 'core8', 'core10', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'accas', *(f'cc{p}' for p in P.CC_LEVELS), 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'bumpy', 'ceil', 'lowbase', 'vis', 'fltcat', *sky.FIELDS, 'rowstr', 'rowdir', 'rowgap', 'wdeck', 'dtop', 't2', 'td2', 'sst', 'mslp', 'gust', 'pm25', 'spot1', 'spot2', 'glow', *(f'{c}_a{ft}' for ft in WIND_LOW_FT + WIND_ALTS_FT for c in ('u', 'v')), *(f'{c}_g{m}' for m in WIND_AGL_M for c in ('u', 'v'))}
 NOW_AHEAD = timedelta(hours=24) + FREE_SLACK
 NOW_FIELDS = FREE_FIELDS | {'twidth', 'sinkth', 'heat', 'soilm', 'ctop', 'ceiltop', 'wtrap', 'wlam', 'u_wl', 'v_wl', 'u_cuw', 'v_cuw', 'curh', 'thml', 'thx', *(f'{k}_m{dz}' for dz in ML_TOP_DZ for k in ('dth', 'q')), *(f'wv{ft}' for ft in WAVE_ALTS_FT), *(f'dpd{ft}' for ft in WAVE_ALTS_FT), *(f't{ft}' for ft in WAVE_ALTS_FT), *(f'{c}_g{m}' for m in (100, 300, 600, 1000, 1500, 2000, 2500, 3000) for c in ('u', 'v')), *(f'dpd_g{m}' for m in (600, 1000, 1500, 2000, 3000)), *(f'n_g{m}' for m in (750, 1250, 1750, 2500, 3500, 5000)), *(f'{c}_a{ft}' for ft in (2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000, 15000) for c in ('u', 'v'))}
 
