@@ -134,7 +134,7 @@ def sky_layers(low, mid, high, total, ceil, sun, cc=None, cu=None, cubase=None, 
     if cu is not None and cubase is not None:
         with np.errstate(invalid='ignore'):
             top = cubase + (0.0 if cudepth is None else np.maximum(0.0, np.nan_to_num(cudepth, nan=0.0)))
-            cud = (cu >= 2) & (cu < CB) & (cubase > 0) & (c >= cubase - CU_DECK) & (c <= top)
+            cud = (cu >= 2) & (cu < CB) & (cubase > 0) & (c >= cubase - CU_DECK) & (c <= top + CU_DECK)
         dn |= split & has_c & (mi >= BROKEN) & (lo < BROKEN) & ~up & cud
     lo, mi = (np.where(dn, mi, np.where(up, 0.0, lo)), np.where(up, lo, np.where(dn, 0.0, mi)))
     hi = np.where(split, np.nan_to_num(high, nan=0.0), np.where(~has_c, tot, 0.0))
@@ -201,7 +201,8 @@ def classify(v):
     fog = np.isfinite(vis) & (vis < 1000) & ((lo >= BROKEN) | has_c & (c < 300)) & ~stirred | has_c & (c < 150) & (lo >= BROKEN)
     stratus = ~(stirred | (cu >= 2)) & np.where(has_c, c < 600, lo >= OVERCAST)
     st_sc = np.where(stratus, ST, SC)
-    cu_shown = (cu >= 2) & ((cu >= 4) | (lo >= FEW_CU) & ~(thick & (np.maximum(mi, upper) >= BROKEN)))
+    veil = (mi < BROKEN) & ~thick
+    cu_shown = (cu >= 2) & ((cu >= 4) | veil | (lo >= FEW_CU) & ~(thick & (np.maximum(mi, upper) >= BROKEN)))
     accas = np.nan_to_num(v['accas'], nan=-1.0)
     cls = cu.copy()
     cls = np.where((cu <= 0) & (lo >= FEW_CU) & (lo < BROKEN) & (~has_c | (c < LOW_TOP * 1.25)), SC, cls)
