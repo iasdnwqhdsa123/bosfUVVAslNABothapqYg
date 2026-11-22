@@ -362,6 +362,14 @@ def mountain_plain(zs, heat, u, v, grid_step, cool=None, coslat=None):
     speed = fore * calm * (PUMP_WIND[0] * drive - PUMP_WIND[1] * night) * pump_wind_share(grid_step)
     f32 = lambda a: np.asarray(a, np.float32)
     return {'sink': f32(sink), 'lift': f32(lift), 'u': f32(speed * ex), 'v': f32(speed * ey), 'depth': f32(np.where(drive >= night, PUMP_DEPTH[0], PUMP_DEPTH[1]))}
+MOIST_MAX = 1.0
+
+def buoyancy_flux(heat, latent, t):
+    if latent is None:
+        return heat
+    k = 0.61 * CP * (np.asarray(t, np.float32) + K0) / LV
+    moist = np.minimum(k * np.maximum(np.nan_to_num(latent, nan=0), 0), MOIST_MAX * np.maximum(heat, 0))
+    return np.where(heat > 0, heat + moist, heat).astype(np.float32)
 
 def wstar(heat, zi, t, p):
     rho = p * 100 / (RD * (t + K0))
@@ -492,6 +500,62 @@ def core_shape(prof: Profile, depth, twidth, active, th_ml=None, with_top=False)
     ok = act & (ref > 0.05)
     out = [np.where(ok, np.clip(a / np.maximum(c, 1) / np.maximum(ref, 1e-06), 0, CORE_MAX), np.nan).astype(np.float32) for a, c in zip(acc, cnt)]
     return (out, np.where(ok, stop, np.nan)) if with_top else out
+CLOUD_STEPS = 16
+CLOUD_EPS = 0.3
+CLOUD_R = (150.0, 600.0)
+CLOUD_EXCESS = 0.3
+CLOUD_AT = (0.5, 1.0)
+CLOUD_MAX = 2.0
+CORE_W = 1.3
+
+def _sub_profile(prof: Profile, idx):
+    sp = object.__new__(Profile)
+    for n in ('z', 'lnp', 't', 'td'):
+        a = getattr(prof, n)
+        setattr(sp, n, np.ascontiguousarray(a.reshape(a.shape[0], -1)[:, idx][:, :, None]))
+    sp.zs = np.asarray(prof.zs).reshape(-1)[idx][:, None]
+    sp.ztop = sp.z[-1]
+    return sp
+
+def cloud_core(prof: Profile, base, depth, w_base, twidth, active):
+    shape = np.shape(base)
+    out = [np.full(shape, np.nan, np.float32) for _ in CLOUD_AT]
+    flat = lambda a: np.asarray(a, np.float32).reshape(-1)
+    ok = np.asarray(active, bool).reshape(-1) & np.isfinite(flat(base)) & (flat(base) > 0) & np.isfinite(flat(depth)) & (flat(depth) >= 100)
+    ok &= np.isfinite(flat(w_base)) & (flat(w_base) > 0.2)
+    idx = np.flatnonzero(ok)
+    if not idx.size:
+        return out
+    sp = _sub_profile(prof, idx)
+    col = lambda a: flat(a)[idx][:, None]
+    zb, D, w0 = (sp.zs + col(base), col(depth), col(w_base))
+    R = np.clip(0.5 * np.nan_to_num(col(twidth), nan=1000.0), *CLOUD_R)
+    eps = (CLOUD_EPS / R).astype(np.float32)
+    dz = (D / CLOUD_STEPS).astype(np.float32)
+    mix = np.minimum(eps * dz, 0.9)
+    te, lp0 = sp.at(zb, 't', 'lnp', raw=True)
+    tp = (te + CLOUD_EXCESS).astype(np.float32)
+    rt = mixing_ratio(tp, np.exp(lp0)).astype(np.float32)
+    w2 = (w0 * w0).astype(np.float32)
+    dead = np.zeros(w2.shape, bool)
+    seen = {}
+    for k in range(1, CLOUD_STEPS + 1):
+        z = zb + dz * k
+        te, lp, tde = sp.at(z, 't', 'lnp', 'td', raw=True)
+        p = np.exp(lp)
+        tp = cloud_mix(tp - moist_lapse(tp, p) * dz, te, tde, p, mix)
+        rs = mixing_ratio(tp, p)
+        rt = rt + mix * (mixing_ratio(np.minimum(tde, te), p) - rt)
+        b = _buoyancy(tp, rs, te, tde, p) - G * np.maximum(rt - rs, 0)
+        w2 = (w2 + 2 * b * dz) / (1 + 2 * CORE_DRAG * eps * dz)
+        dead |= w2 <= 0
+        w2 = np.where(dead, 0, w2).astype(np.float32)
+        seen[k] = np.sqrt(w2)
+    h = CLOUD_STEPS // 2
+    shares = ((seen[h - 1] + seen[h] + seen[h + 1]) / 3, (seen[CLOUD_STEPS - 1] + seen[CLOUD_STEPS]) / 2)
+    for o, s in zip(out, shares):
+        o.reshape(-1)[idx] = np.clip(s[:, 0] / w0[:, 0], 0, CLOUD_MAX)
+    return out
 EA_P = (850.0, 450.0)
 EA_FLOOR = (300.0, 1500.0)
 EA_RH_MIN = 60.0

@@ -154,7 +154,7 @@ def _ptype(get):
     wc = np.nan_to_num(get('weather_code'), nan=0)
     code = np.select([np.isin(wc, (56, 57, 66, 67)), share >= 0.8, share >= 0.2], [3, 5, 7], 1)
     return np.where(np.isfinite(get('precipitation')), code, np.nan).astype(np.float32)
-RECIPES = {'td2': (('temperature_2m', 'relative_humidity_2m'), _td2), 'ps': (('temperature_2m', 'HSURF') + tuple((f'{k}_{p}hPa' for p in PS_NEEDS for k in ('geopotential_height', 'temperature'))), _ps), 'zs': (('HSURF',), _zs), 'lsm': (('HSURF',), _lsm), 'ice': (('HSURF', 'soil_temperature_0cm'), _ice), 'sw': (('direct_radiation', 'diffuse_radiation'), lambda get: get('direct_radiation') + get('diffuse_radiation')), 'shf': (('sensible_heat_flux',), lambda get: -get('sensible_heat_flux')), 'ptype': (('precipitation', 'snowfall_water_equivalent', 'weather_code'), _ptype)}
+RECIPES = {'td2': (('temperature_2m', 'relative_humidity_2m'), _td2), 'ps': (('temperature_2m', 'HSURF') + tuple((f'{k}_{p}hPa' for p in PS_NEEDS for k in ('geopotential_height', 'temperature'))), _ps), 'zs': (('HSURF',), _zs), 'lsm': (('HSURF',), _lsm), 'ice': (('HSURF', 'soil_temperature_0cm'), _ice), 'sw': (('direct_radiation', 'diffuse_radiation'), lambda get: get('direct_radiation') + get('diffuse_radiation')), 'shf': (('sensible_heat_flux',), lambda get: -get('sensible_heat_flux')), 'lhf': (('latent_heat_flux',), lambda get: -get('latent_heat_flux')), 'ptype': (('precipitation', 'snowfall_water_equivalent', 'weather_code'), _ptype)}
 
 class Field:
 
