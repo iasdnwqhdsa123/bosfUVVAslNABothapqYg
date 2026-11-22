@@ -486,8 +486,42 @@ def rows_of(days: list[dict]) -> list[dict]:
                 own = (c.get('models') or {}).get(m) or {}
                 nr = (c.get('near') or {}).get(m) or {}
                 prof, t3 = (nr.get('prof') or {}, nr.get('t3d') or {})
-                out.append({'model': m, 'macro': d.get('macro') or common.macro_of(f.get('region')), 'region': f.get('region'), 'y': f.get('y'), 'key': f.get('key'), 'w': f.get('w', 1.0), 'g': (d.get('key'), f.get('g')), 'rate': c.get('rate'), 'air': c.get('air'), 'agl0': c.get('agl0'), 'agl1': c.get('agl1'), 'paired': bool(own), 'ws0': own.get('ws0'), 'ws': own.get('ws'), 'climb': own.get('climb'), 'ach': own.get('ach'), 'top': own.get('top'), 'solar': own.get('solar'), 'prof': prof.get('lift'), 'core': t3.get('core'), 'best': t3.get('best'), 'd3': t3.get('d'), 'near': bool(nr)})
+                out.append({'model': m, 'macro': d.get('macro') or common.macro_of(f.get('region')), 'region': f.get('region'), 'y': f.get('y'), 'day': d.get('key'), 'a': f.get('a'), 'lat': c.get('lat0'), 'lon': c.get('lon0'), 'gnd': c.get('g0'), 't0s': track.ts(c['t0']) if c.get('t0') else None, 't1s': track.ts(c['t0']) + (c.get('dur') or 0) if c.get('t0') else None, 'key': f.get('key'), 'w': f.get('w', 1.0), 'g': (d.get('key'), f.get('g')), 'rate': c.get('rate'), 'air': c.get('air'), 'agl0': c.get('agl0'), 'agl1': c.get('agl1'), 'paired': bool(own), 'ws0': own.get('ws0'), 'ws': own.get('ws'), 'climb': own.get('climb'), 'ach': own.get('ach'), 'top': own.get('top'), 'solar': own.get('solar'), 'prof': prof.get('lift'), 'core': t3.get('core'), 'best': t3.get('best'), 'd3': t3.get('d'), 'near': bool(nr)})
     return out
+LIVE_WS = {'L': 10.0, 'hold': 0.5, 'tau': 1.0, 'max': math.log(1.3), 'B': 1.5, 'H': 500.0, 'hours': 4.0}
+LIVE_TYPE = {'glider': 1.0, 'hg': 0.8, 'pg': 0.7}
+
+def live_adjust(rows: list[dict]) -> list[dict]:
+    C, groups = (LIVE_WS, defaultdict(list))
+    for r in rows:
+        r['adj'], r['adj_w'] = (None, 0.0)
+        if all((r.get(k) is not None for k in ('lat', 'lon', 't0s', 't1s'))) and (r.get('prof') or 0) > 0.05:
+            groups[r['model'], r.get('day')].append(r)
+    for g in groups.values():
+        src = [(r, max(-C['max'], min(C['max'], math.log(r['air'] / r['prof'])))) for r in g if (r.get('air') or 0) > 0.05]
+        for r in g:
+            kx, sw, swe = (111.32 * math.cos(math.radians(r['lat'])), 0.0, 0.0)
+            for o, e in src:
+                if o is r or (o.get('a') is not None and o.get('a') == r.get('a')) or o['t1s'] > r['t0s']:
+                    continue
+                h = (r['t0s'] - o['t1s']) / 3600.0
+                if h > C['hours']:
+                    continue
+                d2 = (((o['lon'] - r['lon']) * kx) ** 2 + ((o['lat'] - r['lat']) * 111.32) ** 2) / C['L'] ** 2
+                if d2 > 9:
+                    continue
+                dz = (r['gnd'] - o['gnd']) / C['H'] if r.get('gnd') is not None and o.get('gnd') is not None else 0.0
+                w = math.exp(-d2 - dz * dz) * LIVE_TYPE.get(o.get('y'), 1.0)
+                sw += w
+                swe += w * e * math.exp(-max(0.0, h - C['hold']) / C['tau'])
+            r['adj_w'] = sw
+            r['adj'] = r['prof'] * math.exp(swe / (sw + C['B'])) if sw > 0 else r['prof']
+    return rows
+
+def _abslog(rows: list[dict], key: str):
+    ps = [(abs(math.log(r['air'] / r[key])), r['w']) for r in rows if (r.get('air') or 0) > 0.05 and (r.get(key) or 0) > 0.05]
+    tw = sum((w for _, w in ps))
+    return sum((x * w for x, w in ps)) / tw if tw > 0 else None
 
 def _wmedian(xs: list[tuple[float, float]]):
     xs = sorted(xs)
@@ -544,7 +578,7 @@ COLS = [('air / W*', lambda r: r['air'], lambda r: r['ws0'], ''), ('climb / W*',
 
 def section(days: list[dict], state: dict | None=None) -> list[str]:
     cs = state_of(state) if state is not None else new_state()
-    rows = rows_of(days)
+    rows = live_adjust(rows_of(days))
     climbs = [f for d in days for f in d.get('collector') or []]
     built = {d.get('key') for d in days}
     drop = Counter()
@@ -571,6 +605,15 @@ def section(days: list[dict], state: dict | None=None) -> list[str]:
                 continue
             out.append(f"| {g} | {len(grs)} ({len({r['g'] for r in grs})}) | " + ' | '.join((cell(compare(grs, fy, fx), u) for _, fy, fx, u in COLS)) + ' |')
         out.append('')
+        lv = [r for r in pr if r.get('adj') is not None and r['adj_w'] > 0 and ((r.get('air') or 0) > 0.05)]
+        if lv:
+            out += ["The live climbs' correction, replayed (each climb's profile lift as the other aircraft's climbs over by its start would have moved it; weights: how much there was to go by, 1 a climb right beside it just before):", '', '| Weights | climbs (thermals) | air / profile | air / adjusted | off by, before → after (mean abs. log ratio) |', '|---|---|---|---|---|']
+            for name, lo, hi in (('any', 0, math.inf), ('under 0.5', 0, 0.5), ('0.5–2', 0.5, 2), ('2 and more', 2, math.inf)):
+                grs = [r for r in lv if lo < r['adj_w'] <= hi] if name != 'any' else lv
+                if grs:
+                    b, a = (_abslog(grs, 'prof'), _abslog(grs, 'adj'))
+                    out.append(f"| {name} | {len(grs)} ({len({r['g'] for r in grs})}) | {cell(compare(grs, lambda r: r['air'], lambda r: r['prof']))} | {cell(compare(grs, lambda r: r['air'], lambda r: r['adj']))} | {_fmt(b, 3)} → {_fmt(a, 3)} |")
+            out.append('')
     return out
 
 def _fmt(v, p=2):

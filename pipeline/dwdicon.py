@@ -22,8 +22,9 @@ def url(run, fh, var, kind='single-level', level=None) -> str:
     lv = '' if level is None else f'_{level}'
     return f'{BASE}/{run:%H}/{var}/icon_global_icosahedral_{kind}_{run:%Y%m%d%H}_{fh:03d}{lv}_{var.upper()}.grib2.bz2'
 
-def static_url(run, var) -> str:
-    return f'{BASE}/{run:%H}/{var}/icon_global_icosahedral_time-invariant_{run:%Y%m%d%H}_{var.upper()}.grib2.bz2'
+def static_url(run, var, level=None) -> str:
+    lv = '' if level is None else f'_{level}'
+    return f'{BASE}/{run:%H}/{var}/icon_global_icosahedral_time-invariant_{run:%Y%m%d%H}{lv}_{var.upper()}.grib2.bz2'
 
 def has_run(run, now=None) -> bool:
     return os.environ.get('ICON_DWD', '1') != '0' and (now or datetime.now(timezone.utc)) - run < KEEPS
@@ -56,9 +57,19 @@ def _ptype(a):
     return om._ptype(named.__getitem__)
 SURFACE = {'temperature_2m': ((_s('t_2m'),), None), 'td2': ((_s('td_2m'),), None), 'wind_u_component_10m': ((_s('u_10m'),), None), 'wind_v_component_10m': ((_s('v_10m'),), None), 'wind_u_component_80m': ((_model('u', 118),), None), 'wind_v_component_80m': ((_model('v', 118),), None), 'wind_gusts_10m': ((_s('vmax_10m'),), None), 'shf': ((_s('ashfl_s', AVG),), lambda a: -a[0]), 'lhf': ((_s('alhfl_s', AVG),), lambda a: -a[0]), 'sw': ((_s('aswdir_s', AVG), _s('aswdifd_s', AVG)), _sum), 'cape': ((_s('cape_ml'),), None), 'cloud_cover': ((_s('clct'),), None), 'cloud_cover_low': ((_s('clcl'),), None), 'cloud_cover_mid': ((_s('clcm'),), None), 'cloud_cover_high': ((_s('clch'),), None), 'precipitation': ((_s('tot_prec', ACC),), None), 'showers': ((_s('rain_con', ACC), _s('snow_con', ACC)), _sum), 'pressure_msl': ((_s('pmsl'),), None), 'soil_temperature_0cm': ((_soil('t_so', 0),), None), 'lsm': ((_fixed('fr_land'),), _land), 'ice': ((_s('fr_ice'),), None), 'snow_depth': ((_s('h_snow'),), None), 'freezing_level_height': ((_s('hzerocl'),), None), 'ptype': ((_s('tot_prec', ACC), _s('snow_gsp', ACC), _s('snow_con', ACC), _s('ww')), _ptype), 'soil_moisture_3_to_9cm': ((_soil('w_so', 3),), lambda a: a[0] / 60), 'convective_cloud_base': ((_s('hbas_con'),), None), 'convective_cloud_top': ((_s('htop_con'),), None), 'zs': ((_fixed('hsurf'),), None), 'ps': ((_s('ps'),), None)}
 LEVEL = {'temperature': 't', 'relative_humidity': 'relhum', 'wind_u_component': 'u', 'wind_v_component': 'v', 'geopotential_height': 'fi'}
+OWN = ' ml'
+
+def _half(level):
+    return ('time-invariant', 'hhl', level, NOW)
+
+def _mean(a):
+    return (a[0] + a[1]) / 2
 
 def recipe(key):
     name, level = key
+    if level.endswith(OWN):
+        k = int(level[:-len(OWN)])
+        return ((_half(k), _half(k + 1)), _mean) if name == 'hhl' else ((_model(name, k),), None)
     if level.endswith(' mb'):
         p = int(level[:-3])
         return ((('pressure-level', LEVEL[name], p, NOW),), (lambda a: a[0] / G) if name == 'geopotential_height' else None)
@@ -191,11 +202,12 @@ def values(msg: bytes, cells=CELLS):
 _STATIC: dict = {}
 _STATIC_LOCK = threading.Lock()
 
-def _static(run, var):
+def _static(run, var, level=None):
+    k = var if level is None else (var, level)
     with _STATIC_LOCK:
-        if var not in _STATIC:
-            _STATIC[var] = values(message(static_url(run, var)))
-        return _STATIC[var]
+        if k not in _STATIC:
+            _STATIC[k] = values(message(static_url(run, var, level)))
+        return _STATIC[k]
 
 class Store:
 
@@ -257,9 +269,9 @@ def fetch_step(run, fh, prev, keys, cache_dir=None, workers=DOWNLOADS, log=print
                 if how != NOW and prev > 0:
                     files.add((kind, var, level, prev))
     for parts, _ in recipes.values():
-        for kind, var, _, _ in parts:
+        for kind, var, level, _ in parts:
             if kind == 'time-invariant':
-                _static(run, var)
+                _static(run, var, level)
     store, where = (Store(), {})
 
     def get(f):
@@ -279,14 +291,14 @@ def fetch_step(run, fh, prev, keys, cache_dir=None, workers=DOWNLOADS, log=print
         at, n = where[f]
         return lambda: values(store.get(at, n))
 
-    def fixed(var):
-        return lambda: _STATIC[var]
+    def fixed(var, level=None):
+        return lambda: _STATIC[var if level is None else (var, level)]
     out = {}
     for k, (parts, combine) in recipes.items():
         ps = []
         for kind, var, level, how in parts:
             if kind == 'time-invariant':
-                ps.append((fixed(var), None, NOW))
+                ps.append((fixed(var, level), None, NOW))
             else:
                 before = reader((kind, var, level, prev)) if how != NOW and prev > 0 else None
                 ps.append((reader((kind, var, level, fh)), before, how))

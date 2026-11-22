@@ -534,6 +534,9 @@ def thermal_drift(zs, hth, zi, ws, u, v, t2, ps, lat2d, grid_step):
 def analyse(s, lv, levels, grid_step, lat2d, lon2d=None, valid=None):
     zs = s['zs']
     prof = P.Profile(zs, s['ps'], s['t2'], s['td2'], s['u10'], s['v10'], lv['z'], levels, lv['t'], lv['td'], lv['u'], lv['v'], s.get('uh'), s.get('vh'), s.get('hub_m', 100.0))
+    nat = lv.get('native')
+    if nat is not None:
+        prof.refine(nat['z'], nat['p'], nat['t'], nat['td'], nat.get('u'), nat.get('v'))
     if s.get('shf') is not None:
         heat = np.maximum(np.nan_to_num(s['shf'], nan=0), 0)
     else:
@@ -1160,6 +1163,12 @@ def blend_window(src, canon, m, run):
     mean = (v1 - v0) / (step * 3600) * (1000 if kind == 'accw' else 1)
     return ('win', mean.astype(np.float32), step, run + timedelta(hours=m.fh1))
 
+def native_levels(st, lon2d, rot):
+    p = st['p'] / 100
+    q = np.clip(st['q'], 1e-07, 0.1)
+    u, v = grib.earth_winds(st.get('u'), st.get('v'), lon2d[None], rot)
+    return {'z': st['z'], 'p': p, 't': st['t'] - 273.15, 'td': P.dewpoint_from_w(q / (1 - q), p), 'u': u, 'v': v}
+
 def omega_to_w(omega, t, p):
     return -omega * P.RD * (t + 273.15) / (p * 100 * P.G)
 
@@ -1358,6 +1367,10 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
     hip = {c: [get((src.level_vars[c], f'{l} mb')) for l in src.cloud_levels] for c in src.cloud_vars()}
     snd_extra = [l for l in src.snd_levels if l not in src.levels]
     sndp = {c: [get((src.level_vars[c], f'{l} mb')) for l in snd_extra] for c in src.snd_vars()} if snd_extra else {}
+    natp = {c: [get((g, f'{k}{src.native_label}')) for k in src.native] for c, g in src.native_vars.items()} if src.native_on() else {}
+    if natp and any((x[0] is None for st in natp.values() for x in st)):
+        log(f'  f{fh:03d}: its own levels not whole: the hour without them')
+        natp = {}
     rot = regrid_holder.get('rot')
     levels = np.array(use_levels, dtype=np.float32)
     if src.om_extra and 'om_idx' not in regrid_holder:
@@ -1385,6 +1398,8 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
         for a, b in (('u10', 'v10'), ('uh', 'vh')):
             s[a], s[b] = grib.earth_winds(s.get(a), s.get(b), lon2d, rot)
         lv['u'], lv['v'] = grib.earth_winds(lv.get('u'), lv.get('v'), lon2d[None], rot)
+        if natp:
+            lv['native'] = native_levels({c: np.stack([x[i] for x in st]) for c, st in natp.items()}, lon2d, rot)
         for k in ('t2', 'td2', 'tsfc'):
             if s.get(k) is not None:
                 s[k] = s[k] - 273.15

@@ -105,6 +105,42 @@ class Profile:
         self.u = uw.astype(np.float32)
         self.v = vw.astype(np.float32)
 
+    def refine(self, z, p, t, td, u=None, v=None, most=58):
+        z, p, t, td = (np.asarray(a, np.float32) for a in (z, p, t, td))
+        room = most - max(self.z.shape[0], self.zw.shape[0])
+        keep = list(range(z.shape[0]))
+        while len(keep) > max(room, 0):
+            keep = keep[:len(keep) // 2] + keep[len(keep) // 2::2] if len(keep) > 1 else []
+        if not keep:
+            return self
+        if len(keep) < z.shape[0]:
+            z, p, t, td = (z[keep], p[keep], t[keep], td[keep])
+            u, v = (None, None) if u is None or v is None else (np.asarray(u)[keep], np.asarray(v)[keep])
+        K = z.shape[0]
+        k = np.arange(K, dtype=np.float32)[:, None, None]
+        ok = np.isfinite(z) & np.isfinite(p) & np.isfinite(t) & np.isfinite(td) & (z > (self.zs + 12)[None])
+
+        def merge(zc, cols, zx, extra, base):
+            zx = np.where(ok, zx, base[None] + 0.004 * (k + 1))
+            zall = np.concatenate([zc, zx])
+            order = np.argsort(zall, axis=0, kind='stable')
+            zall = sort_levels(zall, order)
+            for j in range(1, zall.shape[0]):
+                zall[j] = np.maximum(zall[j], zall[j - 1] + 0.004)
+            return (zall.astype(np.float32), [sort_levels(np.concatenate([c, np.where(ok, e, c[:1])]), order).astype(np.float32) for c, e in zip(cols, extra)])
+        self.z, (lnp, self.t, self.td) = merge(self.z, [self.lnp, self.t, self.td], z, [np.log(np.maximum(p, 1.0)), t, np.minimum(td, t)], self.z[0])
+        for j in range(1, lnp.shape[0]):
+            lnp[j] = np.minimum(lnp[j], lnp[j - 1])
+        self.lnp = lnp
+        self.ztop = self.z[-1]
+        if u is not None and v is not None:
+            u, v = (np.asarray(u, np.float32), np.asarray(v, np.float32))
+            ok = ok & np.isfinite(u) & np.isfinite(v)
+            self.zw, (self.u, self.v) = merge(self.zw, [self.u, self.v], z, [u, v], self.zw[0])
+        if max(self.z.shape[0], self.zw.shape[0]) > most:
+            self.native = False
+        return self
+
     def _weights(self, zq, z):
         zq = np.broadcast_to(zq, z.shape[1:])
         hi = level_positions(np.clip(levels_below(z, zq), 1, z.shape[0] - 1))
