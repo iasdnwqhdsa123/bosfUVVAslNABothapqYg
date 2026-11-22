@@ -539,6 +539,7 @@ def cell(s: dict, unit: str='') -> str:
     r = '–' if s['ratio'] is None else f"{s['ratio']:.2f}"
     p = '–' if s['rho'] is None else f"{s['rho']:.2f}"
     return f'{b} / {r} / {p}'
+HEIGHT_BINS = [(0, 0.35), (0.35, 0.55), (0.55, 0.75), (0.75, 0.95), (0.95, 9)]
 COLS = [('air / W*', lambda r: r['air'], lambda r: r['ws0'], ''), ('climb / W*', lambda r: r['rate'], lambda r: r['ws0'], ''), ('air / profile', lambda r: r['air'], lambda r: r['prof'], ''), ('air / 3D nearest', lambda r: r['air'], lambda r: r['core'], ''), ('air / 3D best near', lambda r: r['air'], lambda r: r['best'], ''), ("climb / site's climb", lambda r: r['rate'], lambda r: r['climb'], ''), ('top AGL / usable top (m)', lambda r: r['agl1'], lambda r: r['top'], 'm')]
 
 def section(days: list[dict], state: dict | None=None) -> list[str]:
@@ -562,6 +563,9 @@ def section(days: list[dict], state: dict | None=None) -> list[str]:
         out += [f'### {common.model_label(m)}', '', f"{len(rs)} climbs; with the forecast {len(pr)} (unpaired: out of the model's hours, or its box failed), with the profile {sum((r['prof'] is not None for r in rs))}, with a 3D thermal {sum((r['core'] is not None for r in rs))} (median distance {_fmt(_wmedian([(r['d3'], r['w']) for r in rs if r['d3'] is not None]), 2)} km).", '', '| Region | climbs (thermals) | ' + ' | '.join((h for h, *_ in COLS)) + ' |', '|---|---|' + '---|' * len(COLS)]
         groups = [('all', pr)] + sorted(((g, [r for r in pr if r['region'] == g]) for g in {r['region'] for r in pr}), key=lambda kv: kv[0])
         groups += sorted(((f'kind {g}', [r for r in pr if r['y'] == g]) for g in {r['y'] for r in pr} if len({r['y'] for r in pr}) > 1), key=lambda kv: kv[0])
+        frac = lambda r: (r['agl0'] + r['agl1']) / 2 / r['top'] if r.get('agl0') is not None and r.get('agl1') is not None and ((r.get('top') or 0) > 100) else None
+        groups += [(f'mid-climb at {a:g}–{b:g} of the usable top', [r for r in pr if frac(r) is not None and a <= frac(r) < b]) for a, b in HEIGHT_BINS]
+        groups += [('topping out over the usable top', [r for r in pr if r.get('agl1') is not None and (r.get('top') or 0) > 100 and (r['agl1'] > r['top'])])]
         for g, grs in groups:
             if not grs:
                 continue
