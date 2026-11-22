@@ -12,6 +12,7 @@ BROKEN, OVERCAST = (56.25, 85.0)
 CU_MIN_WS = 0.5
 FEW_CU = 25.0
 SC_SPREAD = 75.0
+SC_DEEP = 1000.0
 ACCAS_MIN = 25.0
 THICK_SUN, THIN_SUN = (0.45, 0.6)
 CONV_DBZ, CONV_DBZ_RAIN, CONV_RAIN, SHOWERS_SHARE = (45.0, (40.0, 2.5), 6.0, 0.5)
@@ -212,6 +213,7 @@ def classify(v):
     cls = np.where(cu_shown, cu, cls)
     cls = np.where((lo >= BROKEN) & ((cu <= 2) | (cu <= 3) & (lo >= SC_SPREAD)), st_sc, cls)
     cls = np.where((lo >= OVERCAST) & ~(cu >= 4), st_sc, cls)
+    cls = np.where((lo >= BROKEN) & (cu >= 2) & (np.nan_to_num(d, nan=0.0) >= SC_DEEP), cu, cls)
     cls = np.where(fog, FOG, cls)
     cls = np.where(cu >= CB, CB, cls)
     cls = np.where(np.isfinite(score), cls, np.nan)
