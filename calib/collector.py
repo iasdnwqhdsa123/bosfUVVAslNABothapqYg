@@ -20,6 +20,8 @@ import common
 import track
 TYPES = ('glider', 'hg', 'pg')
 FEEDS_OUT = ('skylines',)
+NOT_CLIMBS = ('f', 'x', 'p')
+KEEP_KINDS = ('c', 'f')
 GAGGLE_S, GAGGLE_M = (15 * 60, 600.0)
 RATE_MAX = 10.0
 BELOW_M = -150.0
@@ -112,7 +114,7 @@ def slim(text: bytes) -> tuple[list[str], Counter]:
             cnt['unreadable'] += 1
             continue
         cnt[f"k_{r.get('k')}"] += 1
-        if r.get('k') == 'c':
+        if r.get('k') in KEEP_KINDS:
             keep.append(json.dumps(r, separators=(',', ':')))
     return (keep, cnt)
 
@@ -132,8 +134,9 @@ def pull(url: str | None, secret: str | None, out: str, fetched: dict, today: da
         text = p.day(d, n)
         keep, cnt = slim(text)
         write_lines(os.path.join(out, 'collector', 'raw', f'{d}.ndjson.gz'), keep)
-        got[d] = {'bytes': len(text), 'records': sum((v for k, v in cnt.items() if k.startswith('k_'))), 'circled': len(keep), 'at': now_stamp()}
-        common.note(f"collector: {d}: {got[d]['records']} records, {len(keep)} circled")
+        other = {k: cnt[f'k_{k}'] for k in NOT_CLIMBS if cnt[f'k_{k}']}
+        got[d] = {'bytes': len(text), 'records': sum((v for k, v in cnt.items() if k.startswith('k_') and k[2:] not in NOT_CLIMBS)), 'circled': cnt['k_c'], 'at': now_stamp(), **({'other': other} if other else {})}
+        common.note(f"collector: {d}: {got[d]['records']} records, {got[d]['circled']} circled" + ''.join((f', {v} {k}' for k, v in sorted(other.items()))))
     common.write_json(os.path.join(out, 'collector', 'pulled.json'), {'days': got, 'listed': {x['day']: x.get('bytes') for x in days}, 'requests': p.used})
     return got
 
@@ -155,6 +158,8 @@ def convert(records: list[dict], ground, drop=None, want=None) -> list[dict]:
     count = (lambda k, why: drop[k].__setitem__(why, drop[k][why] + 1)) if isinstance(drop, defaultdict) else lambda k, why: drop.__setitem__(why, drop[why] + 1)
     out = []
     for r in records:
+        if r.get('k') in NOT_CLIMBS:
+            continue
         pk = place_key(r)
         if pk is None:
             count(None, "no place, or outside the job's areas")
@@ -284,7 +289,7 @@ def make_items(raw: dict, ground, only: set) -> dict:
     return out
 
 def keys_of(raw: dict) -> set:
-    return {pk[0] for p in raw.values() for r in read_records(p) for pk in [place_key(r)] if pk}
+    return {pk[0] for p in raw.values() for r in read_records(p) if r.get('k') not in NOT_CLIMBS for pk in [place_key(r)] if pk}
 
 def check_overlap(state: dict, keys, pending=()) -> None:
     done, seed, pend = (state.get('done') or {}, set(state.get('seed_days') or []), set(pending))
