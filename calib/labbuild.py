@@ -347,6 +347,7 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
             if arrays is None:
                 return done('retry', 'hardstop')
             row['bbox'] = json.loads(str(arrays['meta']))['bbox']
+            catalog.keep_stations(lk, stations(), str(arrays['stations_v']))
             return _put(arrays)
         items = [f for f in load_items(lk, entry.get('raw') or []) if (f.get('kind') == 'collector') == (u['kind'] == 'collector')]
         B = next((b for b in dayb.boxes(items) if b['region'] == u['box']), None)

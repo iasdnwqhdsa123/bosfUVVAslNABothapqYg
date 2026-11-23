@@ -16,6 +16,7 @@ SNAPS = 'derived/catalog/'
 PINS = 'derived/catalog/pins/'
 RAW_WEGLIDE = 'raw/weglide/'
 RAW_INDEX = 'derived/rawindex/'
+STATION_LISTS = 'derived/stations/'
 KINDS = ('flight', 'collector')
 STCAST = 'stcast'
 STCAST_RUN_H = (0, 12)
@@ -152,6 +153,41 @@ def load_plan(lake, pid: str) -> dict:
     if not _PLAN_ID.fullmatch(pid if isinstance(pid, str) else ''):
         raise UnitError('plan id')
     return check_plan(decode(lake.get(f'{PLANS}{pid}.lenc')), pid)
+
+def stations_version(stations: list) -> str:
+    return hashlib.sha256(json.dumps(stations, separators=(',', ':')).encode()).hexdigest()[:12]
+
+def stations_key(v: str) -> str:
+    if not isinstance(v, str) or not re.fullmatch('[0-9a-f]{12}', v):
+        raise UnitError('stations version')
+    return f'{STATION_LISTS}{v}.lenc'
+
+def keep_stations(lake, stations: list, v: str) -> str:
+    if stations_version(stations) != v:
+        raise UnitError('stations')
+    key = stations_key(v)
+    kept = vars(lake).setdefault('_kept_lists', set())
+    if key not in kept:
+        lake.put(key, json.dumps({'stations': stations}, separators=(',', ':')).encode())
+        kept.add(key)
+    return key
+
+def stations_of(lake, v: str, fallback: str | None=STATIONS) -> list:
+    import lake as lakem
+    try:
+        sts = json.loads(lake.get(stations_key(v)).decode('utf-8'))['stations']
+    except lakem.LakeMissing:
+        sts = None
+        if fallback and os.path.exists(fallback):
+            with open(fallback) as f:
+                here = json.load(f)['stations']
+            if stations_version(here) == v:
+                sts = here
+        if sts is None:
+            raise
+    if stations_version(sts) != v:
+        raise UnitError('stations')
+    return sts
 
 def _once(lake, key_of, plain: bytes) -> str:
     for n in range(1, ATTEMPTS + 1):
