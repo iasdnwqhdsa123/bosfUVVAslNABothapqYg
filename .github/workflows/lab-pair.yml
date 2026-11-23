@@ -24,12 +24,12 @@ jobs:
     timeout-minutes: 75
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
       OPS_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-      OPS_S3_BUCKET: ${{ secrets.OPS_S3_BUCKET }}
+      OPS_S3_BUCKET: ${{ secrets.OPS_S3_BUCKET || 'ops' }}
       OPS_RO_KEY: ${{ secrets.OPS_RO_KEY }}
       OPS_RO_SECRET: ${{ secrets.OPS_RO_SECRET }}
       DAYS: ${{ github.event_name == 'schedule' && '' || inputs.days }}

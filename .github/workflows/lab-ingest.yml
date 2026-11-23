@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 45
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
       WEGLIDE_ON: "0"

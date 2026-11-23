@@ -46,7 +46,7 @@ jobs:
           WHAT: ${{ steps.what.outputs.what }}
           CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
           LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+          LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
           LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
           LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
         run: |
@@ -91,7 +91,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
           LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+          LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
           LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
           LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
         run: |
