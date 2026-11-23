@@ -1,0 +1,244 @@
+name: Lab build
+on:
+  workflow_dispatch:
+    inputs:
+      sweep:
+        description: "The sweep (its start time, YYYYMMDDTHHMMSSZ)"
+        type: string
+        required: true
+      wave:
+        description: "The wave"
+        type: string
+        default: "0"
+      on_change:
+        description: "A code push in the middle: as the sweep was started, finish on the old code, or restart"
+        type: choice
+        options: [as started, finish, restart]
+        default: as started
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: lab
+  cancel-in-progress: false
+env:
+  CONTRAILS: "0"
+  CALIB_STCAST: ${{ vars.CALIB_STCAST || 'on' }}
+  PAUSE_FILE: lab.paused
+  WAIT_S: "600"
+  WAIT_FOR_S: "2700"
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+      chunks: ${{ steps.plan.outputs.chunks }}
+      plan: ${{ steps.plan.outputs.plan }}
+      wave: ${{ steps.args.outputs.wave }}
+      sweep: ${{ steps.args.outputs.sweep }}
+      code_sha: ${{ steps.status.outputs.code_sha }}
+      made: ${{ steps.status.outputs.made }}
+      why: ${{ steps.status.outputs.why }}
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - id: check
+        run: python3 calib/labjobs.py check
+      - id: args
+        if: steps.check.outputs.ready == 'yes'
+        env:
+          IN_SWEEP: ${{ inputs.sweep }}
+          IN_WAVE: ${{ inputs.wave }}
+        run: |
+          [[ "$IN_SWEEP" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "::error::a sweep is its start time (YYYYMMDDTHHMMSSZ)"; exit 1; }
+          [[ "$IN_WAVE" =~ ^[0-9]{1,5}$ ]] || { echo "::error::a wave is a number"; exit 1; }
+          echo "sweep $IN_SWEEP, wave $IN_WAVE"
+          echo "sweep=$IN_SWEEP" >> "$GITHUB_OUTPUT"
+          echo "wave=$IN_WAVE" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.ready == 'yes'
+      - uses: actions/setup-python@v7
+        if: steps.check.outputs.ready == 'yes'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - if: steps.check.outputs.ready == 'yes'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - id: plan
+        if: steps.check.outputs.ready == 'yes'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SWEEP: ${{ steps.args.outputs.sweep }}
+          WAVE: ${{ steps.args.outputs.wave }}
+          ON_CHANGE: ${{ inputs.on_change }}
+        run: |
+          oc=()
+          case "$ON_CHANGE" in finish|restart) oc=(--on-change "$ON_CHANGE");; esac
+          python3 calib/labplan.py plan --sweep "$SWEEP" --wave "$WAVE" "${oc[@]}" --pause-file "$PAUSE_FILE" \
+            --code-sha "$(git rev-parse HEAD)" --status /tmp/status.json
+      - id: status
+        if: steps.check.outputs.ready == 'yes'
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          s = json.load(open("/tmp/status.json"))
+          print(f"code_sha={s.get('code_sha') or ''}")
+          print(f"made={s.get('made') or ''}")
+          print(f"why={s.get('why') or ''}")
+          PY
+  build:
+    needs: plan
+    if: needs.plan.outputs.ready == 'yes' && needs.plan.outputs.chunks != '' && needs.plan.outputs.chunks != '[]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ${{ fromJSON(needs.plan.outputs.chunks) }}
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      PLAN: ${{ needs.plan.outputs.plan }}
+      CHUNK: ${{ matrix.chunk }}
+    steps:
+      - id: start
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.code_sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Chunk
+        env:
+          STARTED: ${{ steps.start.outputs.started }}
+        run: |
+          mkdir -p /tmp/logs
+          exec python3 calib/labbuild.py chunk --plan "$PLAN" --chunk "$CHUNK" --work /tmp/work --started "$STARTED" \
+            2>> /tmp/logs/stderr.log
+      - name: Pack the log
+        if: always()
+        run: |
+          [ -s /tmp/logs/stderr.log ] || { echo "no log"; exit 0; }
+          mkdir -p /tmp/out
+          python3 calib/state.py encrypt /tmp/logs/stderr.log /tmp/out/lab-log.enc
+          echo "the chunk's log, encrypted"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: lab-log-${{ matrix.chunk }}-${{ github.run_attempt }}
+          path: /tmp/out/lab-log.enc
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: ignore
+  next:
+    needs: [plan, build]
+    if: >-
+      ${{ always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.ready == 'yes'
+      && (needs.plan.outputs.why == '' || needs.plan.outputs.why == 'noroom' || needs.plan.outputs.why == 'nostamps') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+      - id: check
+        run: python3 calib/labjobs.py check
+      - uses: actions/setup-python@v7
+        if: steps.check.outputs.ready == 'yes'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - if: steps.check.outputs.ready == 'yes'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Plan the next wave
+        id: next
+        if: steps.check.outputs.ready == 'yes'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SWEEP: ${{ needs.plan.outputs.sweep }}
+          WAVE: ${{ needs.plan.outputs.wave }}
+          MADE: ${{ needs.plan.outputs.made }}
+        run: |
+          w="$(env -u GITHUB_OUTPUT python3 calib/labjobs.py after --made "$MADE" --wave "$WAVE" | sed -n 's/^wave=//p')"
+          [[ "$w" =~ ^[0-9]+$ ]] || { echo "::error::no wave to plan"; exit 1; }
+          n=0
+          t0="$(date +%s)"
+          while :; do
+            t1="$(date +%s)"
+            env -u GITHUB_OUTPUT python3 calib/labplan.py plan --sweep "$SWEEP" --wave "$w" --pause-file "$PAUSE_FILE" \
+              --code-sha "$(git rev-parse HEAD)" --status /tmp/status.json > /tmp/plan.out
+            grep -v '^\(plan\|chunks\|wave\|more\)=' /tmp/plan.out || true
+            env -u GITHUB_OUTPUT python3 calib/labjobs.py next --status /tmp/status.json > /tmp/next.out
+            grep '^lab:' /tmp/next.out || true
+            act="$(sed -n 's/^action=//p' /tmp/next.out)"
+            now="$(date +%s)"
+            if [ "$act" != wait ] || [ $((now - t0 + WAIT_S + now - t1)) -ge "$WAIT_FOR_S" ]; then break; fi
+            n=$((n + 1)); echo "no room beside the forecast: planning again in $((WAIT_S / 60)) min ($n)"
+            sleep "$WAIT_S"
+          done
+          [ "$act" = wait ] && act=dispatch  # (still no room: a run of its own plans this wave again, and waits again)
+          echo "action=$act" >> "$GITHUB_OUTPUT"
+          echo "wave=$w" >> "$GITHUB_OUTPUT"
+      - name: Dispatch
+        if: steps.next.outputs.action == 'dispatch' || steps.next.outputs.action == 'fingerprint'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACT: ${{ steps.next.outputs.action }}
+          SWEEP: ${{ needs.plan.outputs.sweep }}
+          WAVE: ${{ steps.next.outputs.wave }}
+          ON_CHANGE: ${{ inputs.on_change }}
+        run: |
+          ids="$(for s in pending queued waiting requested; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$s&per_page=50" \
+              --jq '.workflow_runs[] | select(.path == ".github/workflows/lab-build.yml" or .path == ".github/workflows/lab-fingerprint.yml") | .id'
+          done | sort -u)"
+          n=0
+          for id in $ids; do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            st="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .status)"
+            case "$st" in pending|queued|waiting|requested) n=$((n + 1));; esac
+          done
+          if [ "$n" -gt 0 ]; then echo "a lab run waits already: it goes first (a fingerprint run's relay starts the wave after it)"; exit 0; fi
+          if [ "$ACT" = fingerprint ]; then
+            oc=()
+            case "$ON_CHANGE" in finish|restart) oc=(-f on_change="$ON_CHANGE");; esac
+            gh workflow run lab-fingerprint.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f then=resume -f sweep="$SWEEP" "${oc[@]}"
+            echo "no code has stamps: lab-fingerprint asked for (it resumes sweep $SWEEP)"
+          else
+            gh workflow run lab-build.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f sweep="$SWEEP" -f wave="$WAVE"
+            echo "wave $WAVE asked for"
+          fi

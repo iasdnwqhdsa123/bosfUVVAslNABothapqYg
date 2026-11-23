@@ -8,7 +8,9 @@ import hashlib
 import hmac
 import http.client
 import os
+import re
 import secrets
+import shutil
 import socket
 import tempfile
 import time
@@ -28,6 +30,10 @@ NAME_LABEL = b'lake names v1'
 TRIES = 4
 WAIT_S = (1, 2, 4)
 TIMEOUT_S = 120
+PART_BYTES = 64 << 20
+MULTIPART_AT = PART_BYTES
+MAX_PARTS = 10000
+CHUNK = 1 << 20
 
 class LakeError(Exception):
     pass
@@ -142,13 +148,23 @@ class LocalStore:
         return os.path.join(self.root, *check_key(object_key).split('/'))
 
     def put_if_absent(self, object_key: str, data: bytes) -> bool:
+        return self._link_in(object_key, lambda f: f.write(data))
+
+    def put_file_if_absent(self, object_key: str, path: str) -> bool:
+
+        def fill(f):
+            with open(path, 'rb') as src:
+                shutil.copyfileobj(src, f, CHUNK)
+        return self._link_in(object_key, fill)
+
+    def _link_in(self, object_key: str, fill) -> bool:
         dest = self._path(object_key)
         tmp = None
         try:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest), prefix='.put-')
             with os.fdopen(fd, 'wb') as f:
-                f.write(data)
+                fill(f)
                 f.flush()
                 os.fsync(f.fileno())
             try:
@@ -178,6 +194,35 @@ class LocalStore:
     def exists(self, object_key: str) -> bool:
         return os.path.isfile(self._path(object_key))
 
+    def digest(self, object_key: str) -> tuple[str, int] | None:
+        path = self._path(object_key)
+        try:
+            return file_digest(path)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise LakeError(f'lake: a local read failed ({_errno(e)})') from None
+
+    def get_file(self, object_key: str, path: str) -> tuple[str, int] | None:
+        src = self._path(object_key)
+        try:
+            f = open(src, 'rb')
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise LakeError(f'lake: a local read failed ({_errno(e)})') from None
+        sink = _Sink(path)
+        try:
+            with f:
+                sink.start()
+                for b in iter(lambda: f.read(CHUNK), b''):
+                    sink.write(b)
+        except OSError as e:
+            raise LakeError(f'lake: a local copy failed ({_errno(e)})') from None
+        finally:
+            sink.close()
+        return sink.result()
+
     def list(self, prefix: str='') -> list[str]:
         check_prefix(prefix)
         out = []
@@ -191,11 +236,54 @@ class LocalStore:
                     out.append(k)
         return sorted(out)
 
+    def sizes(self, prefix: str='') -> dict[str, int]:
+        out = {}
+        for k in self.list(prefix):
+            try:
+                out[k] = os.path.getsize(self._path(k))
+            except OSError:
+                continue
+        return out
+
 def _errno(e: OSError) -> str:
     return errno.errorcode.get(e.errno or 0, type(e).__name__)
 
 def _sha_hex(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
+
+def file_digest(path: str) -> tuple[str, int]:
+    h, n = (hashlib.sha256(), 0)
+    with open(path, 'rb') as f:
+        for b in iter(lambda: f.read(CHUNK), b''):
+            h.update(b)
+            n += len(b)
+    return (h.hexdigest(), n)
+
+class _Sink:
+
+    def __init__(self, path: str | None=None):
+        self.path, self.f, self.h, self.n = (path, None, hashlib.sha256(), 0)
+
+    def start(self) -> None:
+        self.h, self.n = (hashlib.sha256(), 0)
+        if self.path:
+            if self.f:
+                self.f.close()
+            self.f = open(self.path, 'wb')
+
+    def write(self, b: bytes) -> None:
+        self.h.update(b)
+        self.n += len(b)
+        if self.f:
+            self.f.write(b)
+
+    def close(self) -> None:
+        if self.f:
+            self.f.close()
+            self.f = None
+
+    def result(self) -> tuple[str, int]:
+        return (self.h.hexdigest(), self.n)
 
 def _hmac(key: bytes, msg: str) -> bytes:
     return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
@@ -260,6 +348,10 @@ class S3Store:
         return self._endpoint + path + ('?' + q if q else '')
 
     def _call(self, method: str, url: str, body: bytes=b'', headers: dict | None=None, ok=(200,), final=()) -> tuple[int, bytes]:
+        status, data, _ = self._request(method, url, body, headers, ok, final)
+        return (status, data)
+
+    def _request(self, method: str, url: str, body: bytes=b'', headers: dict | None=None, ok=(200,), final=()) -> tuple[int, bytes, dict]:
         sha = _sha_hex(body)
         last = 'no answer'
         for i in range(TRIES):
@@ -271,11 +363,11 @@ class S3Store:
             if body:
                 hs['content-length'] = str(len(body))
             try:
-                req = urllib.request.Request(url, data=body if method == 'PUT' else None, method=method, headers=hs)
+                req = urllib.request.Request(url, data=body if method in ('PUT', 'POST') else None, method=method, headers=hs)
                 with self._open(req, timeout=TIMEOUT_S) as r:
-                    status, data = (r.status, r.read())
+                    status, data, rh = (r.status, r.read(), _headers(r))
             except urllib.error.HTTPError as e:
-                status = e.code
+                status, rh = (e.code, _headers(e))
                 try:
                     data = e.read()
                 except Exception:
@@ -288,7 +380,7 @@ class S3Store:
             except Exception as e:
                 raise LakeError(f'lake: {method} failed ({type(e).__name__})') from None
             if status in ok or status in final:
-                return (status, data)
+                return (status, data, rh)
             if status == 429 or status >= 500:
                 last = f'HTTP {status}'
                 continue
@@ -296,6 +388,9 @@ class S3Store:
         raise LakeError(f'lake: {method} failed after {TRIES} tries ({last})')
 
     def put_if_absent(self, object_key: str, data: bytes) -> bool:
+        if len(data) > MULTIPART_AT:
+            view = memoryview(data)
+            return self._put_parts(object_key, len(data), lambda off, n: bytes(view[off:off + n]))
         for i in range(TRIES):
             if i:
                 self.retries += 1
@@ -307,17 +402,141 @@ class S3Store:
                 return False
         raise LakeError(f'lake: PUT met a conflict that did not clear after {TRIES} tries (HTTP 409)')
 
+    def put_file_if_absent(self, object_key: str, path: str) -> bool:
+        try:
+            size = os.path.getsize(path)
+            if size <= MULTIPART_AT:
+                with open(path, 'rb') as f:
+                    data = f.read()
+                return self.put_if_absent(object_key, data)
+            with open(path, 'rb') as f:
+
+                def read(off: int, n: int) -> bytes:
+                    f.seek(off)
+                    return f.read(n)
+                return self._put_parts(object_key, size, read)
+        except OSError as e:
+            raise LakeError(f'lake: a local read failed ({_errno(e)})') from None
+
+    def _put_parts(self, object_key: str, size: int, read) -> bool:
+        n = -(-size // PART_BYTES)
+        if n > MAX_PARTS:
+            raise LakeError('lake: an object is too large for one upload in parts')
+        if self.exists(object_key):
+            return False
+        _, data = self._call('POST', self._url(object_key, {'uploads': ''}), b'', {'Content-Type': 'application/octet-stream'})
+        upload = _xml_find(data, 'UploadId')
+        if not upload:
+            raise LakeError('lake: an upload in parts did not start (no upload id)')
+        tags = []
+        for i in range(n):
+            off = i * PART_BYTES
+            want = min(PART_BYTES, size - off)
+            body = read(off, want)
+            if len(body) != want:
+                raise LakeError('lake: a file changed while it was sent')
+            _, _, h = self._request('PUT', self._url(object_key, {'partNumber': str(i + 1), 'uploadId': upload}), body, {'Content-Type': 'application/octet-stream'})
+            del body
+            if not h.get('etag'):
+                raise LakeError('lake: a part was taken without an ETag')
+            tags.append(h['etag'])
+        done = ('<CompleteMultipartUpload>' + ''.join((f'<Part><PartNumber>{i + 1}</PartNumber><ETag>{_xml_escape(t)}</ETag></Part>' for i, t in enumerate(tags))) + '</CompleteMultipartUpload>').encode()
+        url = self._url(object_key, {'uploadId': upload})
+        for i in range(TRIES):
+            if i:
+                self.retries += 1
+                self._sleep(WAIT_S[min(i - 1, len(WAIT_S) - 1)])
+            status, data = self._call('POST', url, done, {'If-None-Match': '*', 'Content-Type': 'application/xml'}, final=(404, 409, 412))
+            if status == 200:
+                err = _xml_error(data)
+                if err is None:
+                    return True
+                if err in ('InternalError', 'SlowDown', 'ServiceUnavailable'):
+                    continue
+                raise LakeError(f'lake: an upload in parts was refused ({err})')
+            if status == 412:
+                return False
+            if status == 404:
+                if self.exists(object_key):
+                    return False
+                raise LakeError('lake: an upload in parts was lost (HTTP 404)')
+            if self.exists(object_key):
+                return False
+        raise LakeError(f'lake: completing an upload in parts did not succeed after {TRIES} tries')
+
     def get(self, object_key: str) -> bytes | None:
         status, data = self._call('GET', self._url(object_key), final=(404,))
         return None if status == 404 else data
+
+    def digest(self, object_key: str) -> tuple[str, int] | None:
+        sink = _Sink()
+        return sink.result() if self._stream(object_key, sink) else None
+
+    def get_file(self, object_key: str, path: str) -> tuple[str, int] | None:
+        sink = _Sink(path)
+        try:
+            found = self._stream(object_key, sink)
+        finally:
+            sink.close()
+        return sink.result() if found else None
+
+    def _stream(self, object_key: str, sink: '_Sink') -> bool:
+        url = self._url(object_key)
+        last = 'no answer'
+        for i in range(TRIES):
+            if i:
+                self.retries += 1
+                self._sleep(WAIT_S[min(i - 1, len(WAIT_S) - 1)])
+            self.calls += 1
+            hs = sign_v4('GET', url, {}, _sha_hex(b''), self._key_id, self._secret, self._region, self._clock())
+            try:
+                sink.start()
+            except OSError as e:
+                raise LakeError(f'lake: a local write failed ({_errno(e)})') from None
+            try:
+                req = urllib.request.Request(url, method='GET', headers=hs)
+                with self._open(req, timeout=TIMEOUT_S) as r:
+                    want = _headers(r).get('content-length', '')
+                    for b in iter(lambda: r.read(CHUNK), b''):
+                        sink.write(b)
+                    if want.isdigit() and sink.n != int(want):
+                        raise http.client.IncompleteRead(b'', int(want) - sink.n)
+                return True
+            except urllib.error.HTTPError as e:
+                status = e.code
+                e.close()
+                if status == 404:
+                    return False
+                if status == 429 or status >= 500:
+                    last = f'HTTP {status}'
+                    continue
+                raise LakeError(f'lake: GET refused (HTTP {status})') from None
+            except _TRANSIENT as e:
+                last = type(e).__name__
+                continue
+            except Exception as e:
+                raise LakeError(f'lake: GET failed ({type(e).__name__})') from None
+        raise LakeError(f'lake: GET failed after {TRIES} tries ({last})')
+
+    def get_tagged(self, object_key: str) -> tuple[bytes, str] | None:
+        status, data, h = self._request('GET', self._url(object_key), final=(404,))
+        return None if status == 404 else (data, h.get('etag', ''))
+
+    def put_over(self, object_key: str, data: bytes, etag: str | None) -> bool:
+        cond = {'If-Match': etag} if etag else {'If-None-Match': '*'}
+        status, _ = self._call('PUT', self._url(object_key), bytes(data), {**cond, 'Content-Type': 'application/json'}, ok=(200, 201, 204), final=(409, 412))
+        return status not in (409, 412)
 
     def exists(self, object_key: str) -> bool:
         status, _ = self._call('HEAD', self._url(object_key), final=(404,))
         return status != 404
 
     def list(self, prefix: str='') -> list[str]:
+        return sorted(self.sizes(prefix))
+
+    def sizes(self, prefix: str='') -> dict[str, int]:
         check_prefix(prefix)
-        out, token = ([], None)
+        out, token = ({}, None)
         while True:
             q = {'list-type': '2', 'prefix': prefix}
             if token:
@@ -328,12 +547,48 @@ class S3Store:
             except ET.ParseError:
                 raise LakeError('lake: a listing could not be read') from None
             ns = _S3NS if root.tag.startswith(_S3NS) else ''
-            out += [c.findtext(f'{ns}Key') for c in root.findall(f'{ns}Contents')]
+            for c in root.findall(f'{ns}Contents'):
+                k = c.findtext(f'{ns}Key')
+                if k:
+                    try:
+                        out[k] = int(c.findtext(f'{ns}Size') or -1)
+                    except ValueError:
+                        out[k] = -1
             if (root.findtext(f'{ns}IsTruncated') or '').lower() != 'true':
-                return sorted((k for k in out if k))
+                return out
             token = root.findtext(f'{ns}NextContinuationToken')
             if not token:
                 raise LakeError('lake: a truncated listing without a continuation token')
+
+def _headers(r) -> dict:
+    h = getattr(r, 'headers', None)
+    try:
+        return {str(k).lower(): str(v) for k, v in h.items()} if h else {}
+    except AttributeError:
+        return {}
+
+def _xml_root(data: bytes):
+    try:
+        root = ET.fromstring(data.lstrip())
+    except ET.ParseError:
+        return (None, '')
+    return (root, root.tag[:root.tag.index('}') + 1] if root.tag.startswith('{') else '')
+
+def _xml_find(data: bytes, name: str) -> str | None:
+    root, ns = _xml_root(data)
+    return None if root is None else root.findtext(f'{ns}{name}')
+
+def _xml_error(data: bytes) -> str | None:
+    root, ns = _xml_root(data)
+    if root is None:
+        return 'an unreadable answer'
+    if root.tag != f'{ns}Error':
+        return None
+    code = root.findtext(f'{ns}Code') or ''
+    return code if re.fullmatch('[A-Za-z]{1,40}', code) else 'an error'
+
+def _xml_escape(s: str) -> str:
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
@@ -367,7 +622,7 @@ class Lake:
         if stored is None:
             raise LakeError('lake: an object reported as existing could not be read')
         same = hmac.compare_digest(unseal(stored, object_key, self.keys), bytes(plain))
-        return self._exists(same, stored, strict)
+        return self._exists(same, _sha_hex(stored), len(stored), strict)
 
     def put_plain(self, object_key: str, data: bytes, strict: bool=True) -> PutResult:
         if self.store.put_if_absent(object_key, bytes(data)):
@@ -376,13 +631,27 @@ class Lake:
         stored = self.store.get(object_key)
         if stored is None:
             raise LakeError('lake: an object reported as existing could not be read')
-        return self._exists(hmac.compare_digest(stored, bytes(data)), stored, strict)
+        return self._exists(hmac.compare_digest(stored, bytes(data)), _sha_hex(stored), len(stored), strict)
 
-    def _exists(self, same: bool, stored: bytes, strict: bool) -> PutResult:
+    def put_plain_file(self, object_key: str, path: str, strict: bool=True) -> PutResult:
+        check_key(object_key)
+        try:
+            want, n = file_digest(path)
+        except OSError as e:
+            raise LakeError(f'lake: a local read failed ({_errno(e)})') from None
+        if self.store.put_file_if_absent(object_key, path):
+            self._n('written')
+            return PutResult('written', want, n)
+        got = self.store.digest(object_key)
+        if got is None:
+            raise LakeError('lake: an object reported as existing could not be read')
+        return self._exists(hmac.compare_digest(got[0], want), got[0], got[1], strict)
+
+    def _exists(self, same: bool, sha256: str, n: int, strict: bool) -> PutResult:
         self._n('same' if same else 'differs')
         if not same and strict:
             raise LakeError('lake: an object exists with other contents')
-        return PutResult('same' if same else 'differs', _sha_hex(stored), len(stored))
+        return PutResult('same' if same else 'differs', sha256, n)
 
     def get(self, object_key: str) -> bytes:
         blob = self.store.get(object_key)
@@ -397,6 +666,20 @@ class Lake:
             raise LakeMissing('lake: an object is missing')
         self._n('read')
         return blob
+
+    def digest_plain(self, object_key: str) -> tuple[str, int]:
+        got = self.store.digest(check_key(object_key))
+        if got is None:
+            raise LakeMissing('lake: an object is missing')
+        self._n('read')
+        return got
+
+    def get_plain_file(self, object_key: str, path: str) -> tuple[str, int]:
+        got = self.store.get_file(check_key(object_key), path)
+        if got is None:
+            raise LakeMissing('lake: an object is missing')
+        self._n('read')
+        return got
 
     def exists(self, object_key: str) -> bool:
         return self.store.exists(object_key)

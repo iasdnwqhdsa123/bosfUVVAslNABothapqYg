@@ -303,30 +303,37 @@ def parse_reports(text, ids, elev):
         best[i, hr] = off
         out[i][hr] = parse_metar(r, elev[i])
     return out
+IEM_ASOS = 'https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py'
+IEM_DATA = ('tmpf', 'dwpf', 'sknt', 'drct', 'gust', 'vsby', 'mslp', 'alti', 'wxcodes', 'metar')
+IEM_BATCH = 150
+IEM_GAP_S = 1
 
-def fetch_day(day, stations, batch=150):
+def iem_url(day, names, report_types=('3',)):
+    q = [('station', s) for s in names] + [('data', d) for d in IEM_DATA] + [('tz', 'Etc/UTC'), ('format', 'onlycomma'), ('missing', 'empty'), ('trace', 'empty')] + [('report_type', t) for t in report_types] + [('sts', f'{day - timedelta(minutes=20):%Y-%m-%dT%H:%MZ}'), ('ets', f'{day + timedelta(hours=23, minutes=40):%Y-%m-%dT%H:%MZ}')]
+    return IEM_ASOS + '?' + urllib.parse.urlencode(q)
+
+def iem_get(url, day, opener=None, sleep=time.sleep):
+    for attempt in range(4):
+        try:
+            return (opener or urllib.request.urlopen)(url, timeout=180).read()
+        except Exception as e:
+            if attempt == 3:
+                raise
+            log(f'reports {day:%Y-%m-%d}: {e}; again')
+            sleep(10 * (attempt + 1))
+
+def fetch_day(day, stations, batch=IEM_BATCH):
     ids = {iem_id(s[0]): i for i, s in enumerate(stations)}
     elev = [s[3] for s in stations]
     arr = np.full((len(stations), 24, len(OBS)), np.nan, np.float32)
     names = list(ids)
-    data = ['tmpf', 'dwpf', 'sknt', 'drct', 'gust', 'vsby', 'mslp', 'alti', 'wxcodes', 'metar']
     for k in range(0, len(names), batch):
-        q = [('station', s) for s in names[k:k + batch]] + [('data', d) for d in data] + [('tz', 'Etc/UTC'), ('format', 'onlycomma'), ('missing', 'empty'), ('trace', 'empty'), ('report_type', '3'), ('sts', f'{day - timedelta(minutes=20):%Y-%m-%dT%H:%MZ}'), ('ets', f'{day + timedelta(hours=23, minutes=40):%Y-%m-%dT%H:%MZ}')]
-        url = 'https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?' + urllib.parse.urlencode(q)
-        for attempt in range(4):
-            try:
-                text = urllib.request.urlopen(url, timeout=180).read().decode('utf-8', 'replace')
-                break
-            except Exception as e:
-                if attempt == 3:
-                    raise
-                log(f'reports {day:%Y-%m-%d}: {e}; again')
-                time.sleep(10 * (attempt + 1))
+        text = iem_get(iem_url(day, names[k:k + batch]), day).decode('utf-8', 'replace')
         for i, hours in parse_reports(text, ids, elev).items():
             for hr, vals in hours.items():
                 if hr.date() == day.date():
                     arr[i, hr.hour] = vals
-        time.sleep(1)
+        time.sleep(IEM_GAP_S)
     return (arr, qc(arr))
 
 def load_day(path):

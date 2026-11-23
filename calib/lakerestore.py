@@ -65,7 +65,7 @@ def main(argv: list[str] | None=None) -> int:
     ap.add_argument('what', help="an object key, a prefix ending in '/', or 'name'")
     ap.add_argument('out', help="the folder to write into (with 'name': the logical id)")
     ap.add_argument('--local', help='a folder holding the objects instead of the bucket')
-    ap.add_argument('--store', default='LAKE', choices=['LAKE', 'OPS'])
+    ap.add_argument('--store', default='LAKE', choices=['LAKE', 'OPS', 'VAULT'])
     a = ap.parse_args(argv)
     try:
         if a.what == 'name':

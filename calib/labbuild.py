@@ -179,6 +179,18 @@ class Steps:
         finally:
             dayb.EVAL_TIMEOUT = was
 
+    def hindcast(self, model: str, run: str, region: list, work: str, timeout: float, area: str) -> str | None:
+        import stationcast
+        out = os.path.join(work, 'stcast')
+        shutil.rmtree(out, ignore_errors=True)
+        cmd = stationcast.build_command(model, run, region, out, stationcast.workers(model), area)
+        logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
+        env = stationcast.build_env(os.environ)
+        if timeout <= 60 or not dayb._run(cmd, common.PIPELINE, timeout, logf, env):
+            raise UnitError(dayb.fail_kind(dayb.LAST_FAIL['why']) if timeout > 60 else 'timeout')
+        hours = os.path.join(out, model, '_hours')
+        return hours if os.path.isdir(hours) else None
+
 def consumers_for(gv: dict) -> list:
     return [c for c in sorted(common.CONSUMERS) if not common.unknown_groups(gv, [c])]
 
@@ -202,6 +214,11 @@ def _from_object(row: dict, key: str, have: tuple) -> None:
     sha, n, meta = have
     row.update(key=key, sha256=sha, bytes=n, put='kept', cs=meta.get('cs'), gv=_gv6(meta.get('gv')), run=meta.get('init'), lead_h=meta.get('lead_h'), bbox=meta.get('bbox'), src=meta.get('src'), sv=(meta.get('score') or {}).get('sv'))
 
+def _hours_kept(u: dict, meta: dict) -> bool:
+    import stationcast
+    want = stationcast.want_leads(u['model'], int(u['init'][8:]), u['box'])
+    return list(meta.get('lead_h') or []) == want
+
 def _prev_keeps(prev, have, gv: dict, cons: list) -> bool:
     sha, _, meta = have
     if prev.get('sha256') and prev['sha256'] != sha:
@@ -217,7 +234,7 @@ def blank_row(cs: str, wave) -> dict:
 
 def _identify(row: dict, u: dict, model_id: str) -> str:
     area = common.gv_area(u['model'], u['box'])
-    row.update(kind=u['kind'], day=common.day_of(u['daykey']), area=area, model=u['model'], model_id=model_id, init=u['init'], box=u['box'], src=src_of(model_id, u['box']))
+    row.update(kind=u['kind'], day=common.day_of(u['daykey']), area=area, model=u['model'], model_id=model_id, init=u['init'], box=u['box'], src=catalog.STCAST if u['kind'] == catalog.STCAST else src_of(model_id, u['box']))
     return area
 
 def cut_row(lk, entry, cs: str, wave, why: str='cancel') -> dict:
@@ -286,12 +303,16 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
             return done('skipped', 'nostamp')
         prev = entry.get('prev')
         cons = consumers_for(gv)
+        if u['kind'] == catalog.STCAST:
+            cons = [c for c in cons if c in catalog.stcast_consumers(gv)]
         if isinstance(prev, dict) and prev.get('key') and cons:
             try:
                 pkey = lakem.check_key(str(prev['key']))
             except lakem.LakeError:
                 pkey = None
             have = _stored(lk, pkey, lid) if pkey and pkey != key else None
+            if have and u['kind'] == catalog.STCAST and (not _hours_kept(u, have[2])):
+                have = None
             if have and _prev_keeps(prev, have, gv, cons):
                 _from_object(row, pkey, have)
                 return done('ok')
@@ -307,8 +328,26 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
         return done('error', type(e).__name__, tried=True)
     d = common.day_of(u['daykey'])
     wd = None
+
+    def _put(arrays):
+        meta = json.loads(str(arrays['meta']))
+        row.update(lead_h=meta['lead_h'], run=meta['init'], sv=(meta.get('score') or {}).get('sv'))
+        res = lk.put(key, npz_bytes(arrays), strict=False)
+        row['sha256'], row['bytes'], row['put'] = (res.sha256, res.bytes, res.status)
+        if res.status == 'differs':
+            have = _stored(lk, key, lid)
+            if have:
+                _from_object(row, key, have)
+                row['put'] = 'differs'
+        return done('ok', tried=True)
     try:
         wd = tempfile.mkdtemp(prefix='u-', dir=work)
+        if u['kind'] == catalog.STCAST:
+            arrays = _hindcast(u, gv, cs, steps, wd, hard_at, clock)
+            if arrays is None:
+                return done('retry', 'hardstop')
+            row['bbox'] = json.loads(str(arrays['meta']))['bbox']
+            return _put(arrays)
         items = [f for f in load_items(lk, entry.get('raw') or []) if (f.get('kind') == 'collector') == (u['kind'] == 'collector')]
         B = next((b for b in dayb.boxes(items) if b['region'] == u['box']), None)
         if B is None:
@@ -332,16 +371,7 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
         if not steps.score(base, B, model_id, wd, min(dayb.EVAL_TIMEOUT, left)):
             raise UnitError('evaluate')
         arrays['score'] = np.array(json.dumps(score_of(B, model_id), sort_keys=True, separators=(',', ':')))
-        meta = json.loads(str(arrays['meta']))
-        row.update(lead_h=meta['lead_h'], run=meta['init'], sv=meta['score']['sv'])
-        res = lk.put(key, npz_bytes(arrays), strict=False)
-        row['sha256'], row['bytes'], row['put'] = (res.sha256, res.bytes, res.status)
-        if res.status == 'differs':
-            have = _stored(lk, key, lid)
-            if have:
-                _from_object(row, key, have)
-                row['put'] = 'differs'
-        return done('ok', tried=True)
+        return _put(arrays)
     except UnitError as e:
         if near_stop() and str(e) in ('timeout', 'evaluate', 'build'):
             return done('retry', 'hardstop')
@@ -353,6 +383,17 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
     finally:
         if wd:
             shutil.rmtree(wd, ignore_errors=True)
+
+def _hindcast(u: dict, gv: dict, cs: str, steps: Steps, wd: str, hard_at, clock) -> dict | None:
+    import stationcast
+    region = stationcast.area_region(u['model'], u['box'])
+    left = hard_at - clock() if hard_at is not None else stationcast.BUILD_TIMEOUT
+    if left < 120:
+        return None
+    hours = steps.hindcast(u['model'], u['init'], region, wd, min(stationcast.BUILD_TIMEOUT, left), u['box'])
+    if not hours:
+        raise UnitError('build')
+    return stationcast.unit_arrays(hours, u, region, _gv6(gv), cs, stations(), wd)
 
 def run_chunk(lk, plan_id: str, chunk: int, steps: Steps | None=None, work: str | None=None, cs: str | None=None, clock=time.monotonic, wall=None, elapsed: float=0.0) -> dict:
     steps = steps or Steps()

@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import sys
 from datetime import date, datetime, timezone
@@ -10,6 +11,7 @@ sys.path.insert(0, HERE)
 import build_eu
 import catalog
 import common
+import stationcast
 CHUNK_S = 40 * 60
 SETUP_S = 4 * 60
 MIN_SAMPLES = 5
@@ -18,7 +20,7 @@ OM_PAR = 6
 EARLY_OLD = 6
 MAX_TRIES = catalog.MAX_TRIES
 AREAS = ('US', 'EU', 'SH')
-DEFAULT_S = {('own', 'hrrr'): 300, ('own', 'gfs'): 90, ('own', 'ecmwf'): 120, ('own', 'icon'): 150, ('own', 'icond2'): 330, ('own', 'arome'): 240, ('lead', 'hrrr'): 300, ('lead', 'gfs'): 90, ('lead', 'ecmwf'): 150}
+DEFAULT_S = {('own', 'hrrr'): 300, ('own', 'gfs'): 90, ('own', 'ecmwf'): 120, ('own', 'icon'): 150, ('own', 'icond2'): 330, ('own', 'arome'): 240, ('lead', 'hrrr'): 300, ('lead', 'gfs'): 90, ('lead', 'ecmwf'): 150, (catalog.STCAST, 'hrrr'): 1200, (catalog.STCAST, 'gfs'): 420, (catalog.STCAST, 'ecmwf'): 600}
 FALLBACK_S = 200
 OM_MODELS = ('icon', 'icond2', 'arome')
 EXTRA_FIRST = {'ecmwf': common.EU_START, 'icon': common.ICON_FIRST}
@@ -63,7 +65,10 @@ def units_of_day(raw: dict, name_of, extra: dict | None=None, counts: dict | Non
     return out
 
 def to_do(units: list[dict], rows: dict[str, dict], pin: dict, consumers=None) -> tuple[list[dict], dict]:
-    consumers = tuple(common.CONSUMERS) if consumers is None else tuple(consumers)
+    if consumers is None:
+        consumers = tuple(common.CONSUMERS)
+    elif not callable(consumers):
+        consumers = tuple(consumers)
     gv, cs = (pin.get('gv') or {}, pin.get('cs'))
     out, n = ([], {'units': len(units), 'current': 0, 'nocover': 0, 'failed': 0, 'no_stamps': 0, 'missing': 0, 'stale': 0, 'tried': 0})
     for u in units:
@@ -81,7 +86,9 @@ def to_do(units: list[dict], rows: dict[str, dict], pin: dict, consumers=None) -
             n['failed'] += 1
             continue
         if r.get('sha256'):
-            if not common.stale_groups(r.get('gv'), cur, consumers):
+            cons = consumers(cur) if callable(consumers) else consumers
+            hours_moved = u.get('want_h') is not None and list(r.get('lead_h') or []) != list(u['want_h'])
+            if not hours_moved and (not common.stale_groups(r.get('gv'), cur, cons)):
                 n['current'] += 1
                 continue
             why = 'stale'
@@ -95,7 +102,12 @@ def to_do(units: list[dict], rows: dict[str, dict], pin: dict, consumers=None) -
     return (out, n)
 
 def tier(u: dict) -> int:
+    if u.get('kind') == catalog.STCAST:
+        return 1
     return 0 if u.get('lead_d') is None or u['lead_d'] <= 1 else 1
+
+def is_stcast(u: dict) -> bool:
+    return u.get('kind') == catalog.STCAST
 
 def om_sourced(u: dict) -> bool:
     return u['model'] in OM_MODELS or (u['model'] == 'ecmwf' and u.get('lead_d') is not None)
@@ -105,20 +117,42 @@ def _key(u: dict) -> tuple:
     d = date.fromisoformat(common.day_of(u['day'])).toordinal()
     return (tier(u), -d, _AREAS.get(common.macro_of(u['box']), 9), u['box'], u.get('kind') or '', common.MODEL_INDEX.get(u['model'], 99), u.get('lead_d') or 0, u['name'])
 
-def order(units: list[dict], early_old: int=0) -> list[dict]:
-    ranked = sorted(units, key=_key)
+def _st_key(u: dict) -> tuple:
+    return (-int(u['unit']['init']), _AREAS.get(u['box'], 9), common.MODEL_INDEX.get(u['model'], 99), u['name'])
+
+def side_by_side(a: list[dict], b: list[dict], table: dict) -> list[dict]:
+    out, i, j, ta, tb = ([], 0, 0, 0.0, 0.0)
+    while i < len(a) or j < len(b):
+        if j >= len(b) or (i < len(a) and ta <= tb):
+            out.append(a[i])
+            ta += est(a[i], table)
+            i += 1
+        else:
+            out.append(b[j])
+            tb += est(b[j], table)
+            j += 1
+    return out
+
+def order(units: list[dict], early_old: int=0, table: dict | None=None) -> list[dict]:
+    st = sorted((u for u in units if is_stcast(u)), key=_st_key)
+    ranked = sorted((u for u in units if not is_stcast(u)), key=_key)
     om = sorted((u for u in ranked if om_sourced(u)), key=lambda u: (common.day_of(u['day']), _key(u)))[:max(0, early_old)]
     first = {u['name'] for u in om}
-    return om + [u for u in ranked if u['name'] not in first]
+    rest = [u for u in ranked if u['name'] not in first]
+    if st:
+        rest = side_by_side(rest, st, table or DEFAULT_S)
+    return om + rest
 
-def timing(model: str | None, init: str | None) -> tuple:
+def timing(model: str | None, init: str | None, kind: str | None=None) -> tuple:
+    if kind == catalog.STCAST:
+        return (catalog.STCAST, common.base_model(model or ''))
     return ('own' if init in (None, 'own') else 'lead', common.base_model(model or ''))
 
 def seconds(rows: dict[str, dict], min_samples: int=MIN_SAMPLES) -> dict[tuple, float]:
     got: dict[tuple, list] = {}
     for r in rows.values():
         if r.get('status') == 'done' and r.get('put') != 'kept' and isinstance(r.get('sec'), (int, float)) and (r['sec'] > 0):
-            got.setdefault(timing(r.get('model'), r.get('init')), []).append(float(r['sec']))
+            got.setdefault(timing(r.get('model'), r.get('init'), r.get('kind')), []).append(float(r['sec']))
     out = dict(DEFAULT_S)
     for k, v in got.items():
         if len(v) >= min_samples:
@@ -126,12 +160,14 @@ def seconds(rows: dict[str, dict], min_samples: int=MIN_SAMPLES) -> dict[tuple, 
     return out
 
 def est(u: dict, table: dict) -> float:
+    if is_stcast(u):
+        return float(table.get((catalog.STCAST, u['model']), FALLBACK_S))
     return float(table.get(('own' if u.get('lead_d') is None else 'lead', u['model']), FALLBACK_S))
 
 def chunks(units: list[dict], table: dict, budget: float=CHUNK_S - SETUP_S) -> list[list[dict]]:
     place = {u['name']: i for i, u in enumerate(units)}
     out = []
-    for stream in ([u for u in units if om_sourced(u)], [u for u in units if not om_sourced(u)]):
+    for stream in ([u for u in units if om_sourced(u)], [u for u in units if is_stcast(u) and (not om_sourced(u))], [u for u in units if not om_sourced(u) and (not is_stcast(u))]):
         cur, t = ([], 0.0)
         for u in stream:
             s = est(u, table)
@@ -183,20 +219,29 @@ def pin_rule(pin: dict | None, now: dict, on_change: str='finish', consumers=Non
         return ('forward', dict(now))
     return ('restart', dict(now)) if on_change == 'restart' else ('finish', pin)
 
-def plan(raw: list[dict], rows: dict[str, dict], prev_pin: dict | None, now: dict, par: int, sweep: str, wave_no: int, name_of, on_change: str='finish', paused: bool=False, consumers=None, extra: dict | None=None, early_old: int=EARLY_OLD, om_par: int=OM_PAR) -> dict:
+def plan(raw: list[dict], rows: dict[str, dict], prev_pin: dict | None, now: dict, par: int, sweep: str, wave_no: int, name_of, on_change: str='finish', paused: bool=False, consumers=None, extra: dict | None=None, early_old: int=EARLY_OLD, om_par: int=OM_PAR, stcast: list[dict] | None=None) -> dict:
     decision, pin = pin_rule(prev_pin, now, on_change, consumers)
     bad = {'bad_unit': 0, 'no_lead_run': 0}
     units = [u for r in raw for u in units_of_day(r, name_of, extra, bad)]
-    todo, counts = to_do(units, rows, pin or {}, consumers)
-    counts.update(bad)
+
+    def what(p):
+        todo, counts = to_do(units, rows, p, consumers)
+        counts.update(bad)
+        if stcast is not None:
+            t2, c2 = to_do(stcast, rows, p, catalog.stcast_consumers)
+            todo += t2
+            counts = {k: counts.get(k, 0) + c2.get(k, 0) for k in counts}
+            counts['stcast'], counts['stcast_todo'] = (c2['units'], len(t2))
+        return (todo, counts)
+    todo, counts = what(pin or {})
     if decision == 'finish' and (not todo):
         decision, pin = ('finished', dict(now))
-        todo, counts = to_do(units, rows, pin, consumers)
-        counts.update(bad)
+        todo, counts = what(pin)
     base = {'v': 1, 'id': catalog.plan_id(sweep, wave_no), 'sweep': sweep, 'wave': int(wave_no), 'code_sha': (pin or {}).get('code_sha'), 'cs': (pin or {}).get('cs'), 'gv': (pin or {}).get('gv'), 'decision': decision, 'on_change': on_change, 'par': int(par), 'paused': bool(paused), 'todo': len(todo)}
     if paused or par <= 0 or (not pin):
         return {**base, 'chunks': [], 'counts': counts, 'left': len(todo)}
-    cs = wave(chunks(order(todo, early_old if int(wave_no) == 0 else 0), seconds(rows)), par, om_par)
+    table = seconds(rows)
+    cs = wave(chunks(order(todo, early_old if int(wave_no) == 0 else 0, table), table), par, om_par)
     n = sum((len(c) for c in cs))
     return {**base, 'chunks': cs, 'counts': {**counts, 'planned': n, 'chunks': len(cs)}, 'left': len(todo) - n}
 
@@ -259,7 +304,7 @@ def read_stamps(lake, cs: str) -> dict | None:
 def log_line(p: dict) -> str:
     c = p.get('counts') or {}
     why = 'paused' if p.get('paused') else 'no room (par 0)' if p.get('par', 0) <= 0 else 'no stamps' if not p.get('cs') else ''
-    return f"plan: wave {p['wave']}, {p['decision']}, par {p['par']}: {c.get('planned', 0)} units in {c.get('chunks', 0)} chunks{(' (' + why + ')' if why else '')}; {p.get('left', 0)} left; of {c.get('units', 0)}: {c.get('current', 0)} current, {c.get('missing', 0)} missing, {c.get('stale', 0)} stale, {c.get('tried', 0)} tried, {c.get('failed', 0)} failed, {c.get('nocover', 0)} not covered, {c.get('no_stamps', 0)} without stamps; {c.get('bad_unit', 0)} refused by the unit check, {c.get('no_lead_run', 0)} leads without a run hour"
+    return f"plan: wave {p['wave']}, {p['decision']}, par {p['par']}: {c.get('planned', 0)} units in {c.get('chunks', 0)} chunks{(' (' + why + ')' if why else '')}; {p.get('left', 0)} left; of {c.get('units', 0)}: {c.get('current', 0)} current, {c.get('missing', 0)} missing, {c.get('stale', 0)} stale, {c.get('tried', 0)} tried, {c.get('failed', 0)} failed, {c.get('nocover', 0)} not covered, {c.get('no_stamps', 0)} without stamps; {c.get('bad_unit', 0)} refused by the unit check, {c.get('no_lead_run', 0)} leads without a run hour" + (f"; station hindcast: {c['stcast']} units, {c.get('stcast_todo', 0)} to do" if 'stcast' in c else '')
 
 def _output(**kv) -> None:
     path = os.environ.get('GITHUB_OUTPUT')
@@ -281,6 +326,29 @@ def _par(arg: int | None) -> tuple[int, str]:
         running = waiting = None
     return room.lab_par(datetime.now(timezone.utc), room.slot_table(), running, waiting)
 
+def status(p: dict | None, made: str) -> dict:
+    p = p or {}
+    n = len(p.get('chunks') or [])
+    if n:
+        why = ''
+    elif made == 'none':
+        why = 'nolake'
+    elif p.get('paused'):
+        why = 'paused'
+    elif int(p.get('par') or 0) <= 0:
+        why = 'noroom'
+    elif not p.get('cs'):
+        why = 'nostamps'
+    else:
+        why = 'done'
+    return {'v': 1, 'plan': p.get('id'), 'wave': p.get('wave'), 'made': made if n or made != 'now' else 'nothing', 'chunks': n, 'todo': int(p.get('todo') or 0), 'left': int(p.get('left') or 0), 'par': int(p.get('par') or 0), 'decision': p.get('decision'), 'code_sha': p.get('code_sha') if n else None, 'why': why}
+
+def _status(path: str | None, p: dict | None, made: str) -> None:
+    if path:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(status(p, made), f, sort_keys=True)
+            f.write('\n')
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -290,9 +358,18 @@ def main(argv: list[str]) -> int:
     a.add_argument('--on-change', default=None, choices=('finish', 'restart'))
     a.add_argument('--par', type=int, default=None)
     a.add_argument('--local', default=None, help='a folder as the store (tests)')
+    a.add_argument('--pause-file', default='paused')
+    a.add_argument('--status', default=None)
+    a.add_argument('--code-sha', default=None, help="the commit checked out (GITHUB_SHA unless given: a job that checks out main's newest)")
     a = ap.parse_args(argv)
     if not catalog.SWEEP.fullmatch(a.sweep) or a.wave < 0:
         print('labplan: a sweep id is its start time (YYYYMMDDTHHMMSSZ), a wave 0 or more', file=sys.stderr)
+        return 2
+    if os.path.basename(a.pause_file) != a.pause_file or a.pause_file in ('', '.', '..'):
+        print('labplan: the pause file is a name beside labplan.py', file=sys.stderr)
+        return 2
+    if a.code_sha is not None and (not re.fullmatch('[0-9a-f]{40}', a.code_sha)):
+        print('labplan: a commit is 40 hex digits', file=sys.stderr)
         return 2
     pid = catalog.plan_id(a.sweep, a.wave)
     import lake as lk
@@ -300,24 +377,34 @@ def main(argv: list[str]) -> int:
     if store is None or 1 not in store.keys.ids():
         print('labplan: no lake (its secrets or CALIB_DATA_KEY unset): nothing planned')
         _output(plan=pid, chunks='[]', wave=a.wave, more='no')
+        _status(a.status, {'id': pid, 'wave': a.wave}, 'none')
         return 0
     if store.exists(catalog.plan_key(a.sweep, a.wave)):
         p = read_plan(store, a.sweep, a.wave)
         print("labplan: this wave's plan was made already: its chunks again")
         print(log_line(p))
         _output(plan=pid, chunks=json.dumps(matrix(p)), wave=a.wave, more='yes' if p.get('chunks') else 'no')
+        _status(a.status, p, 'before')
         return 0
-    paused = os.path.exists(os.path.join(HERE, 'paused'))
+    paused = os.path.exists(os.path.join(HERE, a.pause_file))
     par, why = (0, 'paused') if paused else _par(a.par)
     print(f'labplan: {why}')
     cs = catalog.source_stamp()
-    now = {'code_sha': os.environ.get('GITHUB_SHA') or 'local', 'cs': cs, 'gv': read_stamps(store, cs)}
+    now = {'code_sha': a.code_sha or os.environ.get('GITHUB_SHA') or 'local', 'cs': cs, 'gv': read_stamps(store, cs)}
     before = prev_plan(store, a.sweep, a.wave)
     on_change = a.on_change or (before or {}).get('on_change') or 'finish'
     _, pin = pin_rule(pin_of(before), now, on_change)
     snap = catalog.build(store, cs=(pin or {}).get('cs'))
     print(catalog.summary(snap))
-    p = plan(list(snap['raw'].values()), snap['rows'], pin_of(before), now, par, a.sweep, a.wave, store.name, on_change, paused)
+    st, st_bad = (None, {})
+    if stationcast.enabled():
+        try:
+            st = stationcast.units(store.name, counts=st_bad)
+        except ValueError:
+            print("labplan: CALIB_STCAST_MONTHS doesn't read (YYYY-MM:YYYY-MM): no station hindcast planned")
+    p = plan(list(snap['raw'].values()), snap['rows'], pin_of(before), now, par, a.sweep, a.wave, store.name, on_change, paused, stcast=st)
+    if st_bad.get('bad_unit'):
+        p['counts']['bad_unit'] = p['counts'].get('bad_unit', 0) + st_bad['bad_unit']
     if p['chunks']:
         write_plan(store, p)
     if done_pinning(p) and catalog.pin_if_new(store, snap, 'sweep done', sweep=a.sweep, wave=a.wave):
@@ -325,6 +412,7 @@ def main(argv: list[str]) -> int:
     print(log_line(p))
     print(store.summary())
     _output(plan=pid, chunks=json.dumps(matrix(p)), wave=a.wave, more='yes' if p['chunks'] else 'no')
+    _status(a.status, p, 'now')
     return 0
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))

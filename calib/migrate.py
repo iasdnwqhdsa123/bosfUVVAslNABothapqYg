@@ -37,7 +37,8 @@ REVS = 99
 RAW_TOPS = ('collector', 'obs')
 UNITED = ('data', 'seed', 'verify', 'wave', 'grids')
 MAX_PAGES = 1000
-MAX_BYTES = 4500000000
+MAX_BYTES = 12000000000
+READ_MAX = 2000000000
 FIELD = re.compile('^[A-Za-z_][A-Za-z0-9_]{0,40}$')
 
 class Failed(Exception):
@@ -199,6 +200,30 @@ def enc_of_zip(blob: bytes) -> bytes:
 def check_enc(blob: bytes) -> None:
     if blob[:8] != b'Salted__':
         raise Failed("a file is not in the old store's format")
+
+def enc_digest(path: str, zipped: bool) -> str:
+    h = hashlib.sha256()
+    try:
+        if not zipped:
+            with open(path, 'rb') as f:
+                _hash_enc(f, h)
+            return h.hexdigest()
+        with zipfile.ZipFile(path) as z:
+            enc = [n for n in z.namelist() if n.endswith('.enc')]
+            if len(enc) != 1 or z.testzip() is not None:
+                raise Failed('an artifact is not one whole .enc')
+            with z.open(enc[0]) as f:
+                _hash_enc(f, h)
+        return h.hexdigest()
+    except zipfile.BadZipFile:
+        raise Failed('an artifact is not a zip') from None
+
+def _hash_enc(f, h) -> None:
+    head = f.read(8)
+    check_enc(head)
+    h.update(head)
+    for b in iter(lambda: f.read(CHUNK), b''):
+        h.update(b)
 
 def decrypt_old(enc: bytes) -> bytes:
     import subprocess
@@ -403,6 +428,8 @@ def verbatim_key(c: dict) -> str:
 
 def read_verbatim(lk: lake.Lake, c: dict) -> bytes:
     key = verbatim_key(c)
+    if (c.get('bytes') or 0) > READ_MAX:
+        raise Failed('a verbatim copy is too large to read in memory')
     blob = lk.get_plain(key)
     if sha(blob) != (c.get('obj_sha256') or c['sha256']):
         raise Failed('a verbatim copy no longer matches its check')
@@ -471,42 +498,37 @@ def inventory(lk: lake.Lake, src, seed: str | None=None, releases: bool=False, n
 def copy_one(lk: lake.Lake, src, a: dict, kind: str, prefix: str, check_prefix: str, tmp: str, zipped: bool, held: dict) -> str:
     key = f"{prefix}{a['id']}.{('zip' if zipped else 'enc')}"
     path = os.path.join(tmp, 'a')
+    if (a.get('bytes') or 0) > MAX_BYTES:
+        raise Failed("an artifact is larger than the runner's disk takes")
     try:
         s1, n1 = download(src, a, path)
         if a.get('digest') and a['digest'] != s1:
             raise Failed('a download differs from the digest listed')
         if n1 > MAX_BYTES:
-            raise Failed('an artifact is larger than one upload to the lake takes')
+            raise Failed("an artifact is larger than the runner's disk takes")
         s2, n2 = download(src, a, None)
         if s1 != s2 or n1 != n2:
             raise Failed('the second download differs')
-        with open(path, 'rb') as f:
-            blob = f.read()
+        if lake.file_digest(path) != (s1, n1):
+            raise Failed('the file on disk differs from its download')
+        es = enc_digest(path, zipped)
+        check = {'id': a['id'], 'name': a['name'], 'kind': kind, 'sha256': s1, 'bytes': n1, 'enc_sha256': es, 'created': a.get('created'), 'expires': a.get('expires'), 'at': stamp()}
+        same = held.get((a['name'], es))
+        if same is not None:
+            k2 = verbatim_key(same)
+            if lk.digest_plain(k2)[0] != (same.get('obj_sha256') or same['sha256']):
+                raise Failed('a verbatim copy no longer matches its check')
+            check.update({'obj': k2, 'obj_sha256': same.get('obj_sha256') or same['sha256'], 'same_as': same['id']})
+            put_json(lk, f"{check_prefix}{a['id']}.lenc", check)
+            held[a['name'], es] = check
+            return 'same'
+        r = lk.put_plain_file(key, path, strict=False)
+        if r.status == 'differs':
+            raise Failed('a verbatim copy is stored with other bytes')
     finally:
         if os.path.exists(path):
             os.remove(path)
-    if sha(blob) != s1:
-        raise Failed('the file on disk differs from its download')
-    enc = enc_of_zip(blob) if zipped else blob
-    check_enc(enc)
-    es = sha(enc)
-    del enc
-    check = {'id': a['id'], 'name': a['name'], 'kind': kind, 'sha256': s1, 'bytes': n1, 'enc_sha256': es, 'created': a.get('created'), 'expires': a.get('expires'), 'at': stamp()}
-    same = held.get((a['name'], es))
-    if same is not None:
-        k2 = verbatim_key(same)
-        if sha(lk.get_plain(k2)) != (same.get('obj_sha256') or same['sha256']):
-            raise Failed('a verbatim copy no longer matches its check')
-        check.update({'obj': k2, 'obj_sha256': same.get('obj_sha256') or same['sha256'], 'same_as': same['id']})
-        put_json(lk, f"{check_prefix}{a['id']}.lenc", check)
-        held[a['name'], es] = check
-        return 'same'
-    try:
-        r = lk.put_plain(key, blob)
-    except lake.LakeError:
-        raise Failed('a verbatim copy is stored with other bytes') from None
-    del blob
-    if not sha(lk.get_plain(key)) == s1 == r.sha256:
+    if not lk.digest_plain(key)[0] == s1 == r.sha256:
         raise Failed('the stored copy differs')
     check['obj'] = key
     put_json(lk, f"{check_prefix}{a['id']}.lenc", check)

@@ -17,6 +17,15 @@ PINS = 'derived/catalog/pins/'
 RAW_WEGLIDE = 'raw/weglide/'
 RAW_INDEX = 'derived/rawindex/'
 KINDS = ('flight', 'collector')
+STCAST = 'stcast'
+STCAST_RUN_H = (0, 12)
+STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU'), 'ecmwf': ('US', 'EU')}
+STCAST_CONSUMERS = ('pairs',)
+
+def stcast_consumers(area_gv: dict | None) -> tuple:
+    if (area_gv or {}).get('stations'):
+        return STCAST_CONSUMERS
+    return STCAST_CONSUMERS + tuple((c for c in sorted(common.CONSUMERS) if c not in STCAST_CONSUMERS))
 _RUN = re.compile('\\d{10}')
 SWEEP = re.compile('\\d{8}T\\d{6}Z')
 _PLAN_ID = re.compile('(\\d{8}T\\d{6}Z)-(0|[1-9]\\d{0,5})')
@@ -33,7 +42,8 @@ ENTRY_FIELDS = ('unit', 'name', 'raw', 'tries', 'lost', 'why', 'prev')
 _HERE = os.path.dirname(os.path.abspath(__file__))
 VERIFY = os.path.join(common.PIPELINE, 'verify.py')
 STATIONS = os.path.join(common.PIPELINE, 'verify_stations.json')
-RUNNER_FILES = ('day.py', 'common.py', 'track.py', 'collector.py', 'labbuild.py', 'catalog.py')
+OPSLAKE = os.path.join(common.PIPELINE, 'opslake.py')
+RUNNER_FILES = ('day.py', 'common.py', 'track.py', 'collector.py', 'labbuild.py', 'catalog.py', 'stationcast.py')
 
 class UnitError(ValueError):
     pass
@@ -52,6 +62,10 @@ def check_unit(u) -> dict:
             ok = ok and bool(_RUN.fullmatch(init)) and bool(datetime.strptime(init, '%Y%m%d%H'))
     except ValueError:
         raise UnitError('unit') from None
+    if kind == STCAST:
+        if not ok or init == 'own' or macro not in common.MACRO or (key != common.day_key(d, macro)) or (init[:8] != d.replace('-', '')) or (int(init[8:]) not in STCAST_RUN_H) or (macro not in STCAST_AREAS.get(model, ())) or (box != macro):
+            raise UnitError('unit')
+        return {'kind': kind, 'daykey': key, 'model': model, 'init': init, 'box': box}
     if not ok or kind not in KINDS or macro not in common.MACRO or (key != common.day_key(d, macro)) or (model not in common.MODEL_MACRO) or common.is_lead(model) or (box not in common.REGION_MACRO) or (common.macro_of(box) != macro):
         raise UnitError('unit')
     return {'kind': kind, 'daykey': key, 'model': model, 'init': init, 'box': box}
@@ -77,7 +91,7 @@ def unit_of(daykey: str, model_id: str, box: str, kind: str='flight') -> dict:
 
 def lead_days(u: dict) -> int | None:
     u = check_unit(u)
-    if u['init'] == 'own':
+    if u['init'] == 'own' or u['kind'] == STCAST:
         return None
     r = datetime.strptime(u['init'], '%Y%m%d%H')
     n = (date.fromisoformat(common.day_of(u['daykey'])) - r.date()).days
@@ -93,7 +107,7 @@ def model_id_of(u: dict) -> str:
 def source_files() -> list[str]:
     paths = set(common.PHYSICS_FILES) | set(common.PHYSICS_FILES_SH) | set(common.PHYSICS_FILES_LEAD) | set(common.SCORE_FILES)
     paths |= {os.path.join(_HERE, f) for f in RUNNER_FILES}
-    paths |= {VERIFY, STATIONS}
+    paths |= {VERIFY, STATIONS, OPSLAKE}
     return sorted(paths)
 
 def source_stamp() -> str:

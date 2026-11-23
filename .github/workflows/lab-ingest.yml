@@ -1,0 +1,48 @@
+name: Lab ingest
+on:
+  schedule:
+    - cron: "15 7 * * *"
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "all, or the METARs or the soundings alone"
+        type: choice
+        options: [all, iem, raob]
+        default: all
+permissions:
+  contents: read
+concurrency:
+  group: lab-ingest
+  cancel-in-progress: false
+jobs:
+  ingest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      WEGLIDE_ON: "0"
+      WHAT: ${{ github.event_name == 'schedule' && 'all' || inputs.what }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "lab ingest: the lake's secrets (LAKE_S3_*) are not set: nothing done"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: calib/requirements.txt
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt
+      - name: Ingest
+        if: steps.on.outputs.go == 'true'
+        run: |
+          case "$WHAT" in all|iem|raob) ;; *) echo "::error::unknown choice"; exit 1;; esac
+          python3 calib/labingest.py run --what "$WHAT" --minutes 15
