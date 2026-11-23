@@ -13,6 +13,11 @@ on:
         type: choice
         options: [newest, every day named, none]
         default: newest
+      scores:
+        description: "the monthly score report: as due, or the due month's written again"
+        type: choice
+        options: [as due, again]
+        default: as due
 permissions:
   contents: read
 concurrency:
@@ -68,3 +73,44 @@ jobs:
             *) echo "::error::unknown choice"; exit 1 ;;
           esac
           python3 calib/pairjob.py "$@"
+  scores:
+    needs: pair
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      OPS_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      OPS_S3_BUCKET: ${{ secrets.OPS_S3_BUCKET || 'ops' }}
+      OPS_RO_KEY: ${{ secrets.OPS_RO_KEY }}
+      OPS_RO_SECRET: ${{ secrets.OPS_RO_SECRET }}
+      AGAIN: ${{ github.event_name == 'workflow_dispatch' && inputs.scores == 'again' && 'yes' || '' }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "scores: the lake's secrets (LAKE_S3_*, CALIB_DATA_KEY) are not set: nothing done"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            calib/requirements-pairs.txt
+            pipeline/requirements.txt
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r calib/requirements-pairs.txt -r pipeline/requirements.txt
+      - name: The month's scores
+        if: steps.on.outputs.go == 'true'
+        run: |
+          set -- run
+          [ "$AGAIN" = yes ] && set -- "$@" --again
+          python3 calib/score.py "$@"

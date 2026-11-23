@@ -544,15 +544,11 @@ def cat_score(code):
     exp = ((h + fa) * (h + mi) + (mi + cn) * (fa + cn)) / n
     return {'n': int(n), 'events': int(h + mi), 'pod': round(h / max(1, h + mi), 2), 'far': round(fa / max(1, h + fa), 2), 'csi': round(h / max(1, h + fa + mi), 3), 'bias': round((h + fa) / max(1, h + mi), 2), 'heidke': round(float((h + cn - exp) / (n - exp)), 3) if n != exp else None}
 
-def cmd_score(a):
-    stations = load_stations()
-    tables = gather(a.samples, a.obs, stations)
+def summarise(tables, stations, bad=None):
     n_rows = sum((len(t['key']) for t in tables.values()))
-    bad = bad_stations(tables)
-    for t in tables.values():
-        keep = ~np.isin(t['st'], list(bad))
-        for k in t:
-            t[k] = t[k][keep]
+    bad = bad_stations(tables) if bad is None else set(bad)
+    keep = {m: ~np.isin(t['st'], list(bad)) for m, t in tables.items()}
+    tables = {m: {k: v[keep[m]] for k, v in t.items()} for m, t in tables.items()}
     names = list(CONT) + list(CAT)
     rows, side = ([], [])
     for ri, r in enumerate(REGIONS):
@@ -598,10 +594,19 @@ def cmd_score(a):
                         by[m] = {'n': int(s.sum()), 'bias': round(float(t[n][s].mean()), 2)}
                 if by:
                     by_sun.append({'measure': n, 'region': r, 'part': part, 'models': by})
-    out = {'generated': f'{datetime.now(UTC):%Y-%m-%dT%H:%MZ}', 'pairs': n_rows, 'stations_left_out': sorted((stations[s][0] for s in bad)), 'scores': rows, 'side_by_side': side, 'by_sun': by_sun}
+    return {'pairs': n_rows, 'stations_left_out': sorted((stations[s][0] for s in bad)), 'scores': rows, 'side_by_side': side, 'by_sun': by_sun}
+
+def cmd_score(a):
+    stations = load_stations()
+    tables = gather(a.samples, a.obs, stations)
+    names = list(CONT) + list(CAT)
+    sc = summarise(tables, stations)
+    n_rows, side, by_sun = (sc['pairs'], sc['side_by_side'], sc['by_sun'])
+    bad = sc['stations_left_out']
+    out = {'generated': f'{datetime.now(UTC):%Y-%m-%dT%H:%MZ}', **sc}
     with open(a.out, 'w') as f:
         json.dump(out, f, indent=1)
-    log(f"{n_rows} forecasts paired with reports; {len(bad)} stations left out (every model off by {STATION_OFF:.0f} °C or more the same way: {', '.join(sorted((stations[s][0] for s in bad))[:20])})")
+    log(f"{n_rows} forecasts paired with reports; {len(bad)} stations left out (every model off by {STATION_OFF:.0f} °C or more the same way: {', '.join(bad[:20])})")
     log("Errors count past the report's own precision; stations over 300 m from the model's ground left out of the surface.")
     log('Side by side: the same stations, hours and leads for every model.')
     for n in names:
