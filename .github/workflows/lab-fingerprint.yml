@@ -51,7 +51,7 @@ jobs:
       defer: ${{ steps.parts.outputs.defer }}
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
@@ -125,7 +125,7 @@ jobs:
     timeout-minutes: 60
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
@@ -182,7 +182,7 @@ jobs:
         part: ${{ fromJSON(needs.gate.outputs.parts) }}
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
@@ -240,7 +240,7 @@ jobs:
     timeout-minutes: 15
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
@@ -273,7 +273,7 @@ jobs:
     timeout-minutes: 15
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}

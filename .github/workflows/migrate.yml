@@ -45,23 +45,11 @@ jobs:
         env:
           WHAT: ${{ steps.what.outputs.what }}
           CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-          LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+          LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
-          LAKE_RW_KEY: ${{ secrets.LAKE_S3_KEY }}
-          LAKE_RW_SECRET: ${{ secrets.LAKE_S3_SECRET }}
-          LAKE_RO_KEY: ${{ secrets.LAKE_RO_KEY }}
-          LAKE_RO_SECRET: ${{ secrets.LAKE_RO_SECRET }}
+          LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+          LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
         run: |
-          if [ "$WHAT" = verify ]; then
-            if [ -z "$LAKE_RO_KEY" ] || [ -z "$LAKE_RO_SECRET" ]; then
-              echo "migrate: the read-only key (LAKE_RO_KEY, LAKE_RO_SECRET) is not set: nothing done"
-              echo "ready=no" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            export LAKE_S3_KEY="$LAKE_RO_KEY" LAKE_S3_SECRET="$LAKE_RO_SECRET"
-          else
-            export LAKE_S3_KEY="$LAKE_RW_KEY" LAKE_S3_SECRET="$LAKE_RW_SECRET"
-          fi
           python3 calib/migrate.py check "$WHAT"
       - id: parts
         env:
@@ -102,20 +90,16 @@ jobs:
           PART: ${{ matrix.part }}
           GITHUB_TOKEN: ${{ github.token }}
           CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
-          LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+          LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
-          LAKE_RW_KEY: ${{ secrets.LAKE_S3_KEY }}
-          LAKE_RW_SECRET: ${{ secrets.LAKE_S3_SECRET }}
-          LAKE_RO_KEY: ${{ secrets.LAKE_RO_KEY }}
-          LAKE_RO_SECRET: ${{ secrets.LAKE_RO_SECRET }}
+          LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+          LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
         run: |
           if [ "$WHAT" = verify ]; then
-            export LAKE_S3_KEY="$LAKE_RO_KEY" LAKE_S3_SECRET="$LAKE_RO_SECRET"
             part="${PART%%:*}"; shard="0/1"
             [ "$part" = grids ] && shard="${PART#*:}"
             python3 calib/migrate.py verify --repo "$GITHUB_REPOSITORY" --seed calib/seed.enc --work /tmp/migrate \
               --part "$part" --shard "$shard"
           else
-            export LAKE_S3_KEY="$LAKE_RW_KEY" LAKE_S3_SECRET="$LAKE_RW_SECRET"
             python3 calib/migrate.py "$WHAT" --repo "$GITHUB_REPOSITORY" --seed calib/seed.enc --minutes 60 --work /tmp/migrate
           fi
