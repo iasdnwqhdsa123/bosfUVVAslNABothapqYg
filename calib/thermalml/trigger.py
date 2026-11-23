@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 from . import learn as lab
-TRIGGER_V = 't1'
+TRIGGER_V = 't2'
 TRIG = {'hour_bin': 2, 'kappa': 1.0, 'ridge': 1.0, 'slot_cap': 120, 'boot': 400, 'seed': 1}
 SLOT_H = 30 / 3600
 SPACING = {'near_m': 20000.0, 'edges_m': [0, 250, 500, 1000, 2000, 4000, 8000, 16000]}
@@ -65,12 +65,29 @@ def rows_of(d: lab.Day, cnt=None) -> dict:
             cnt['events'] = cnt.get('events', 0) + 1
     return out
 
+def key_hours(d: lab.Day) -> dict:
+    import numpy as np
+    best = {}
+    c = d.cols
+    if len(c.get('h', [])):
+        keep = d.row_ok & (c['part'] == 0)
+        h, i, j, cov = (c[k][keep].astype(np.int64) for k in ('h', 'i', 'j', 'cov'))
+        acc = {}
+        for hh, ii, jj, s in zip(h.tolist(), i.tolist(), j.tolist(), cov.tolist()):
+            k = (ii // lab.CELL, jj // lab.CELL, hour_bin_of(hh, jj))
+            a = acc.setdefault(k, {})
+            a[hh] = a.get(hh, 0) + s
+        for k, a in acc.items():
+            best[k] = max(sorted(a), key=lambda x: a[x])
+    return best
+
 def table(days: list, cnt=None) -> list:
     out = []
     for di, d in enumerate(days):
+        cond = getattr(d, 'cond', None) or {}
         for (I, J, hb), (E, N) in sorted(rows_of(d, cnt).items()):
             if E > 0:
-                out.append((di, I, J, hb, E, N))
+                out.append((di, I, J, hb, E, N, cond.get((I, J, hb))))
     return out
 
 def fit(X, E, N, prior=None, ridge=None):
@@ -93,13 +110,28 @@ def fit(X, E, N, prior=None, ridge=None):
         if np.abs(step).max() < 1e-12:
             break
     return b
+COND_TERMS = ('cu', 'weak', 'unknown', 'log_wstar', 'wind')
 
-def design(rows) -> 'np.ndarray':
+def cond_terms(c) -> list:
+    if not c or c.get('regime') is None:
+        return [0.0, 0.0, 1.0, 0.0, 0.0]
+    w, ws = (c.get('wstar'), c.get('wind'))
+    return [1.0 if c['regime'] == 'cu' else 0.0, 1.0 if c['regime'] == 'weak' else 0.0, 0.0, math.log(max(float(w), 0.3) / 1.5) if w is not None else 0.0, (float(ws) - 5.0) / 5.0 if ws is not None else 0.0]
+
+def terms_of(rows) -> list:
+    named = [f'bin {b}' for b in bins()]
+    return named + list(COND_TERMS) if any((len(r) > 6 and r[6] for r in rows)) else named
+
+def design(rows, terms=None) -> 'np.ndarray':
     import numpy as np
     B = bins()
-    X = np.zeros((len(rows), len(B)))
+    terms = terms_of(rows) if terms is None else terms
+    X = np.zeros((len(rows), len(terms)))
+    cond = len(terms) > len(B)
     for k, row in enumerate(rows):
         X[k, B.index(row[3])] = 1.0
+        if cond:
+            X[k, len(B):] = cond_terms(row[6] if len(row) > 6 else None)
     return X
 
 def surface(rows) -> dict:
@@ -111,8 +143,10 @@ def surface(rows) -> dict:
     if N.sum() <= 0:
         return None
     mean = math.log(N.sum() / E.sum())
-    X = design(rows)
-    b = fit(X, E, N, prior=np.full(X.shape[1], mean))
+    terms = terms_of(rows)
+    X = design(rows, terms)
+    nb = len(bins())
+    b = fit(X, E, N, prior=np.concatenate([np.full(nb, mean), np.zeros(X.shape[1] - nb)]))
     mu = E * np.exp(X @ b)
     th, kap = ({}, TRIG['kappa'])
     acc = {}
@@ -128,7 +162,7 @@ def surface(rows) -> dict:
         a = eh.setdefault(row[3], [0.0, 0])
         a[0] += row[4]
         a[1] += row[5]
-    return {'beta': b.tolist(), 'theta': th, 'mean': mean, 'bins': eh}
+    return {'beta': b.tolist(), 'theta': th, 'mean': mean, 'bins': eh, 'terms': terms}
 
 def sigma(days: list) -> dict:
     h2, who = ([], set())
@@ -209,6 +243,9 @@ def learn(days: list) -> dict:
     out['fitted'] = True
     eh = s['bins']
     out['hours'] = [[hb, lab.r(math.exp(b), 5), lab.r(eh[hb][0], 4), eh[hb][1]] for hb, b in zip(bins(), s['beta']) if eh.get(hb, (0,))[0] > 0]
+    nb = len(bins())
+    out['terms'] = {t: lab.r(math.exp(b), 5) for t, b in zip(s['terms'][nb:], s['beta'][nb:])}
+    out['rows_with_conditions'] = int(sum((1 for x in table(days) if x[6]))) if out['terms'] else 0
     out['hour_cols'] = ['bin', 'rate_per_h', 'coverage_h', 'events']
     cells = []
     for (I, J), (t, Nc, mc, Ec) in sorted(s['theta'].items()):
@@ -240,7 +277,7 @@ def skill(days: list, held: int=7, baseline=None) -> dict:
     E = np.array([x[4] for x in te])
     N = [x[5] for x in te]
     preds = {'chance': E * math.exp(s['mean'])}
-    bt = design(te) @ np.array(s['beta'])
+    bt = design(te, s['terms']) @ np.array(s['beta'])
     preds['beta'] = E * np.exp(bt)
     th = np.array([s['theta'].get((x[1], x[2]), (1.0,))[0] for x in te])
     preds['theta'] = preds['beta'] * th

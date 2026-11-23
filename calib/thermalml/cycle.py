@@ -2,7 +2,7 @@ from __future__ import annotations
 import math
 from . import join as jn
 from . import learn as lab
-CYCLE_V = 'c1'
+CYCLE_V = 'c2'
 CYCLE = {'hist_s': 300, 'hist_max_s': 3600, 'grid_min': [0, 15, 30, 45, 60, 90, 120, 180, 240], 'reuse_min': [0, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240], 'periods': [[0, 12], [12, 15], [15, 24]]}
 
 def uses(d: lab.Day, climbs: list) -> list:
@@ -74,7 +74,7 @@ def seen_until(d: lab.Day) -> dict:
 
 def learn(days: list) -> dict:
     from . import trigger as tg
-    acc = {}
+    acc, tstar = ({}, {})
     multi = sources = 0
     for d in days:
         seen = seen_until(d)
@@ -105,6 +105,12 @@ def learn(days: list) -> dict:
             until = max([f for f in ends if f > last] + [seen.get(lab.lcell(c0['la0'], c0['lo0']), 0)])
             open_ = [until - last] if until > last else []
             who = set().union(*(u[2] for u in us))
+            cond = (getattr(d, 'cond', None) or {}).get((*lab.lcell(c0['la0'], c0['lo0']), tg.hour_bin_of(c0['t0'] // 3600, lab.ecell(c0['la0'], c0['lo0'])[1])))
+            ts = cond['zi'] / cond['wstar'] if cond and cond.get('zi') and cond.get('wstar') and (cond['wstar'] > 0.3) else None
+            if ts and ivs:
+                t = tstar.setdefault(cond['regime'], [[], set()])
+                t[0].extend((x / ts for x in ivs))
+                t[1].update(who)
             for b in ('all', period(c0['lt'])):
                 a = acc.setdefault(b, ([], [], set(), []))
                 a[0].extend(ivs)
@@ -112,4 +118,10 @@ def learn(days: list) -> dict:
                 a[2].update(who)
                 a[3].extend(open_)
     bins = {b: summary(*a) for b, a in sorted(acc.items()) if lab.acdays(a[2]) >= lab.K}
-    return {'params': CYCLE, 'sources': sources, 'multi_use': multi, 'bins': bins}
+    ts = {}
+    for reg, (xs, who) in sorted(tstar.items()):
+        if lab.acdays(who) >= lab.K and xs:
+            q = sorted(xs)
+            at = lambda p: lab.r(q[min(len(q) - 1, int(p * len(q)))], 3)
+            ts[reg] = {'n': len(q), 'p25': at(0.25), 'median': at(0.5), 'p75': at(0.75)}
+    return {'params': CYCLE, 'sources': sources, 'multi_use': multi, 'bins': bins, 'reuse_tstar': ts}

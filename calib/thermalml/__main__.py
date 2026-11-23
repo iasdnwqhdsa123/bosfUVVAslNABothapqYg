@@ -6,6 +6,12 @@ import lake
 from . import events, exposure, guard, join
 STAGES = {'events': events.run, 'exposure': exposure.run, 'join': join.run}
 
+def ops_from_env(env):
+    if env.get('THERMALML_OPS_LOCAL'):
+        return lake.LocalStore(env['THERMALML_OPS_LOCAL'])
+    vals = [env.get(k) or '' for k in ('OPS_S3_ENDPOINT', 'OPS_S3_BUCKET', 'OPS_RO_KEY', 'OPS_RO_SECRET')]
+    return lake.S3Store(*vals) if all(vals) else None
+
 def main(argv=None, env=None) -> int:
     ap = argparse.ArgumentParser(prog='thermalml')
     ap.add_argument('stage', choices=[*STAGES, 'all', 'learn'], nargs='?', default='all')
@@ -29,7 +35,7 @@ def main(argv=None, env=None) -> int:
             print(f'thermalml learn: {guard.SWITCH} is not 1: nothing learned')
             return 0
         try:
-            n = learn.run(lk, days=days, env=e, held=a.held)
+            n = learn.run(lk, days=days, env=e, held=a.held, ops=ops_from_env(e))
         except guard.Refused:
             print('thermalml learn: refused: an object holds a feed that is not admitted')
             return 1

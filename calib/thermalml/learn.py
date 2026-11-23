@@ -109,6 +109,16 @@ def load(lk, days=None, env=None, n=None) -> list[Day]:
         out.append(Day(sd, e, meta, cols, j))
     return out
 
+def attach_conditions(days: list[Day], ops, n=None) -> None:
+    from . import conditions, trigger
+    n = n if n is not None else {}
+    for d in days:
+        hrs = trigger.key_hours(d)
+        pts = {k: (*centre(k[0], k[1]), h) for k, h in hrs.items()}
+        got = conditions.at_points(ops, pts, n) if ops is not None else {}
+        d.cond = {k: v for k, v in got.items() if v}
+    n['days_with_conditions'] = sum((1 for d in days if getattr(d, 'cond', None)))
+
 def digest(days: list[Day]) -> str:
     h = hashlib.sha256()
     for d in days:
@@ -158,7 +168,7 @@ def r(x, nd=3):
         return None
     return round(float(x), nd)
 
-def run(lk, days=None, env=None, held: int=7, baseline=None, baseline_v: str | None=None, n=None) -> dict:
+def run(lk, days=None, env=None, held: int=7, baseline=None, baseline_v: str | None=None, n=None, ops=None) -> dict:
     from . import cycle, movement, report, strength, trigger
     if baseline is not None and (not (isinstance(baseline_v, str) and baseline_v)):
         raise ValueError('thermalml: a baseline needs its version')
@@ -168,6 +178,7 @@ def run(lk, days=None, env=None, held: int=7, baseline=None, baseline_v: str | N
         n['no_days'] = 1
         return n
     kept = prepare(ds)
+    attach_conditions(ds, ops, n)
     first, through, dg = (ds[0].sd, ds[-1].sd, digest(ds))
     outs = {'trigger': trigger.learn(ds), 'cycle': cycle.learn(ds), 'movement': movement.learn(ds), 'strength': strength.learn(ds)}
     vers = {'trigger': trigger.TRIGGER_V, 'cycle': cycle.CYCLE_V, 'movement': movement.MOVEMENT_V, 'strength': strength.STRENGTH_V}

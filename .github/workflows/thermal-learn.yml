@@ -1,0 +1,51 @@
+name: Thermal learn
+on:
+  schedule:
+    - cron: "35 9 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lab-thermal
+  cancel-in-progress: false
+jobs:
+  learn:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      OPS_S3_ENDPOINT: ${{ secrets.OPS_S3_ENDPOINT }}
+      OPS_S3_BUCKET: ${{ secrets.OPS_S3_BUCKET }}
+      OPS_RO_KEY: ${{ secrets.OPS_RO_KEY }}
+      OPS_RO_SECRET: ${{ secrets.OPS_RO_SECRET }}
+      COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "thermal learn: the lake's secrets (LAKE_S3_*, CALIB_DATA_KEY) are not set: nothing done"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: First stage
+        if: steps.on.outputs.go == 'true'
+        working-directory: calib
+        run: python3 -m thermalml all --max 30
+      - name: Learn (in shadow)
+        if: steps.on.outputs.go == 'true'
+        working-directory: calib
+        run: python3 -m thermalml learn
