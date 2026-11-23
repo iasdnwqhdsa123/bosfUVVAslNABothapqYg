@@ -40,6 +40,23 @@ def shards(base: int, most: int, running: int, waiting: int, upcoming: int) -> t
     free = ACCOUNT_JOBS - HEADROOM - running - upcoming - OWN_AFTER
     n = max(base, min(most, free))
     return (n, f'{running} running, up to {upcoming} starting in the next {WINDOW_MIN} min: room for {free}')
+LAB_JOBS = ('ingest', 'fingerprint', 'build', 'score', 'train', 'thermal')
+LAB_BACK = 15
+
+def lab_par(now: datetime, table: dict[str, dict], running: int | None, waiting: int | None, kinds: dict[str, int] | None=None, total: int=ACCOUNT_JOBS, headroom: int=HEADROOM, window: float=WINDOW_MIN, back: float=LAB_BACK) -> tuple[int, str]:
+    if now.tzinfo is None:
+        raise ValueError('lab_par: now without a time zone')
+    now = now.astimezone(timezone.utc)
+    if running is None or waiting is None:
+        return (0, "the account's jobs not listed: par 0")
+    if int(waiting) > 0:
+        return (0, f'{int(waiting)} job(s) waiting for a runner: par 0')
+    going = max(0, int(running))
+    up = coming(now - timedelta(minutes=back), table, window + back)
+    par = max(0, total - headroom - up - going)
+    kinds = {k: max(0, int(n)) for k, n in (kinds or {}).items()}
+    lab, verify = (sum((n for k, n in kinds.items() if k != 'verify')), kinds.get('verify', 0))
+    return (par, f'{going} running ({lab} lab, {verify} Verify), up to {up} starting from {back:g} min ago to {window:g} min on: par {par}')
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()

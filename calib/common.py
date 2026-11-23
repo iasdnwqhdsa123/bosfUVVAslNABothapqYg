@@ -302,6 +302,33 @@ def physics_version(macro: str='US') -> str:
     return globals()[{'EU': 'PHYSICS_VERSION_EU', 'SH': 'PHYSICS_VERSION_SH'}.get(macro, 'PHYSICS_VERSION')]
 SCORE_FILES = [os.path.join(HERE, f) for f in ('evaluate.js', 'lines.js', 'site.js', 'gbm.js', 'corrections.mjs')] + glob.glob(os.path.join(ROOT, 'public', 'js', 'shared', '*')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'ridgex.js')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'png*.js'))
 SCORE_VERSION = _version_of(SCORE_FILES)
+GROUPS = {'thermal': ('wstar', 'depth', 'zi', 'twidth', 'blapse', 'sink', 'core8', 'core10', 'heat'), 'cloud': ('cubase', 'cudepth', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'nlow', 'sun', 'rain', 'overdev'), 'wind': ('u_blavg', 'v_blavg', 'u_g300', 'v_g300', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'ridge'), 'surface': ('t2', 'densalt', 'snowd', 'soilm', 'conv', 'dth_m200', 'dth_m500'), 'static': ('elevation',), 'stations': ()}
+FIELD_GROUP = {f: g for g, fs in GROUPS.items() for f in fs}
+GRID_GROUPS = ('thermal', 'cloud', 'wind', 'surface', 'static')
+CONSUMERS = {'evaluate': GRID_GROUPS, 'layer2': GRID_GROUPS, 'satcheck': GRID_GROUPS, 'linecheck': GRID_GROUPS, 'pairs': ('stations',)}
+
+def gv_area(model: str, region: str | None=None) -> str:
+    return 'SH' if macro_of(region) == 'SH' else model_macro(model)
+
+def consumed(consumers) -> set:
+    return {g for c in consumers for g in CONSUMERS[c]}
+
+def unknown_groups(current_gv: dict, consumers) -> set:
+    return {g for g in consumed(consumers) if current_gv.get(g) is None}
+
+def stale_groups(unit_gv: dict | None, current_gv: dict, consumers) -> set:
+    unit_gv = unit_gv or {}
+    return {g for g in consumed(consumers) - unknown_groups(current_gv, consumers) if unit_gv.get(g) is None or unit_gv.get(g) != current_gv[g]}
+
+def unit_stale(unit_gv: dict | None, current_gv: dict, consumers) -> bool:
+    unknown = unknown_groups(current_gv, consumers)
+    if unknown:
+        raise ValueError(f"no current stamp for {', '.join(sorted(unknown))}: can't tell")
+    return bool(stale_groups(unit_gv, current_gv, consumers))
+
+def score_version(gv: dict, corr_v: str | None=None, score: str | None=None, consumers=('evaluate',)) -> str:
+    text = '\x00'.join([score or SCORE_VERSION, corr_v or ''] + [f"{g}={gv.get(g) or ''}" for g in sorted(consumed(consumers))])
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 def pilot_key(user_id) -> str | None:
     pw = os.environ.get('CALIB_DATA_KEY')

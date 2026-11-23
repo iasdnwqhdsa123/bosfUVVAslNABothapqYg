@@ -160,6 +160,131 @@ def merge(src: str, dest: str) -> None:
     rs, rd = (os.path.join(os.path.dirname(os.path.abspath(p)), REPS) for p in (src, dest))
     if os.path.exists(rs) and rs != rd:
         save_reps(rd, {**load_reps(rd), **load_reps(rs)})
+GROUP_EXTRA = {'EU': [('build_eu.py', 'icon', '2025-06-18', 'Europe/Berlin', '10.0,51.8,11.0,52.4', 13, 14), ('build_eu.py', 'icond2', '2025-07-02', 'Europe/Berlin', '7.6,46.4,8.6,47.0', 13, 14), ('build_eu.py', 'arome', '2025-07-02', 'Europe/Berlin', '7.6,46.4,8.6,47.0', 13, 14)], 'SH': [('build_sh.py', 'gfs', '2025-12-10', 'Australia/Sydney', '147.7,-32.6,148.7,-31.8', 13, 14), ('build_sh.py', 'icon', '2025-12-10', 'Australia/Sydney', '147.7,-32.6,148.7,-31.8', 13, 14)]}
+GROUP_REFS = {area: [(BUILDER[m], m, d, tz, bb, a, b) for m, d, tz, bb, a, b in REFS.get(area, [])] + GROUP_EXTRA.get(area, []) for area in ('US', 'EU', 'SH')}
+GROUP_REPS = 'gvref.npz'
+
+def group_of(key: str) -> str | None:
+    if key.startswith('st/'):
+        return 'stations'
+    return common.FIELD_GROUP.get(key.rsplit('/', 1)[-1])
+
+def split_groups(refs: dict) -> dict:
+    out = {g: {} for g in common.GROUPS}
+    for k, v in refs.items():
+        g = group_of(k)
+        if g is not None:
+            out[g][k] = v
+    return out
+
+def group_hash(group: str, sub: dict, boxes=()) -> str | None:
+    if not sub:
+        return None
+    h = hashlib.sha256(('\x00'.join([group, *common.GROUPS[group]]) + '\x00').encode())
+    for box in boxes:
+        h.update(('box ' + ' '.join((str(x) for x in box)) + '\x00').encode())
+    for k in sorted(sub):
+        x = np.ascontiguousarray(sub[k])
+        h.update(f'{k}\x00{x.dtype.str}\x00{x.shape}\x00'.encode())
+        h.update(x.tobytes())
+    return h.hexdigest()[:12]
+
+def group_close(a: dict, b: dict) -> bool:
+    if all((np.asarray(v).dtype == np.uint8 for v in (*a.values(), *b.values()))):
+        return close(a, b)
+    return bool(a) and set(a) == set(b) and all((np.array_equal(a[k], b[k], equal_nan=True) for k in a))
+
+def group_stamps(refs: dict, kept: dict, boxes=(), prefer: dict | None=None) -> tuple[dict, dict]:
+    prefer = prefer or {}
+    gv, new = ({}, {})
+    for g, sub in split_groups(refs).items():
+        h = group_hash(g, sub, boxes)
+        if h is None or (g, h) in kept:
+            gv[g] = h
+            continue
+        order = sorted((v for kg, v in kept if kg == g), key=lambda v: (v != prefer.get(g), v))
+        near = next((v for v in order if group_close(sub, kept[g, v])), None)
+        gv[g] = near or h
+        if near is None:
+            new[g, h] = sub
+    return (gv, new)
+
+def load_group_reps(*paths: str) -> dict:
+    reps = {}
+    for p in paths:
+        try:
+            z = np.load(p)
+        except (OSError, ValueError):
+            continue
+        for k in z.files:
+            area, g, v, rest = k.split(':', 3)
+            reps.setdefault((area, g, v), {})[rest] = z[k]
+    return reps
+
+def save_group_reps(path: str, reps: dict) -> None:
+    np.savez_compressed(path, **{f'{a}:{g}:{v}:{k}': x for (a, g, v), e in sorted(reps.items()) for k, x in e.items()})
+
+def merge_group_reps(src: str, dest: str) -> None:
+    save_group_reps(dest, {**load_group_reps(dest), **load_group_reps(src)})
+
+def area_reps(reps: dict, area: str) -> dict:
+    return {(g, v): e for (a, g, v), e in reps.items() if a == area}
+
+def build_group_refs(boxes: list, root: str=common.ROOT, work: str | None=None) -> dict | None:
+    names = sorted(common.FIELD_GROUP)
+    env = dict(os.environ)
+    env.setdefault('CONTRAILS', '0')
+    own = work is None
+    work = work or tempfile.mkdtemp(prefix='gv-')
+    os.makedirs(work, exist_ok=True)
+    refs = {}
+    try:
+        for i, (builder, model, day, tz, bbox, a, b) in enumerate(boxes):
+            out = os.path.join(work, f'r{i}')
+            shutil.rmtree(out, ignore_errors=True)
+            cmd = [sys.executable, os.path.join(root, 'calib', builder), '--day', day, '--tz', tz, f'--bbox={bbox}', '--out', out, '--model', model, '--from-local', str(a), '--to-local', str(b)]
+            cmd += ['--workers', '2'] if builder == 'build_day.py' else ['--cache', os.path.join(work, 'cache')]
+            with open(os.path.join(work, f'r{i}.log'), 'w') as lf:
+                try:
+                    r = subprocess.run(cmd, cwd=os.path.join(root, 'pipeline'), stdout=lf, stderr=subprocess.STDOUT, timeout=TIMEOUT, env=env)
+                except subprocess.TimeoutExpired:
+                    return None
+            if r.returncode != 0:
+                return None
+            n = len(refs)
+            _fields_of(out, f'r{i}', names, refs)
+            if len(refs) == n:
+                return None
+        return refs
+    finally:
+        if own:
+            shutil.rmtree(work, ignore_errors=True)
+
+def groups(kept_paths: list[str], out: str, root: str=common.ROOT, work: str | None=None, current: str | None=None) -> dict | None:
+    kept = load_group_reps(*kept_paths)
+    now = {}
+    if current:
+        try:
+            with open(current) as f:
+                now = json.load(f)
+        except (OSError, ValueError):
+            pass
+    gv, new = ({}, {})
+    for area, boxes in GROUP_REFS.items():
+        refs = build_group_refs(boxes, root, os.path.join(work, area) if work else None)
+        if refs is None:
+            common.log(f'group stamps: a reference box of {area} failed, none made')
+            return None
+        gv[area], made = group_stamps(refs, area_reps(kept, area), boxes, now.get(area))
+        new.update({(area, g, v): e for (g, v), e in made.items()})
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, 'gv.json'), 'w') as f:
+        json.dump(gv, f, indent=1, sort_keys=True)
+        f.write('\n')
+    save_group_reps(os.path.join(out, GROUP_REPS), {**kept, **new})
+    for area in sorted(gv):
+        common.log(f'group stamps {area}: ' + ', '.join((f"{g} {v or '-'}" + (' (new)' if (area, g, v) in new else '') for g, v in sorted(gv[area].items()))))
+    return gv
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -175,11 +300,24 @@ def main() -> None:
     g = sub.add_parser('merge')
     g.add_argument('src')
     g.add_argument('dest')
+    s = sub.add_parser('groups')
+    s.add_argument('--kept', action='append', default=[])
+    s.add_argument('--out', required=True)
+    s.add_argument('--root', default=common.ROOT)
+    s.add_argument('--work')
+    s.add_argument('--current')
+    gm = sub.add_parser('merge-groups')
+    gm.add_argument('src')
+    gm.add_argument('dest')
     a = ap.parse_args()
     if a.cmd == 'ensure':
         ensure(a.table, a.out, a.work)
     elif a.cmd == 'at':
         print(fingerprint(a.macro, os.path.abspath(a.root), a.work) or 'none')
+    elif a.cmd == 'groups':
+        groups(a.kept, a.out, os.path.abspath(a.root), a.work, a.current)
+    elif a.cmd == 'merge-groups':
+        merge_group_reps(a.src, a.dest)
     else:
         merge(a.src, a.dest)
 if __name__ == '__main__':
