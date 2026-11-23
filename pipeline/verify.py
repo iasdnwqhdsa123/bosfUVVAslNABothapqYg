@@ -91,10 +91,11 @@ def _build(model, run_id, out, workers, valid):
     sys.argv = ['build.py', '--model', model, '--out', out, '--shard', '0/1', '--run', run_id, '--workers', str(workers)]
     return build.main()
 
-def station_cells(model, stations):
+def station_cells(model, stations, region=None):
     import build
-    w, s, e, n, step = build.REGIONS[model][:5]
-    lons, lats = build.target_grid(build.REGIONS[model])
+    region = region or build.REGIONS[model]
+    w, s, e, n, step = region[:5]
+    lons, lats = build.target_grid(region)
     idx, iy, ix = ([], [], [])
     for i, (_, lat, lon, _) in enumerate(stations):
         x, y = (round((lon - w) / step), round((n - lat) / step))
@@ -102,24 +103,32 @@ def station_cells(model, stations):
             (idx.append(i), iy.append(y), ix.append(x))
     return (np.array(idx, np.int32), np.array(iy), np.array(ix))
 
+def sample_hour(h, iy, ix, r, fields=FIELDS):
+    codes = np.full((len(iy), len(fields)), 255, np.uint8)
+    for j, name in enumerate(fields):
+        if name in h.files:
+            codes[:, j] = h[name][iy, ix]
+    if 'overdev_nb' in fields and 'overdev' in h.files:
+        from scipy.ndimage import maximum_filter
+        od = h['overdev']
+        near = maximum_filter(np.where(od == 255, 0, od), size=2 * r + 1) if r else od
+        codes[:, fields.index('overdev_nb')] = np.where(od[iy, ix] == 255, 255, near[iy, ix])
+    return codes
+
+def near_cells(step):
+    return int(round(NEAR_KM / (step * 111.0)))
+
 def sample_hours(model, hours_dir, stations):
     import build
-    from scipy.ndimage import maximum_filter
     idx, iy, ix = station_cells(model, stations)
-    r = int(round(NEAR_KM / (build.REGIONS[model][4] * 111.0)))
+    r = near_cells(build.REGIONS[model][4])
     stamps = sorted((f[:-4] for f in os.listdir(hours_dir) if f.endswith('.npz') and (not f.endswith('.tmp.npz'))))
     if not stamps:
         return None
     codes = np.full((len(stamps), len(idx), len(FIELDS)), 255, np.uint8)
     for k, st in enumerate(stamps):
         with np.load(os.path.join(hours_dir, f'{st}.npz')) as h:
-            for j, name in enumerate(FIELDS):
-                if name in h.files:
-                    codes[k, :, j] = h[name][iy, ix]
-            if 'overdev' in h.files:
-                od = h['overdev']
-                near = maximum_filter(np.where(od == 255, 0, od), size=2 * r + 1) if r else od
-                codes[k, :, FIELDS.index('overdev_nb')] = np.where(od[iy, ix] == 255, 255, near[iy, ix])
+            codes[k] = sample_hour(h, iy, ix, r)
     has = (codes[:, :, FIELDS.index('t2')] != 255).any(axis=0)
     return (stamps, idx[has], codes[:, has, :])
 
