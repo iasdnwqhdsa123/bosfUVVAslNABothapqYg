@@ -40,6 +40,22 @@ def find(lk, stage: str, version: str, sd: str) -> str | None:
             if best is None or rank < best[0]:
                 best = (rank, x)
     return best[1] if best else None
+LEARNERS = ('trigger', 'cycle', 'movement', 'strength', 'report')
+_DIGEST_RE = re.compile('^[0-9a-f]{12}$')
+
+def learned_key(learner: str, version: str, first: str, through: str, digest: str) -> str:
+    if learner not in LEARNERS or not re.match('^[a-z0-9-]{1,32}$', version) or (not DAY_RE.match(first)) or (not DAY_RE.match(through)) or (not _DIGEST_RE.match(digest)):
+        raise ValueError('thermalml: a malformed learned key')
+    return f'{DERIVED}{learner}/{version}/{first}_{through}_{digest}.lenc'
+
+def made_days(lk, stage: str, version: str) -> list[str]:
+    key(stage, version, FIRST_DAY)
+    out = set()
+    for x in lk.list(f'{DERIVED}{stage}/{version}/'):
+        m = _DERIVED_RE.search(x)
+        if m:
+            out.add(m.group(1))
+    return sorted(out)
 
 def raw_days(lk) -> dict:
     out = {}

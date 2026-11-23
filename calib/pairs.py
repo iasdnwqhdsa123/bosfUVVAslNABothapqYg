@@ -141,6 +141,23 @@ def build_minutes(records: list) -> dict:
 def _s(x) -> str:
     return str(np.asarray(x).item()) if np.ndim(x) == 0 else str(x)
 
+def stations_v_of(stations: list) -> str:
+    try:
+        return hashlib.sha256(json.dumps(stations, separators=(',', ':')).encode()).hexdigest()[:12]
+    except TypeError:
+        raise ValueError('pairs: the station list is not as read from its JSON file (numpy values in it)') from None
+
+def _same_list(stations: list, v) -> None:
+    if v is None:
+        return
+    v = np.asarray(v)
+    v = v.item() if v.ndim == 0 else ''
+    if isinstance(v, bytes):
+        v = v.decode('ascii', 'replace')
+    v = str(v)
+    if re.fullmatch('[0-9a-f]{12}', v) and stations_v_of(stations) != v:
+        raise ValueError('pairs: the station list is not the one the record was sampled with (stations_v)')
+
 def record_from_stations(z, stations: list, done: dict | None=None, src: str='ops', build_min=None) -> dict:
     model, run = (_s(z['model']), _s(z['run']))
     stamps = [str(s) for s in np.asarray(z['stamps'])]
@@ -154,6 +171,7 @@ def record_from_stations(z, stations: list, done: dict | None=None, src: str='op
     enc = z['enc']
     enc = json.loads(_s(enc)) if not isinstance(enc, dict) else enc
     files = list(z.files) if hasattr(z, 'files') else list(z.keys())
+    _same_list(stations, z['stations_v'] if 'stations_v' in files else None)
     return {'model': model, 'run': run, 'build': _s(z['build']) if 'build' in files else (done or {}).get('build', ''), 'src': src, 'replay': False, 'missing_w': False, 'missing_blh_heat': False, 'review': False, 'avail_t': avail, 'stamps': stamps, 'runs': [run] * len(stamps), 'leads': [(_ts(s) - _ts(run)) // 3600 for s in stamps], 'obs_ids': [str(stations[i][0]) for i in idx], 'codes': np.asarray(z['codes'], np.uint8), 'fields': [str(f) for f in np.asarray(z['fields'])], 'enc': enc, 'stations_v': _s(z['stations_v']) if 'stations_v' in files else None, 'elev_st': np.array([float(stations[i][3]) for i in idx]), 'lat': np.array([float(stations[i][1]) for i in idx]), 'lon': np.array([float(stations[i][2]) for i in idx])}
 
 def record_from_unit(u: dict, stations: list, build_min=None) -> dict:
@@ -167,6 +185,7 @@ def record_from_unit(u: dict, stations: list, build_min=None) -> dict:
     replay = meta.get('src') == 'replay'
     enc = u['st.enc']
     enc = json.loads(_s(enc)) if not isinstance(enc, dict) else enc
+    _same_list(stations, u.get('st.stations_v'))
     return {'model': model, 'run': run, 'build': str(meta.get('cs') or ''), 'src': 'hind', 'replay': replay, 'missing_w': replay, 'missing_blh_heat': replay, 'review': str(np.asarray(u.get('st.selected_by', 'flight')).item()) == 'collector', 'avail_t': rebuilt_avail(model, run, build_min) if re.fullmatch('\\d{10}', run) else None, 'avail_runs': {r: rebuilt_avail(model, r, build_min) for r in set(runs) if re.fullmatch('\\d{10}', r or '')}, 'stamps': stamps, 'runs': runs, 'leads': leads, 'obs_ids': [str(stations[i][0]) for i in idx], 'codes': np.asarray(u['st.codes'], np.uint8), 'fields': [str(f) for f in np.asarray(u['st.fields'])], 'enc': enc, 'stations_v': str(np.asarray(u.get('st.stations_v', '')).item()), 'elev_st': np.array([float(stations[i][3]) for i in idx]), 'lat': np.array([float(stations[i][1]) for i in idx]), 'lon': np.array([float(stations[i][2]) for i in idx])}
 
 def decoded(rec: dict, var: str, codes: np.ndarray | None=None) -> np.ndarray:
@@ -346,16 +365,43 @@ def metar_obs(arr: np.ndarray, day: str, stations: list) -> dict:
         cols[f'q_{n}'] = arr[si, hi, k[n]]
     return table(obs_schema('metar'), cols, len(si))
 
+def routine_first(text: str) -> tuple[str, str]:
+    import csv
+    from collections import Counter
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        return (text, '')
+    head, body = (rows[0], rows[1:])
+    try:
+        si, vi = (head.index('station'), head.index('valid'))
+    except ValueError:
+        return (text, '')
+    minute = {}
+    for r in body:
+        if len(r) > max(si, vi) and len(r[vi]) >= 16:
+            minute.setdefault(r[si], Counter())[r[vi][14:16]] += 1
+    mode = {k: c.most_common(1)[0][0] for k, c in minute.items()}
+    routine, rest = (io.StringIO(), io.StringIO())
+    wr, wx = (csv.writer(routine, lineterminator='\n'), csv.writer(rest, lineterminator='\n'))
+    wr.writerow(head)
+    wx.writerow(head)
+    for r in body:
+        ok = len(r) > max(si, vi) and r[vi][14:16] == mode.get(r[si])
+        (wr if ok else wx).writerow(r)
+    return (routine.getvalue(), rest.getvalue())
+
 def metar_obs_from_csv(text: str, day: str, stations: list) -> dict:
     V = _verify()
     d = datetime.fromisoformat(day).replace(tzinfo=UTC)
     ids = {V.iem_id(s[0]): i for i, s in enumerate(stations)}
     elev = [s[3] for s in stations]
     arr = np.full((len(stations), 24, len(V.OBS)), np.nan, np.float32)
-    for i, hours in V.parse_reports(text, ids, elev).items():
-        for hr, vals in hours.items():
-            if hr.date() == d.date():
-                arr[i, hr.hour] = vals
+    routine, rest = routine_first(text)
+    for part in (rest, routine):
+        for i, hours in V.parse_reports(part, ids, elev).items():
+            for hr, vals in hours.items():
+                if hr.date() == d.date():
+                    arr[i, hr.hour] = vals
     V.qc(arr)
     return metar_obs(arr, day, stations)
 

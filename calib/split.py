@@ -312,19 +312,20 @@ def pick_base(losses: dict, cells, fit, *, min_cover: float=MIN_COVER) -> tuple[
     else:
         raise ValueError('fit is a boolean mask or integer row indices')
 
-    def ranking(sel):
+    def ranking(sel, relative=False):
         have = np.isfinite(L[sel])
         if not len(have):
             return None
-        cand = np.flatnonzero(have.mean(axis=0) >= min_cover)
-        if not len(cand):
+        cover = have.mean(axis=0)
+        cand = np.flatnonzero(cover >= min_cover * (cover.max() if relative else 1.0))
+        if not len(cand) or not cover[cand].all():
             return None
         common = have[:, cand].all(axis=1)
         if not common.any():
             return None
         m = L[sel][common][:, cand].mean(axis=0)
         return [int(cand[i]) for i in np.argsort(m, kind='stable')]
-    every = ranking(fit)
+    every = ranking(fit) or ranking(fit, relative=True)
     choice, out = ({}, np.full(nrow, np.nan))
     for c in np.unique(lab):
         sel = lab == c

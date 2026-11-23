@@ -150,7 +150,7 @@ def bbox_text(region: list) -> str:
     return ','.join((f'{v:.6f}'.rstrip('0').rstrip('.') for v in region[:4]))
 
 def build_command(model: str, run: str, region: list, out: str, n_workers: int, area: str) -> list[str]:
-    return ['python3', os.path.abspath(__file__), '_build', model, run, out, str(n_workers), bbox_text(region), area]
+    return [sys.executable, os.path.abspath(__file__), '_build', model, run, out, str(n_workers), bbox_text(region), area]
 
 def _build(model: str, run: str, out: str, n_workers: int, bbox: str, area: str) -> int:
     sys.path.insert(0, os.getcwd())

@@ -33,3 +33,14 @@ def read_for_learning(lk, stage: str, version: str, sd: str, env=None):
     if not seen <= set(FEEDS):
         raise Refused('thermalml: an object holds a feed that is not admitted')
     return obj
+
+def days_for_learning(lk, versions: dict, env=None) -> list[str]:
+    if not allowed(env):
+        raise Refused(f"thermalml: the collector's records are not for training ({SWITCH} is not 1)")
+    if not versions or not set(versions) <= set(STAGES):
+        raise ValueError('thermalml: no such stage')
+    have = None
+    for stage, version in sorted(versions.items()):
+        d = set(objects.made_days(lk, stage, version))
+        have = d if have is None else have & d
+    return sorted(have)
