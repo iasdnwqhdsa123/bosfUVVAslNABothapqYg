@@ -1,0 +1,121 @@
+name: Migrate
+on:
+  push:
+    branches: [main]
+    paths: ["calib/migrate.request"]
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "The step"
+        type: choice
+        options: [inventory, copy, union, verify]
+        default: inventory
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: calib-migrate
+  cancel-in-progress: false
+env:
+  GRID_SHARDS: "6"
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      what: ${{ steps.what.outputs.what }}
+      ready: ${{ steps.check.outputs.ready }}
+      parts: ${{ steps.parts.outputs.parts }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: calib
+      - id: what
+        env:
+          IN_WHAT: ${{ inputs.what }}
+        run: |
+          what="${IN_WHAT:-inventory}"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -f calib/migrate.request ]; then
+            what="$(python3 -c 'import json; print(json.load(open("calib/migrate.request")).get("what", ""))' 2> /dev/null || true)"
+          fi
+          case "$what" in inventory|copy|union|verify) ;; *) echo "::error::unknown request: $what"; exit 1;; esac
+          echo "what: $what"
+          echo "what=$what" >> "$GITHUB_OUTPUT"
+      - id: check
+        env:
+          WHAT: ${{ steps.what.outputs.what }}
+          CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+          LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+          LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+          LAKE_RW_KEY: ${{ secrets.LAKE_S3_KEY }}
+          LAKE_RW_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+          LAKE_RO_KEY: ${{ secrets.LAKE_RO_KEY }}
+          LAKE_RO_SECRET: ${{ secrets.LAKE_RO_SECRET }}
+        run: |
+          if [ "$WHAT" = verify ]; then
+            if [ -z "$LAKE_RO_KEY" ] || [ -z "$LAKE_RO_SECRET" ]; then
+              echo "migrate: the read-only key (LAKE_RO_KEY, LAKE_RO_SECRET) is not set: nothing done"
+              echo "ready=no" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            export LAKE_S3_KEY="$LAKE_RO_KEY" LAKE_S3_SECRET="$LAKE_RO_SECRET"
+          else
+            export LAKE_S3_KEY="$LAKE_RW_KEY" LAKE_S3_SECRET="$LAKE_RW_SECRET"
+          fi
+          python3 calib/migrate.py check "$WHAT"
+      - id: parts
+        env:
+          WHAT: ${{ steps.what.outputs.what }}
+        run: |
+          if [ "$WHAT" = verify ]; then
+            parts="$(python3 -c 'import json, os; n = int(os.environ["GRID_SHARDS"]); print(json.dumps(["data"] + [f"grids:{i}/{n}" for i in range(n)]))')"
+          else
+            parts='["all"]'
+          fi
+          echo "parts=$parts" >> "$GITHUB_OUTPUT"
+  migrate:
+    needs: plan
+    if: needs.plan.outputs.ready == 'yes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ needs.plan.outputs.what == 'verify' && 350 || 90 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJSON(needs.plan.outputs.parts) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - uses: actions/setup-node@v5
+        if: needs.plan.outputs.what == 'verify'
+        with:
+          node-version: "22"
+      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Migrate (${{ needs.plan.outputs.what }}, ${{ matrix.part }})
+        env:
+          WHAT: ${{ needs.plan.outputs.what }}
+          PART: ${{ matrix.part }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+          LAKE_S3_ENDPOINT: ${{ secrets.LAKE_S3_ENDPOINT }}
+          LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET }}
+          LAKE_RW_KEY: ${{ secrets.LAKE_S3_KEY }}
+          LAKE_RW_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+          LAKE_RO_KEY: ${{ secrets.LAKE_RO_KEY }}
+          LAKE_RO_SECRET: ${{ secrets.LAKE_RO_SECRET }}
+        run: |
+          if [ "$WHAT" = verify ]; then
+            export LAKE_S3_KEY="$LAKE_RO_KEY" LAKE_S3_SECRET="$LAKE_RO_SECRET"
+            part="${PART%%:*}"; shard="0/1"
+            [ "$part" = grids ] && shard="${PART#*:}"
+            python3 calib/migrate.py verify --repo "$GITHUB_REPOSITORY" --seed calib/seed.enc --work /tmp/migrate \
+              --part "$part" --shard "$shard"
+          else
+            export LAKE_S3_KEY="$LAKE_RW_KEY" LAKE_S3_SECRET="$LAKE_RW_SECRET"
+            python3 calib/migrate.py "$WHAT" --repo "$GITHUB_REPOSITORY" --seed calib/seed.enc --minutes 60 --work /tmp/migrate
+          fi

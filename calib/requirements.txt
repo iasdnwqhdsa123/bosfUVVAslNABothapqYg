@@ -3,3 +3,4 @@ scikit-learn==1.9.1
 cryptography==50.0.1
 cffi==2.1.1
 pycparser==3.12
+h5py==3.16.0

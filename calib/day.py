@@ -479,6 +479,7 @@ def _merge_eval(results: list, B: dict, inputs: list, model: str, bi: int, suffi
 BUILDER = {'hrrr': 'build_day.py', 'gfs': 'build_day.py', 'ecmwf': 'build_eu.py', 'icon': 'build_eu.py', 'icond2': 'build_eu.py', 'arome': 'build_eu.py'}
 SH_BUILDER = 'build_sh.py'
 LEAD_GRIDS = ('gfs', 'ecmwf')
+LAB_LEAD_GRIDS = LEAD_GRIDS + ('hrrr',)
 
 def build_command(day: str, B: dict, out: str, model: str, workers: int, work: str) -> list[str] | None:
     bbox = ','.join((f'{v:.2f}' for v in B['bbox']))
