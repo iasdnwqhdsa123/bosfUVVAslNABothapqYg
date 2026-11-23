@@ -18,7 +18,8 @@ import track
 import train
 T3 = {'spacing': 2, 'spacingMin': 1.1, 'spacingMax': 3.1, 'spacingW': 2, 'spacingWeak': 0.525, 'spacingStrong': 0.6, 'minSpacing': 1200, 'maxSpacing': 6000, 'peak': 1.3, 'windward': 0.35, 'flowPeak': 0.25, 'crest': 0.2, 'slideEdge': 0.15, 'hillM': 120, 'minW': 0.5, 'suck': 0.25, 'suckFrom': 500, 'suckFull': 2500, 'suckDepth': 250}
 TRIGGER_RANGE = (-0.6, 1.6)
-TRIGGER_W = {'hill': 0.15, 'sun': 0.7, 'ground': 0.1, 'cover': 0.1, 'flat': 2}
+TRIGGER_W = {'hill': 0.15, 'sun': 0.7, 'ground': 0.1, 'cover': 0.1, 'flat': 2, 'steep': 0.45}
+TRIGGER_STEEP = {'ref': 0.4, 'relief': (100, 200)}
 TRIGGER_FLAT = (30, 200)
 LAG = {'entrain': 0.1, 'foot': 0.6}
 LEAN_STEPS, RISE_MIN = (24, 0.5)
@@ -112,10 +113,14 @@ def flatness(relief) -> float:
         return 0.0
     return max(0.0, min(1.0, (TRIGGER_FLAT[1] - relief) / (TRIGGER_FLAT[1] - TRIGGER_FLAT[0])))
 
-def trigger_score(st, sun_slope, src, up, peak, crest, wc=0.0, flat=0.0, heat=1.0, edge=0.0) -> float:
+def steep_share(grade, relief) -> float:
+    a, b = TRIGGER_STEEP['relief']
+    return min(1.0, grade / TRIGGER_STEEP['ref']) * max(0.0, min(1.0, (relief - a) / (b - a)))
+
+def trigger_score(st, sun_slope, src, up, peak, crest, wc=0.0, flat=0.0, heat=1.0, edge=0.0, steep=0.0) -> float:
     W = TRIGGER_W
     gr = (1 + W['flat'] * flat) * (W['ground'] * src + W['cover'] * wc + T3['slideEdge'] * edge)
-    t = W['hill'] * st + W['sun'] * sun_slope + (heat * gr if gr > 0 else gr) + T3['windward'] * up * (1 - flat) + T3['flowPeak'] * peak + T3['crest'] * crest
+    t = W['hill'] * st + W['sun'] * sun_slope + (heat * gr if gr > 0 else gr) + T3['windward'] * up * (1 - flat) + T3['flowPeak'] * peak + T3['crest'] * crest + W['steep'] * steep
     return max(0.0, min(1.0, (t - TRIGGER_RANGE[0]) / (TRIGGER_RANGE[1] - TRIGGER_RANGE[0])))
 
 def _unfilter(raw: bytes, w: int, h: int, bpp: int) -> bytes:
@@ -258,7 +263,7 @@ def terrain_features(T: Terrain, lon: float, lat: float, sun: dict, u: float, v:
     sun_slope = ss * (0.3 + 0.7 * BARE)
     flat = flatness(hi - lo)
     up = max(0.0, min(1.0, (u * hx + v * hy) / 1)) * (1 - flat)
-    return {'g': g, 'slope': math.hypot(hx, hy), 'tpi': tpi, 'relief': hi - lo, 'flat': flat, 'st': st, 'sunslope': sun_slope, 'up': up, 'trig': trigger_score(st, sun_slope, 0.0, up, 0.0, 0.0, 0.0, flat, 1.0, 0.0)}
+    return {'g': g, 'slope': math.hypot(hx, hy), 'tpi': tpi, 'relief': hi - lo, 'flat': flat, 'st': st, 'sunslope': sun_slope, 'up': up, 'trig': trigger_score(st, sun_slope, 0.0, up, 0.0, 0.0, 0.0, flat, 1.0, 0.0, steep_share(math.hypot(hx, hy), hi - lo))}
 
 class Grids:
 
