@@ -135,10 +135,21 @@ def weglide_note(env=None) -> str:
     on = (os.environ if env is None else env).get('WEGLIDE_ON', '0')
     return 'weglide: parked (WEGLIDE_ON=0)' if on == '0' else 'weglide: parked (no ingest built for it yet): nothing fetched'
 
-def run(lk, today: date, what: str='all', minutes: float=IEM_MINUTES, opener=None, sleep=time.sleep) -> dict:
+def span_window(span: str) -> tuple[date, int, int]:
+    a, _, b = span.partition(':')
+    d0, d1 = (date.fromisoformat(a), date.fromisoformat(b or a))
+    if d1 < d0:
+        d0, d1 = (d1, d0)
+    return (d1, 0, (d1 - d0).days)
+
+def run(lk, today: date, what: str='all', minutes: float=IEM_MINUTES, opener=None, sleep=time.sleep, span: str | None=None) -> dict:
     out = {}
     if what in ('all', 'iem'):
-        out['iem'] = ingest_iem(lk, today, opener=opener, sleep=sleep, minutes=minutes)
+        if span:
+            end, lag, back = span_window(span)
+            out['iem'] = ingest_iem(lk, end, opener=opener, sleep=sleep, minutes=minutes, lag=lag, back=back)
+        else:
+            out['iem'] = ingest_iem(lk, today, opener=opener, sleep=sleep, minutes=minutes)
     if what in ('all', 'raob'):
         out['raob'] = ingest_raob(lk, today)
     return out
@@ -154,13 +165,14 @@ def main(argv=None) -> int:
     a1.add_argument('--local', help='a folder as the lake (else the LAKE_S3_* secrets)')
     a1.add_argument('--day', help='today, YYYY-MM-DD (default: today, UTC)')
     a1.add_argument('--minutes', type=float, default=IEM_MINUTES, help='no METAR request started after this')
+    a1.add_argument('--days', help='YYYY-MM-DD[:YYYY-MM-DD]: the METARs of these days (a backfill), not the last IEM_BACK')
     a = ap.parse_args(argv)
     lk = lakemod.from_env('LAKE', a.local)
     if lk is None:
         print('lab ingest: no lake (LAKE_S3_* not set): nothing fetched', flush=True)
         return 0
     today = date.fromisoformat(a.day) if a.day else datetime.now(timezone.utc).date()
-    out = run(lk, today, a.what, a.minutes)
+    out = run(lk, today, a.what, a.minutes, span=a.days)
     for k, counts in out.items():
         print(f'{k}: {_line(counts)}', flush=True)
     print(weglide_note(), flush=True)

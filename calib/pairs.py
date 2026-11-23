@@ -837,6 +837,35 @@ def station_unit(lake, kind: str, day: str, batch: str, records: dict, pv: str=P
     by = _by_id(records)
     return write_unit(lake, 'pairs', kind, day, batch, list(records), lambda new, _all: concat(sch, [station_pairs(by[i], kind, day) for i in new]), pv)
 
+def sat_unit(lake, day: str, batch: str, records: dict, observed: dict, pv: str=PV) -> dict:
+    sch = pairs_schema('sat')
+    recs, obs = (_by_id(records), _by_id(observed))
+
+    def keys_of(t) -> set:
+        if isinstance(t, (set, frozenset)):
+            return set(t)
+        if not n_rows(t):
+            return set()
+        ok = np.array([str(x) == 'ok' for x in t['status']], bool) if 'status' in t else np.ones(n_rows(t), bool)
+        return {(str(a), int(b)) for a, b, k in zip(t['obs_id'], t['t_valid'], ok) if k}
+    seen = {oi: keys_of(t) for oi, t in obs.items()}
+
+    def build(new, _all):
+        new = set(new)
+        out = []
+        for ri, rec in recs.items():
+            want = set().union(*(k for oi, k in seen.items() if ri in new or oi in new)) if seen else set()
+            if not want:
+                continue
+            t = station_pairs(rec, 'sat', day)
+            if not n_rows(t):
+                continue
+            keep = np.array([(str(a), int(b)) in want for a, b in zip(t['obs_id'], t['t_valid'])], bool)
+            if keep.any():
+                out.append({c: v[keep] for c, v in t.items()})
+        return concat(sch, out)
+    return write_unit(lake, 'pairs', 'sat', day, batch, list(records) + list(observed), build, pv)
+
 def latest_soundings(soundings: dict) -> dict:
     owner = {}
     for si, obs in soundings.items():
