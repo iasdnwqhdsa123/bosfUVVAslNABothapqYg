@@ -1025,7 +1025,37 @@ def _rescore_compare(rec: dict, res: dict) -> tuple[bool, bool]:
     scored = {m for m in models if _boxes_ok(rec, m) and _boxes_ok(rec, m) <= _boxes_ok(res, m)}
     own = {m for m in models if not common.is_lead(m) and _boxes_ok(rec, m)}
     lists = [k for k in ITEM_LISTS if isinstance(rec.get(k), list)]
-    return (own <= scored, _scored(_only_models(res, scored), lists) == _scored(_only_models(rec, scored), lists))
+    new, old = (json.loads(_scored(_only_models(res, scored), lists)), json.loads(_scored(_only_models(rec, scored), lists)))
+    return (own <= scored, _diff(new, old)['same'])
+SCORE_TOL = (1e-06, 1e-09)
+
+def _diff(a, b, tol=SCORE_TOL) -> dict:
+    out = {'numbers': 0, 'differ': 0, 'max_abs': 0.0, 'max_rel': 0.0, 'only_one': 0, 'other': 0}
+
+    def walk(x, y):
+        if isinstance(x, dict) and isinstance(y, dict):
+            for k in set(x) | set(y):
+                if k not in x or k not in y:
+                    out['only_one'] += 1
+                else:
+                    walk(x[k], y[k])
+        elif isinstance(x, list) and isinstance(y, list):
+            if len(x) != len(y):
+                out['only_one'] += abs(len(x) - len(y))
+            for u, v in zip(x, y):
+                walk(u, v)
+        elif isinstance(x, (int, float)) and isinstance(y, (int, float)) and (not isinstance(x, bool)) and (not isinstance(y, bool)):
+            out['numbers'] += 1
+            d = abs(x - y)
+            r = d / max(abs(x), abs(y), 1e-12)
+            if d > tol[1] and r > tol[0]:
+                out['differ'] += 1
+                out['max_abs'], out['max_rel'] = (max(out['max_abs'], d), max(out['max_rel'], r))
+        elif x != y:
+            out['other'] += 1
+    walk(a, b)
+    out['same'] = not (out['differ'] or out['only_one'] or out['other'])
+    return out
 
 def _scored(rec: dict, lists) -> bytes:
     items = split_day(rec)[1]['items']
@@ -1117,7 +1147,14 @@ def _rescore(lk, g: Gate, entries: dict, days: dict, work: str, want: int, fn, c
             sv = rec.get('score_v')
             res = (old_fn or _rescore_old)(old[sv], rec_in, root, rw) if sv in old else fn(rec_in, root, rw)
             own, same = _rescore_compare(rec, res)
-        except Exception:
+            if not same:
+                lists = [k for k in ITEM_LISTS if isinstance(rec.get(k), list)]
+                models = set(rec.get('models') or []) | {b.get('model') for b in rec.get('boxes') or [] if b.get('model')}
+                sc = {m for m in models if _boxes_ok(rec, m) and _boxes_ok(rec, m) <= _boxes_ok(res, m)}
+                d = _diff(json.loads(_scored(_only_models(res, sc), lists)), json.loads(_scored(_only_models(rec, sc), lists)))
+                log(f"gate: a day scored again ({('older code' if sv in old else 'this code')}) differs: {d['differ']} of {d['numbers']} numbers (largest {d['max_abs']:.3g}, {100 * d['max_rel']:.2g} %), {d['only_one']} places in one only, {d['other']} other values")
+        except Exception as e:
+            log(f'gate: a day could not be scored again ({type(e).__name__})')
             own, same = (False, False)
         g.check('a day scored again: its own models all scored', own)
         g.check('a day scored again equals its stored scores', same)
