@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -240,6 +241,8 @@ def _box_failed(i: int, model: str, why: str, logpath: str) -> None:
     print(f'reference box r{i} ({model}): {why}', file=sys.stderr, flush=True)
     sys.stderr.writelines(tail)
     sys.stderr.flush()
+    kind = next((m.group(1) for ln in reversed(tail) if (m := re.match('^([A-Za-z_][\\w.]*(?:Error|Exception|Exit|Interrupt))\\b', ln))), '')
+    common.log(f'reference box r{i} ({model}): {why}' + (f', {kind}' if kind else ''))
     return None
 
 def build_group_refs(boxes: list, root: str=common.ROOT, work: str | None=None) -> dict | None:
