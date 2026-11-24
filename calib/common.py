@@ -302,7 +302,6 @@ def physics_version(macro: str='US') -> str:
     return globals()[{'EU': 'PHYSICS_VERSION_EU', 'SH': 'PHYSICS_VERSION_SH'}.get(macro, 'PHYSICS_VERSION')]
 SCORE_FILES = [os.path.join(HERE, f) for f in ('evaluate.js', 'lines.js', 'site.js', 'gbm.js', 'corrections.mjs')] + glob.glob(os.path.join(ROOT, 'public', 'js', 'shared', '*')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'ridgex.js')) + glob.glob(os.path.join(ROOT, 'public', 'js', 'png*.js'))
 SCORE_VERSION = _version_of(SCORE_FILES)
-EVAL_DIR: str | None = None
 GROUPS = {'thermal': ('wstar', 'depth', 'zi', 'twidth', 'blapse', 'sink', 'core8', 'core10', 'heat'), 'cloud': ('cubase', 'cudepth', 'cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ceil', 'nlow', 'sun', 'rain', 'overdev'), 'wind': ('u_blavg', 'v_blavg', 'u_g300', 'v_g300', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'ridge'), 'surface': ('t2', 'densalt', 'snowd', 'soilm', 'conv', 'wblmax', 'dth_m200', 'dth_m500'), 'static': ('elevation',), 'stations': ()}
 FIELD_GROUP = {f: g for g, fs in GROUPS.items() for f in fs}
 GRID_GROUPS = ('thermal', 'cloud', 'wind', 'surface', 'static')
