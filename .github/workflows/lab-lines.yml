@@ -1,0 +1,83 @@
+name: Lab lines
+on:
+  schedule:
+    - cron: "55 12 * * *"
+  workflow_dispatch:
+    inputs:
+      fit:
+        description: "the monthly fit: as due, again, or none"
+        type: choice
+        options: [as due, again, none]
+        default: as due
+permissions:
+  contents: read
+concurrency:
+  group: lab-lines
+  cancel-in-progress: false
+jobs:
+  pairs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "lab lines: the lake's secrets (LAKE_S3_*, CALIB_DATA_KEY) are not set: nothing done"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Pairs
+        if: steps.on.outputs.go == 'true'
+        run: python3 calib/convpairs.py --minutes 55
+  fit:
+    needs: pairs
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.fit != 'none') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      AGAIN: ${{ github.event_name == 'workflow_dispatch' && inputs.fit == 'again' && 'yes' || '' }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "lab lines: the lake's secrets are not set: no fit"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Fit
+        if: steps.on.outputs.go == 'true'
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          python3 calib/convfit.py "$@"

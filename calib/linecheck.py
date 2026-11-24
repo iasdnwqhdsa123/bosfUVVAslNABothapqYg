@@ -28,7 +28,7 @@ CONV_LINE = (0.15, 0.3)
 CONV_SCALE = {'icon': 0.5, 'icond2': 0.5, 'ecmwf': 0.5}
 SEARCH_KM = 40.0
 NEAR_KM = (2, 5, 10, 20)
-FIELDS = ('conv', 'u_blavg', 'v_blavg', 'zi', 'elevation', 'ridge', 'wstar', 't2')
+FIELDS = ('conv', 'wblmax', 'u_blavg', 'v_blavg', 'zi', 'elevation', 'ridge', 'wstar', 't2')
 STREET_S, FIX_GAP_S, STREET_KM_MIN, WAVE_PAD = (600.0, 60.0, 2.0, 500.0)
 ALONG_DEG = 30.0
 ST_BINS = (0.0, 0.3, 0.5, 0.7, 1.01)
@@ -67,7 +67,8 @@ class Boxes:
                     stamps.append(datetime.strptime(os.path.basename(fn)[:10], '%Y%m%d%H').replace(tzinfo=timezone.utc).timestamp())
                     full = full and all((n in z.files and n in m['fields'] for n in ROLL_FULL))
                     for n in names:
-                        f[n].append(decode(m['fields'].get(n), z[n]) if n in z.files and n in m['fields'] else np.full(shape, np.nan, np.float32))
+                        spec = m['fields'].get(n) or store_spec(n)
+                        f[n].append(decode(spec, z[n]) if n in z.files and spec else np.full(shape, np.nan, np.float32))
             if stamps:
                 B = {'g': m['grid'], 'stamps': np.array(stamps), 'f': {n: np.stack(v) for n, v in f.items()}, 'conv': has, 'full': full}
                 if full:
@@ -77,6 +78,11 @@ class Boxes:
 
     def clear(self):
         self.cache.clear()
+
+def store_spec(name: str) -> dict | None:
+    import build
+    e = build.ENC.get(name) if name in build.NOT_TILES else None
+    return {'min': e[0], 'max': e[1], 'transform': e[2]} if e else None
 
 def decode(f: dict, q) -> np.ndarray:
     lo, hi = (f['min'], f['max'])

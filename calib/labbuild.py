@@ -83,6 +83,14 @@ def station_cells(grid: dict, sts: list):
             (idx.append(i), iy.append(y), ix.append(x))
     return (np.array(idx, np.int32), np.array(iy, np.int64), np.array(ix, np.int64))
 
+def _store_enc(name: str):
+    try:
+        import build
+    except ImportError:
+        return None
+    e = build.ENC.get(name) if name in build.NOT_TILES else None
+    return [e[0], e[1], e[2]] if e else None
+
 def unit_arrays(base: str, u: dict, model_id: str, bbox: list, gv: dict, cs: str, keep_grids: bool=True) -> dict:
     m = common.read_json(os.path.join(base, 'latest.json'))
     grid = {k: m['grid'][k] for k in ('west', 'north', 'step', 'nx', 'ny')}
@@ -119,6 +127,10 @@ def unit_arrays(base: str, u: dict, model_id: str, bbox: list, gv: dict, cs: str
                 codes[k] = verify.sample_hour(h, iy, ix, r_nb, STATION_FIELDS)
     fields = m.get('fields') or {}
     enc = {f: [fields[f].get('min'), fields[f].get('max'), fields[f].get('transform')] for f in sorted(fields) if f in common.FIELD_GROUP or f in STATION_FIELDS}
+    for f in sorted(have - set(enc)):
+        e = _store_enc(f)
+        if e:
+            enc[f] = e
     st_enc = {f: enc[f] for f in STATION_FIELDS if f in enc}
     if 'overdev' in st_enc:
         st_enc['overdev_nb'] = st_enc['overdev']

@@ -1,0 +1,110 @@
+name: Lab streets
+on:
+  schedule:
+    - cron: "40 11 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "YYYY-MM-DD or YYYY-MM-DD:YYYY-MM-DD (empty: yesterday and the six days before)"
+        type: string
+        default: ""
+      curated:
+        description: "the eye checks' box-days (streetdays.json) in place of the days"
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+      refit:
+        description: "the monthly refit: as due, again, or none"
+        type: choice
+        options: [as due, again, none]
+        default: as due
+permissions:
+  contents: read
+concurrency:
+  group: lab-streets
+  cancel-in-progress: false
+jobs:
+  pairs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      DAYS: ${{ github.event_name == 'schedule' && '' || inputs.days }}
+      CURATED: ${{ github.event_name == 'schedule' && 'no' || inputs.curated }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "lab streets: the lake's secrets (LAKE_S3_*, CALIB_DATA_KEY) are not set: nothing done"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - uses: actions/setup-node@v5
+        if: steps.on.outputs.go == 'true'
+        with:
+          node-version: "22"
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Pairs
+        if: steps.on.outputs.go == 'true'
+        run: |
+          set -- --minutes 55
+          if [ "$CURATED" = "yes" ]; then
+            set -- "$@" --curated
+          elif [ -n "$DAYS" ]; then
+            echo "$DAYS" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}(:[0-9]{4}-[0-9]{2}-[0-9]{2})?$' || { echo "::error::days: YYYY-MM-DD or YYYY-MM-DD:YYYY-MM-DD"; exit 1; }
+            set -- "$@" --days "$DAYS"
+          fi
+          python3 calib/streetpairs.py "$@"
+  refit:
+    needs: pairs
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.refit != 'none') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      AGAIN: ${{ github.event_name == 'workflow_dispatch' && inputs.refit == 'again' && 'yes' || '' }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "lab streets: the lake's secrets are not set: no refit"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            pipeline/requirements.txt
+      - uses: actions/setup-node@v5
+        if: steps.on.outputs.go == 'true'
+        with:
+          node-version: "22"
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - name: Refit
+        if: steps.on.outputs.go == 'true'
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          python3 calib/streetfit.py "$@"

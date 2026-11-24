@@ -42,17 +42,17 @@ def due_month(today: date) -> str:
         return prev
     return ((first - timedelta(days=1)).replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
 
-def report_prefix(month: str) -> str:
+def report_prefix(month: str, sv: str=SV) -> str:
     if not re.fullmatch('\\d{4}-\\d{2}', month or ''):
         raise ValueError('score: a month is YYYY-MM')
-    return f'{PREFIX}/{SV}/{month}/'
+    return f'{PREFIX}/{sv}/{month}/'
 
-def reports(lk, month: str | None=None) -> dict:
-    pre = report_prefix(month) if month else f'{PREFIX}/{SV}/'
+def reports(lk, month: str | None=None, sv: str=SV) -> dict:
+    pre = report_prefix(month, sv) if month else f'{PREFIX}/{sv}/'
     best = {}
     for k in lk.list(pre):
         g = _KEY.fullmatch(k)
-        if not g or g['sv'] != SV:
+        if not g or g['sv'] != sv:
             continue
         best.setdefault(g['m'], {}).setdefault(g['ts'], {})[g['x']] = k
     out = {}
@@ -385,11 +385,11 @@ def run(lk, ops, month: str | None=None, today: date | None=None, again: bool=Fa
     _n(counts, 'written')
     return {'json': kj, 'md': km, 'month': month}
 
-def fetch(lk, out_dir: str, counts: dict | None=None) -> list:
+def fetch(lk, out_dir: str, counts: dict | None=None, sv: str=SV) -> list:
     counts = counts if counts is not None else {}
     os.makedirs(out_dir, exist_ok=True)
     wrote = []
-    for m, (kj, km) in sorted(reports(lk).items()):
+    for m, (kj, km) in sorted(reports(lk, sv=sv).items()):
         for key, path in ((km, os.path.join(out_dir, f'{m}.md')), (kj, os.path.join(out_dir, f'{m}.json'))):
             body = lk.get(key)
             if key == kj:

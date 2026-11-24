@@ -2,7 +2,7 @@ from __future__ import annotations
 import math
 import numpy as np
 import physics as P
-ROLLS = {'kappa': 0.4, 'z0_land': 0.1, 'z0_water': 0.0002, 'zL': (1.0, 3.0, 6.0, 60.0), 'shear': (0.4, 0.004), 'turnDeg': (30.0, 60.0), 'aspect': (2.5, 5.5), 'aspectZL': (2.0, 25.0), 'wind': (5.0, 8.0), 'lo': (0.5, 1.0, 3.0), 'cap': (0.4, 4.0), 'lid': (0.5, 3.0, 6.0), 'tear': (0.3, 1.0), 'on': 0.3}
+ROLLS = {'kappa': 0.4, 'z0_land': 0.1, 'z0_water': 0.0002, 'zL': (0.5, 2.0, 30.0, 150.0), 'shear': (0.4, 0.004), 'turnDeg': (30.0, 60.0), 'aspect': (2.5, 5.5), 'aspectZL': (2.0, 25.0), 'wind': (2.0, 7.0), 'lo': (0.5, 0.5, 3.0), 'cap': (0.5, 4.0), 'lid': (0.5, 3.0, 5.0), 'tear': (0.4, 1.0), 'on': 0.3}
 WAVE_BARS = {'km': 30.0, 'ratio': (2.0, 2.5)}
 DECK_TURN = (15.0, 3.0)
 SHEAR_TEAR = {'from': 4.5, 'full': 1.0}
