@@ -403,7 +403,8 @@ def read_day(lk, sid: str, day: str) -> list[Sounding]:
 def days_held(lk, sid: str) -> list[str]:
     return sorted(_held(lk, sid))
 
-def ingest(lk, igra: Igra, today: date, every: int=RAOB_EVERY, most: int=MAX_FETCH, lag: int=RAOB_LAG) -> dict:
+def ingest(lk, igra: Igra, today: date, every: int=RAOB_EVERY, most: int=MAX_FETCH, lag: int=RAOB_LAG, minutes: float | None=None, clock=time.monotonic) -> dict:
+    t0 = clock()
     counts: dict = {}
     txt = igra.station_list()
     if txt is not None:
@@ -422,7 +423,10 @@ def ingest(lk, igra: Igra, today: date, every: int=RAOB_EVERY, most: int=MAX_FET
     sts = due(select(parse_stations(txt), today.year), today, every)[:max(0, most)]
     counts['due'] = len(sts)
     row = 0
-    for s in sts:
+    for i, s in enumerate(sts):
+        if minutes is not None and clock() - t0 > minutes * 60:
+            counts['out of time'] = len(sts) - i
+            break
         text = igra.station_file(s['id'], today)
         if text is None:
             _n(counts, getattr(igra, 'last', '') or 'failed')

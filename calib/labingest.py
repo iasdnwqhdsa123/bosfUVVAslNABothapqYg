@@ -19,6 +19,7 @@ IEM_LAG = 2
 IEM_BACK = 10
 IEM_TYPES = ('3', '4')
 IEM_MINUTES = 15.0
+RAOB_MINUTES = 20.0
 FAIL_STOP = 3
 LAKE_STOP = 3
 CSV_HEAD = b'station,'
@@ -128,8 +129,8 @@ def ingest_iem(lk, today: date, stations: list | None=None, opener=None, sleep=t
     counts['requests'] = requests
     return counts
 
-def ingest_raob(lk, today: date, igra=None, every: int=obs_raob.RAOB_EVERY, most: int=obs_raob.MAX_FETCH) -> dict:
-    return obs_raob.ingest(lk, igra if igra is not None else obs_raob.Igra(budget=most), today, every, most)
+def ingest_raob(lk, today: date, igra=None, every: int=obs_raob.RAOB_EVERY, most: int=obs_raob.MAX_FETCH, minutes: float=RAOB_MINUTES) -> dict:
+    return obs_raob.ingest(lk, igra if igra is not None else obs_raob.Igra(budget=most), today, every, most, minutes=minutes)
 
 def weglide_note(env=None) -> str:
     on = (os.environ if env is None else env).get('WEGLIDE_ON', '0')
