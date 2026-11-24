@@ -14,7 +14,7 @@ import score
 import streetpairs
 SV = 'streets'
 MIN_BLOCKS = 2000
-KEYS = ('zL', 'wind', 'turnDeg', 'shear', 'lo', 'cap', 'lid', 'tear', 'on', 'aspect', 'aspectZL')
+KEYS = ('zL', 'wind', 'turnDeg', 'shear', 'lo', 'cap', 'lid', 'tear', 'on', 'aspect', 'aspectZL', 'bars')
 
 def constants_now() -> dict:
     try:
@@ -23,7 +23,7 @@ def constants_now() -> dict:
     except (OSError, ValueError, subprocess.TimeoutExpired):
         R = None
     if not R:
-        return dict(rollfit.ROLLS_NOW)
+        return dict(rollfit.ROLLS_NOW, bars=list(rollfit.BARS_NOW))
     return {k: R[k] for k in KEYS if k in R}
 
 def score_node() -> str:
@@ -43,6 +43,7 @@ def refit(T: dict, P_now: dict) -> dict:
     out.update({k: g[k] for k in ('pass', 'why', 'all', 'groups', 'worse')})
     out['refit'] = g['final']
     out['spacing'] = rollfit.spacing_fit(T, g['final'] if g['pass'] else P_now)
+    out['bars'] = rollfit.bars_gate(T, g['final'] if g['pass'] else P_now, tuple(P_now.get('bars') or rollfit.BARS_NOW))
     return out
 
 def report_md(month: str, r: dict) -> str:
@@ -53,10 +54,17 @@ def report_md(month: str, r: dict) -> str:
         L += [f'| {k} | {o:.3f} | {n:.3f} |' for k, (o, n) in sorted(r['groups'].items())]
     if 'refit' in r:
         L += ['', '| constant | now | refit |', '| --- | --- | --- |']
-        L += [f"| {k} | {r['now'].get(k)} | {r['refit'].get(k)} |" for k in KEYS if r['now'].get(k) != r['refit'].get(k)]
+        L += [f"| {k} | {r['now'].get(k)} | {r['refit'].get(k)} |" for k in KEYS if k != 'bars' and r['now'].get(k) != r['refit'].get(k)]
     sp = r.get('spacing') or {}
     if sp.get('ratio_now') is not None:
         L += ['', f"Spacing: {sp['n']} blocks with lines along the wind; measured / forecast {sp['ratio_now']:.2f} at the median now, {sp['ratio_new']:.2f} with aspect {sp['aspect']}."]
+    b = r.get('bars') or {}
+    if b:
+        L += ['', f"Wave bars (WAVE_BARS' zi / relief, now {b['now']}): {b['n']} blocks with rows, {b['across']} across the wind. **{('Pass' if b.get('pass') else 'No change')}.** {b.get('why', '')}"]
+        if 'bars' in b:
+            L += ['', '| held out | now | refit |', '| --- | --- | --- |', f"| bars' score | {b['bars'][0]:.3f} | {b['bars'][1]:.3f} |", f"| bar calls right | {b['precision'][0]:.2f} | {b['precision'][1]:.2f} |", f"| streets' score | {b['streets'][0]:.3f} | {b['streets'][1]:.3f} |", '', f"The pair fitted on every block: {b['final']}."]
+        L += ['', '| zi / relief | blocks | across the wind |', '| --- | --- | --- |']
+        L += [f"| {lo}-{(hi if hi is not None else '')} | {n} | {sh:.0%} |" for lo, hi, n, sh in b['bands']]
     return '\n'.join(L) + '\n'
 
 def run(lk, today: date, again: bool=False, counts=None, P_now=None) -> dict | None:

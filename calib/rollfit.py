@@ -257,3 +257,80 @@ def spacing_fit(T: dict, P: dict) -> dict:
             if c < best - 1e-06:
                 best, bq = (c, Q)
     return {'n': n, 'ratio_now': float(np.median(obs / spacing(D, P))), 'aspect': bq['aspect'], 'ratio_new': float(np.median(obs / spacing(D, bq)))}
+BARS_NOW = (2.0, 2.5)
+BARS_ACROSS = (70.0, 110.0)
+BARS_MIN = 50
+BARS_PREC_SLACK = 0.02
+BARS_GRID = [(float(a), float(b)) for b in np.arange(1.0, 6.01, 0.5) for a in np.arange(0.5, b, 0.5)]
+
+def bars_ratio(T: dict) -> np.ndarray:
+    rel = np.nan_to_num(T['relief'], nan=0.0)
+    with np.errstate(all='ignore'):
+        return np.where(rel > 0, T['c_zi'] / np.maximum(rel, 1e-06), np.inf)
+
+def bars_fade(r: np.ndarray, pair) -> np.ndarray:
+    b0, b1 = pair
+    return smooth((r - b0) / (b1 - b0))
+
+def bars_sel(T: dict) -> np.ndarray:
+    d = T['dax']
+    across = (T['aniso'] >= 0.35) & (d >= BARS_ACROSS[0]) & (d <= BARS_ACROSS[1])
+    snow = np.nan_to_num(T['snow'], nan=0.0) >= SNOW_M if 'snow' in T else np.zeros(len(d), bool)
+    return ((T['km'] == 24) & np.isfinite(T['c_strength']) & np.isfinite(T['c_zi']) & (across | T['y_off']) & ~snow, across)
+
+def bars_scores(r, y, pair) -> tuple[float, float]:
+    call = r < pair[1]
+    return (float(yesno(call, y)['ba']), float((call & y).sum() / max(1, call.sum())))
+
+def bars_search(T: dict, mask, P: dict, S0, r, sel, across) -> tuple:
+    m = mask & sel
+    best, bp = (-np.inf, BARS_NOW)
+    for pair in BARS_GRID:
+        so = objective(T, P, mask, S0 * bars_fade(r, pair))
+        bo, _ = bars_scores(r[m], across[m], pair)
+        if (so + bo) / 2 > best + 1e-06:
+            best, bp = ((so + bo) / 2, pair)
+    return bp
+
+def bars_gate(T: dict, P: dict, now=BARS_NOW, k: int=5, seeds=(0, 1, 2)) -> dict:
+    sel, across = bars_sel(T)
+    r = bars_ratio(T)
+    m = sel & np.isfinite(r)
+    out = {'n': int(m.sum()), 'across': int((m & across).sum()), 'now': list(now), 'bands': []}
+    for lo, hi in ((0, 1), (1, 2), (2, 3), (3, 4), (4, 6), (6, 10), (10, np.inf)):
+        b = m & (r >= lo) & (r < hi)
+        out['bands'].append([lo, None if hi == np.inf else hi, int(b.sum()), float((b & across).sum() / max(1, b.sum()))])
+    if out['across'] < BARS_MIN:
+        out['pass'], out['why'] = (False, f"{out['across']} blocks of rows across the wind, under the {BARS_MIN} the fit needs")
+        return out
+    S0 = strength(T['D'], P)
+    every = np.ones(len(r), bool)
+    on = np.full(len(r), P['on'])
+    s_now = S0 * bars_fade(r, now)
+    b_now, p_now = bars_scores(r[m], across[m], now)
+    o_now = objective_held(T, s_now, on, every)
+    bn, pn, on_ = ([], [], [])
+    for seed in seeds:
+        s_new = s_now.copy()
+        call = np.zeros(len(r), bool)
+        for F in folds(T['day'], k, seed):
+            te = np.isin(T['day'], list(F))
+            pair = bars_search(T, ~te, P, S0, r, sel, across)
+            s_new[te] = S0[te] * bars_fade(r[te], pair)
+            call[te] = r[te] < pair[1]
+        y = across[m]
+        bn.append(yesno(call[m], y)['ba'])
+        pn.append((call[m] & y).sum() / max(1, call[m].sum()))
+        on_.append(objective_held(T, s_new, on, every))
+    out['bars'], out['precision'], out['streets'] = ((b_now, float(np.mean(bn))), (p_now, float(np.mean(pn))), (o_now, float(np.mean(on_))))
+    out['final'] = list(bars_search(T, every, P, S0, r, sel, across))
+    why = []
+    if out['bars'][1] < b_now + GAIN_MIN:
+        why.append(f"the bars' score {out['bars'][1]:.3f} against {b_now:.3f}: under the {GAIN_MIN} gain")
+    if out['streets'][1] < o_now - GROUP_SLACK:
+        why.append(f"the streets' worse ({out['streets'][1]:.3f} against {o_now:.3f})")
+    if out['precision'][1] < p_now - BARS_PREC_SLACK:
+        why.append(f"the bar calls less often right ({out['precision'][1]:.2f} against {p_now:.2f})")
+    out['pass'] = not why
+    out['why'] = '; '.join(why) if why else f"held out the bars' score {out['bars'][1]:.3f} against {b_now:.3f}, the streets' {out['streets'][1]:.3f} against {o_now:.3f}, the calls as often right"
+    return out
