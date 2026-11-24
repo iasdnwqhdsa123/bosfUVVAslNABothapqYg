@@ -72,6 +72,9 @@ jobs:
         part: ${{ fromJSON(needs.plan.outputs.parts) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

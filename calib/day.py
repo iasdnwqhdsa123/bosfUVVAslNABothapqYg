@@ -451,7 +451,7 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
     else:
         env.pop('CALIB_CORRECTIONS', None)
     left = _lead_left(model, EVAL_TIMEOUT)
-    ok = left > 30 and _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, left, logf, env)
+    ok = left > 30 and _run(['node', '--max-old-space-size=4000', os.path.join(common.EVAL_DIR or common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, left, logf, env)
     if not ok or not os.path.exists(fout):
         info['error'] = 'evaluate'
         info['why'] = LAST_FAIL['why']

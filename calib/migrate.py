@@ -1030,22 +1030,59 @@ def _rescore_compare(rec: dict, res: dict) -> tuple[bool, bool]:
 def _scored(rec: dict, lists) -> bytes:
     items = split_day(rec)[1]['items']
     return canon({k: items.get(k) for k in lists})
+SCORE_NAMES = ('evaluate.js', 'lines.js', 'site.js', 'gbm.js', 'corrections.mjs')
 
-def _rescore(lk, g: Gate, entries: dict, days: dict, work: str, want: int, fn) -> dict:
+def score_code(stamps: set, work: str, depth: int=300, git=None) -> dict:
+    import subprocess
+    import common
+
+    def run(args):
+        return subprocess.run(['git', *args], cwd=common.ROOT, capture_output=True, text=True, check=True, timeout=120).stdout
+    git = git or run
+    out, want = ({}, set(stamps) - {None})
+    try:
+        shas = git(['log', f'-n{depth}', '--format=%H', '--', *(f'calib/{n}' for n in SCORE_NAMES)]).split()
+    except Exception:
+        return out
+    for sha in shas:
+        if not want - set(out):
+            break
+        d = os.path.join(work, 'score-code', sha[:12])
+        os.makedirs(d, exist_ok=True)
+        for n in SCORE_NAMES:
+            try:
+                text = git(['show', f'{sha}:calib/{n}'])
+            except Exception:
+                continue
+            with open(os.path.join(d, n), 'w', encoding='utf-8') as f:
+                f.write(text)
+        with open(os.path.join(d, 'package.json'), 'w') as f:
+            f.write('{"type": "module"}\n')
+        sv = common._version_of([os.path.join(d, n) for n in SCORE_NAMES])
+        if sv in want and sv not in out:
+            out[sv] = d
+        else:
+            shutil.rmtree(d, ignore_errors=True)
+    return out
+
+def _rescore(lk, g: Gate, entries: dict, days: dict, work: str, want: int, fn, code=None) -> dict:
     import common
     grids_by = {}
     for e in entries.values():
         if e['kind'] == 'grid':
             grids_by.setdefault(e['unit'].split('/')[0], []).append(e)
+    old = (code or score_code)({r.get('score_v') for r in days.values()} - {common.SCORE_VERSION}, work) if want > 0 else {}
     cands = []
     for dk, rec in days.items():
-        if rec.get('score_v') != common.SCORE_VERSION or rec.get('corr_v') or (not rec.get('grids')) or (dk not in grids_by):
+        if rec.get('score_v') not in old and rec.get('score_v') != common.SCORE_VERSION:
+            continue
+        if rec.get('corr_v') or not rec.get('grids') or dk not in grids_by:
             continue
         if not common.physics_matches(rec.get('physics_v'), rec.get('macro') or 'US'):
             continue
         cands.append((lk.name(f'rescore|{dk}'), dk))
     picked = [dk for _, dk in sorted(cands)[:want]]
-    out = {'asked': want, 'reproducible': len(cands), 'checked': 0}
+    out = {'asked': want, 'reproducible': len(cands), 'checked': 0, 'old_code': len(old)}
     if want > 0:
         g.check('days scored again (some the code reproduces)', bool(picked))
     for dk in picked:
@@ -1059,7 +1096,11 @@ def _rescore(lk, g: Gate, entries: dict, days: dict, work: str, want: int, fn) -
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
                     with open(dest, 'wb') as f:
                         f.write(b)
-            res = fn(json.loads(canon(rec)), root, os.path.join(work, 'rescore-work'))
+            common.EVAL_DIR = old.get(rec.get('score_v'))
+            try:
+                res = fn(json.loads(canon(rec)), root, os.path.join(work, 'rescore-work'))
+            finally:
+                common.EVAL_DIR = None
             own, same = _rescore_compare(rec, res)
         except Exception:
             own, same = (False, False)
@@ -1082,7 +1123,7 @@ def _report(lk, g: Gate, rep: dict, totals: dict) -> dict:
         log(f"gate: {totals['grid_files']} grid files")
     rs = rep.get('rescored')
     if rs:
-        log(f"gate: {rs['checked']} days scored again of {rs['asked']} asked ({rs['reproducible']} the code reproduces)")
+        log(f"gate: {rs['checked']} days scored again of {rs['asked']} asked ({rs['reproducible']} the code reproduces, {rs.get('old_code', 0)} older stamps' code from the history)")
     for w, c in sorted(g.bad.items()):
         log(f'  FAILED: {w} ({c})')
     log(f"gate: {('passed' if g.passed else 'FAILED')} ({sum(g.ok.values())} checks passed, {sum(g.bad.values())} failed)")
