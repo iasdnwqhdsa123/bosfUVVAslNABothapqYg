@@ -1019,14 +1019,24 @@ def _only_models(rec: dict, keep: set) -> dict:
 def _boxes_ok(rec: dict, model: str) -> set:
     return {b.get('box') for b in rec.get('boxes') or [] if b.get('model') == model and b.get('ok') and (not b.get('error'))}
 
-def _rescore_compare(rec: dict, res: dict) -> tuple[bool, bool]:
+def _hours_whole(metas: list[dict]) -> bool:
+    return bool(metas) and all(((m.get('hours') or 'all') == 'all' for m in metas))
+
+def _rescore_scope(rec: dict, res: dict, metas: dict | None=None) -> tuple[set, set, set]:
     import common
     models = set(rec.get('models') or []) | {b.get('model') for b in rec.get('boxes') or [] if b.get('model')}
     scored = {m for m in models if _boxes_ok(rec, m) and _boxes_ok(rec, m) <= _boxes_ok(res, m)}
     own = {m for m in models if not common.is_lead(m) and _boxes_ok(rec, m)}
+    whole = lambda m: metas is None or bool(rec.get('rescored_at')) or _hours_whole(metas.get(m) or [])
+    same = {m for m in scored if not common.is_lead(m) and common.base_model(m) not in common.ADDED and whole(m)}
+    return (own, scored, same)
+
+def _rescore_compare(rec: dict, res: dict, metas: dict | None=None) -> tuple[bool, bool, dict]:
+    own, scored, same = _rescore_scope(rec, res, metas)
     lists = [k for k in ITEM_LISTS if isinstance(rec.get(k), list)]
-    new, old = (json.loads(_scored(_only_models(res, scored), lists)), json.loads(_scored(_only_models(rec, scored), lists)))
-    return (own <= scored, _diff(new, old)['same'])
+    d = _diff(json.loads(_scored(_only_models(res, same), lists)), json.loads(_scored(_only_models(rec, same), lists)))
+    d['models'] = len(same)
+    return (own <= scored, d['same'], d)
 SCORE_TOL = (1e-06, 1e-09)
 
 def _diff(a, b, tol=SCORE_TOL) -> dict:
@@ -1127,15 +1137,19 @@ def _rescore(lk, g: Gate, entries: dict, days: dict, work: str, want: int, fn, c
         if r:
             why[r] = why.get(r, 0) + 1
             continue
-        cands.append((lk.name(f'rescore|{dk}'), dk))
-    picked = [dk for _, dk in sorted(cands)[:want]]
-    out = {'asked': want, 'reproducible': len(cands), 'checked': 0, 'old_code': len(old), 'passed_over': why}
+        cands.append((not rec.get('rescored_at'), lk.name(f'rescore|{dk}'), dk))
+    order = [dk for *_, dk in sorted(cands)]
+    out = {'asked': want, 'reproducible': len(cands), 'checked': 0, 'compared': 0, 'old_code': len(old), 'passed_over': why, 'not_compared': {}}
     if want > 0:
-        g.check('days scored again (some the code reproduces)', bool(picked))
-    for dk in picked:
+        g.check('days scored again (some the code reproduces)', bool(order))
+    for dk in order:
+        if out['checked'] >= want and (out['compared'] or out['checked'] >= 2 * want):
+            break
         root = os.path.join(work, 'rescore')
         shutil.rmtree(root, ignore_errors=True)
         rec = days[dk]
+        sv = rec.get('score_v')
+        metas: dict = {}
         try:
             for e in grids_by[dk]:
                 for p, b in untar(lk.get(e['obj'])).items():
@@ -1143,23 +1157,28 @@ def _rescore(lk, g: Gate, entries: dict, days: dict, work: str, want: int, fn, c
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
                     with open(dest, 'wb') as f:
                         f.write(b)
+                    if p == 'meta.json':
+                        m = json.loads(b)
+                        metas.setdefault(m.get('model'), []).append(m)
             rec_in, rw = (json.loads(canon(rec)), os.path.join(work, 'rescore-work'))
-            sv = rec.get('score_v')
             res = (old_fn or _rescore_old)(old[sv], rec_in, root, rw) if sv in old else fn(rec_in, root, rw)
-            own, same = _rescore_compare(rec, res)
-            if not same:
-                lists = [k for k in ITEM_LISTS if isinstance(rec.get(k), list)]
-                models = set(rec.get('models') or []) | {b.get('model') for b in rec.get('boxes') or [] if b.get('model')}
-                sc = {m for m in models if _boxes_ok(rec, m) and _boxes_ok(rec, m) <= _boxes_ok(res, m)}
-                d = _diff(json.loads(_scored(_only_models(res, sc), lists)), json.loads(_scored(_only_models(rec, sc), lists)))
-                log(f"gate: a day scored again ({('older code' if sv in old else 'this code')}) differs: {d['differ']} of {d['numbers']} numbers (largest {d['max_abs']:.3g}, {100 * d['max_rel']:.2g} %), {d['only_one']} places in one only, {d['other']} other values")
+            own, same, d = _rescore_compare(rec, res, metas)
+            dl = d if d['models'] else _rescore_compare(rec, res, None)[2]
+            if not d['models']:
+                k = 'grids short of the hours scored' if dl['models'] else 'no model to compare'
+                out['not_compared'][k] = out['not_compared'].get(k, 0) + 1
+            log(f"gate: a day scored again ({('older code' if sv in old else 'this code')}, {('compared' if d['models'] else 'not compared: ' + k)}): {dl['models']} models, {dl['differ']} of {dl['numbers']} numbers differ (largest {dl['max_abs']:.3g}, {100 * dl['max_rel']:.2g} %), {dl['only_one']} places in one only, {dl['other']} other values")
         except Exception as e:
             log(f'gate: a day could not be scored again ({type(e).__name__})')
-            own, same = (False, False)
+            own, same, d = (False, False, {'models': 1})
         g.check('a day scored again: its own models all scored', own)
-        g.check('a day scored again equals its stored scores', same)
+        if d['models']:
+            g.check('a day scored again equals its stored scores', same)
+            out['compared'] += 1
         out['checked'] += 1
         shutil.rmtree(root, ignore_errors=True)
+    if want > 0 and order:
+        g.check('a day scored again compared with its stored scores', out['compared'] > 0)
     return out
 EXPECTED = '907 days, 4,070 flights, 24,420 legs, 50,187 climbs, 812 with grids'
 
@@ -1175,7 +1194,7 @@ def _report(lk, g: Gate, rep: dict, totals: dict) -> dict:
         log(f"gate: {totals['grid_files']} grid files")
     rs = rep.get('rescored')
     if rs:
-        log(f"gate: {rs['checked']} days scored again of {rs['asked']} asked ({rs['reproducible']} the code reproduces, {rs.get('old_code', 0)} older stamps' code from the history; passed over: {', '.join((f'{k} {v}' for k, v in sorted((rs.get('passed_over') or {}).items()))) or 'none'})")
+        log(f"gate: {rs['checked']} days scored again of {rs['asked']} asked ({rs['reproducible']} the code reproduces, {rs.get('old_code', 0)} older stamps' code from the history; passed over: {', '.join((f'{k} {v}' for k, v in sorted((rs.get('passed_over') or {}).items()))) or 'none'}); {rs.get('compared', 0)} compared with their stored scores (not compared: {', '.join((f'{k} {v}' for k, v in sorted((rs.get('not_compared') or {}).items()))) or 'none'})")
     for w, c in sorted(g.bad.items()):
         log(f'  FAILED: {w} ({c})')
     log(f"gate: {('passed' if g.passed else 'FAILED')} ({sum(g.ok.values())} checks passed, {sum(g.bad.values())} failed)")
