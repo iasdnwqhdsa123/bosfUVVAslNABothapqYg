@@ -229,6 +229,18 @@ def merge_group_reps(src: str, dest: str) -> None:
 
 def area_reps(reps: dict, area: str) -> dict:
     return {(g, v): e for (a, g, v), e in reps.items() if a == area}
+BOX_LOG_TAIL = 40
+
+def _box_failed(i: int, model: str, why: str, logpath: str) -> None:
+    try:
+        with open(logpath, errors='replace') as f:
+            tail = f.readlines()[-BOX_LOG_TAIL:]
+    except OSError:
+        tail = []
+    print(f'reference box r{i} ({model}): {why}', file=sys.stderr, flush=True)
+    sys.stderr.writelines(tail)
+    sys.stderr.flush()
+    return None
 
 def build_group_refs(boxes: list, root: str=common.ROOT, work: str | None=None) -> dict | None:
     names = sorted(common.FIELD_GROUP)
@@ -244,17 +256,18 @@ def build_group_refs(boxes: list, root: str=common.ROOT, work: str | None=None) 
             shutil.rmtree(out, ignore_errors=True)
             cmd = [sys.executable, os.path.join(root, 'calib', builder), '--day', day, '--tz', tz, f'--bbox={bbox}', '--out', out, '--model', model, '--from-local', str(a), '--to-local', str(b)]
             cmd += ['--workers', '2'] if builder == 'build_day.py' else ['--cache', os.path.join(work, 'cache')]
-            with open(os.path.join(work, f'r{i}.log'), 'w') as lf:
+            logpath = os.path.join(work, f'r{i}.log')
+            with open(logpath, 'w') as lf:
                 try:
                     r = subprocess.run(cmd, cwd=os.path.join(root, 'pipeline'), stdout=lf, stderr=subprocess.STDOUT, timeout=TIMEOUT, env=env)
                 except subprocess.TimeoutExpired:
-                    return None
+                    return _box_failed(i, model, f'timed out after {TIMEOUT} s', logpath)
             if r.returncode != 0:
-                return None
+                return _box_failed(i, model, f'exit {r.returncode}', logpath)
             n = len(refs)
             _fields_of(out, f'r{i}', names, refs)
             if len(refs) == n:
-                return None
+                return _box_failed(i, model, 'built no reference fields', logpath)
         return refs
     finally:
         if own:
