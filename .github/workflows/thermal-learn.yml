@@ -24,7 +24,7 @@ jobs:
       OPS_S3_BUCKET: ${{ secrets.OPS_S3_BUCKET || 'ops' }}
       OPS_RO_KEY: ${{ secrets.OPS_RO_KEY }}
       OPS_RO_SECRET: ${{ secrets.OPS_RO_SECRET }}
-      COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN }}
+      COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN || '1' }}
     steps:
       - name: Set up?
         id: on

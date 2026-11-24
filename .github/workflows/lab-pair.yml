@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
+      COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN || '1' }}  # (on since 24 Nov 2026, owner; the variable "0" turns it off)
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
@@ -81,6 +82,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
+      COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN || '1' }}  # (on since 24 Nov 2026, owner; the variable "0" turns it off)
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
