@@ -1372,7 +1372,7 @@ def load_hour(src, run, fh, regrid_holder, region, valid, raw=None, fronts_out=N
     hip = {c: [get((src.level_vars[c], f'{l} mb')) for l in src.cloud_levels] for c in src.cloud_vars()}
     snd_extra = [l for l in src.snd_levels if l not in src.levels]
     sndp = {c: [get((src.level_vars[c], f'{l} mb')) for l in snd_extra] for c in src.snd_vars()} if snd_extra else {}
-    natp = {c: [get((g, f'{k}{src.native_label}')) for k in src.native] for c, g in src.native_vars.items()} if src.native_on() else {}
+    natp = {c: [get((g, f'{k}{src.native_label}')) for k in src.native] for c, g in src.native_vars.items()} if src.native_on(fh) else {}
     if natp and any((x[0] is None for st in natp.values() for x in st)):
         log(f'  f{fh:03d}: its own levels not whole: the hour without them')
         natp = {}
