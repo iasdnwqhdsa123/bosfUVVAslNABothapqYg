@@ -2,6 +2,9 @@ name: Lab lines
 on:
   schedule:
     - cron: "55 12 * * *"
+  push:  # (calib/lab-lines.request: the private repo's Calibration lab; GitHub's schedule here never fired, 24 Nov 2026)
+    branches: [main]
+    paths: ["calib/lab-lines.request"]
   workflow_dispatch:
     inputs:
       fit:
@@ -47,7 +50,7 @@ jobs:
         run: python3 calib/convpairs.py --minutes 55
   fit:
     needs: pairs
-    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.fit != 'none') }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.fit != 'none') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:

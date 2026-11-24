@@ -1,7 +1,9 @@
 name: Lab pair
 on:
-  schedule:
-    - cron: "25 8 * * *"
+  workflow_run:
+    workflows: ["Lab ingest"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       days:
@@ -37,8 +39,8 @@ jobs:
       OPS_S3_BUCKET: ${{ secrets.OPS_S3_BUCKET || 'ops' }}
       OPS_RO_KEY: ${{ secrets.OPS_RO_KEY }}
       OPS_RO_SECRET: ${{ secrets.OPS_RO_SECRET }}
-      DAYS: ${{ github.event_name == 'schedule' && '' || inputs.days }}
-      SAT: ${{ github.event_name == 'schedule' && 'newest' || inputs.satellite }}
+      DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.days || '' }}
+      SAT: ${{ github.event_name == 'workflow_dispatch' && inputs.satellite || 'newest' }}
     steps:
       - name: Set up?
         id: on

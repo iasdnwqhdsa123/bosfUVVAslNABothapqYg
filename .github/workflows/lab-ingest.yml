@@ -2,6 +2,9 @@ name: Lab ingest
 on:
   schedule:
     - cron: "15 7 * * *"
+  push:
+    branches: [main]
+    paths: ["calib/lab-chain.request"]
   workflow_dispatch:
     inputs:
       what:
@@ -24,7 +27,7 @@ jobs:
       LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
       LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
       WEGLIDE_ON: "0"
-      WHAT: ${{ github.event_name == 'schedule' && 'all' || inputs.what }}
+      WHAT: ${{ github.event_name == 'workflow_dispatch' && inputs.what || 'all' }}
     steps:
       - name: Set up?
         id: on

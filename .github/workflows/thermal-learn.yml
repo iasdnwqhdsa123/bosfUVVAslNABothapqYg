@@ -1,7 +1,9 @@
 name: Thermal learn
 on:
-  schedule:
-    - cron: "35 9 * * *"
+  workflow_run:
+    workflows: ["Lab pair"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
