@@ -415,6 +415,8 @@ def main(argv: list[str]) -> int:
         write_plan(store, p)
     if done_pinning(p) and catalog.pin_if_new(store, snap, 'sweep done', sweep=a.sweep, wave=a.wave):
         print("labplan: a sweep's pin has nothing left: the catalog pinned")
+    elif 'stcast' in p['counts'] and catalog.pin_hindcast(store, snap, p['counts'].get('stcast_todo') == 0, sweep=a.sweep, wave=a.wave):
+        print(f"labplan: the station hindcast's units pinned for the pairs ({p['counts'].get('stcast_todo')} to do)")
     print(log_line(p))
     print(store.summary())
     _output(plan=pid, chunks=json.dumps(matrix(p)), wave=a.wave, more='yes' if p['chunks'] else 'no')

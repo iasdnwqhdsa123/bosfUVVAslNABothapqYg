@@ -529,7 +529,34 @@ def pin_if_new(lake, snap: dict, why: str, t: float | None=None, **info) -> str 
     if keys and decode(lake.get(keys[-1])).get('digest') == d:
         return None
     key, sha = write_snapshot(lake, snap, t)
-    return pin(lake, key, sha, why, t, digest=d, **info)
+    return pin(lake, key, sha, why, t, digest=d, **{'stcast_digest': stcast_digest(snap), **info})
+STCAST_PIN_H = 6
+
+def stcast_digest(snap: dict) -> str:
+    rows = {k: r for k, r in sorted((snap.get('rows') or {}).items()) if r.get('kind') == STCAST and r.get('sha256')}
+    return hashlib.sha256(encode(rows)).hexdigest()
+
+def _pin_time(key: str) -> float | None:
+    m = re.search('(\\d{8}T\\d{6}Z)\\.lenc$', key)
+    if not m:
+        return None
+    import calendar
+    return float(calendar.timegm(time.strptime(m.group(1), '%Y%m%dT%H%M%SZ')))
+
+def pin_hindcast(lake, snap: dict, done: bool, t: float | None=None, every_h: float=STCAST_PIN_H, **info) -> str | None:
+    rows = [r for r in (snap.get('rows') or {}).values() if r.get('kind') == STCAST and r.get('sha256')]
+    if not rows:
+        return None
+    d = stcast_digest(snap)
+    keys = sorted((k for k in lake.list(PINS) if k.endswith('.lenc')))
+    if keys:
+        if decode(lake.get(keys[-1])).get('stcast_digest') == d:
+            return None
+        at = _pin_time(keys[-1])
+        now = time.time() if t is None else t
+        if not done and at is not None and (now - at < every_h * 3600):
+            return None
+    return pin_if_new(lake, snap, 'hindcast done' if done else 'hindcast', t, **info)
 
 def pinned(lake, listing: list[str] | None=None) -> dict | None:
     from lake import LakeError, _sha_hex
