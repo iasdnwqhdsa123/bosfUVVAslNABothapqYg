@@ -13,10 +13,10 @@ sys.path.insert(0, HERE)
 import common
 UTC = timezone.utc
 PV = 'p1'
-KINDS = ('metar', 'raob', 'sat', 'flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb', 'radar', 'acwind')
+KINDS = ('metar', 'raob', 'sat', 'flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb', 'radar', 'acwind', 'window')
 SRCS = ('ops', 'archive', 'stcast', 'hind')
 MODELS = ('hrrr', 'gfs', 'ecmwf', 'icon', 'icond2', 'arome')
-LAG_D = {'metar': 1, 'raob': 10, 'sat': 2, 'ogn_climb': 3, 'flight_leg': None, 'flight_climb': None, 'flight_probe': None, 'radar': 1, 'acwind': 1}
+LAG_D = {'metar': 1, 'raob': 10, 'sat': 2, 'ogn_climb': 3, 'flight_leg': None, 'flight_climb': None, 'flight_probe': None, 'radar': 1, 'acwind': 1, 'window': 3}
 REVIEW_KINDS = ('ogn_climb',)
 COLLECTOR_TRAIN_ENV = 'COLLECTOR_TRAIN'
 FEEDS = ('ogn', 'adsb', 'skylines')
@@ -25,6 +25,10 @@ METAR_VARS = ('t2', 'td2', 'u_sfc', 'v_sfc', 'gust', 'mslp', 'vis', 'ceil', 'cub
 SAT_VARS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ctop', 'cuclass', 'cucover', 'cubase', 'elevation')
 RADAR_VARS = ('overdev_nb', 'cuclass', 'rain')
 ACWIND_VARS = ('u_g300', 'v_g300', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'zi', 'elevation')
+WINDOW_VARS = ('first', 'last', 'wsmax', 'zimax')
+WINDOW_CELL = 1.0
+WINDOW_WS = 1.7 / 1.3
+WINDOW_QLEAD_H = 0.5
 RAOB_VARS = ('zi', 'depth', 'blapse', 'cubase', 'cuclass', 'wstar', 't2', 'td2', 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'elevation')
 WIDE = ('mslp',)
 RAOB_NEAR_KM = 25.0
@@ -47,6 +51,8 @@ def kind_vars(kind: str) -> tuple:
         return RADAR_VARS
     if kind == 'acwind':
         return ACWIND_VARS
+    if kind == 'window':
+        return WINDOW_VARS
     if kind in ('flight_leg', 'flight_climb', 'ogn_climb'):
         return flight_vars()
     if kind == 'flight_probe':
@@ -209,7 +215,7 @@ def decoded(rec: dict, var: str, codes: np.ndarray | None=None) -> np.ndarray:
 def _ftype(var: str):
     return np.float32 if var in WIDE else np.float16
 PAIR_COMMON = (('kind', 'str'), ('obs_id', 'str'), ('t_valid', 'i64'), ('model', 'str'), ('run', 'str'), ('build', 'str'), ('lead_h', 'i16'), ('avail_t', 'i64?'), ('src', 'str'), ('replay', 'bool'), ('missing_w', 'bool'), ('missing_blh_heat', 'bool'), ('review', 'bool'))
-PAIR_EXTRA = {'raob': (('cu_call', 'i8'), ('station', 'str'), ('dist_km', 'f32'))}
+PAIR_EXTRA = {'raob': (('cu_call', 'i8'), ('station', 'str'), ('dist_km', 'f32')), 'window': (('n_st', 'i16'),)}
 KEY = ('obs_id', 't_valid', 'model', 'run', 'build', 'src')
 
 def pairs_schema(kind: str) -> tuple:
@@ -230,6 +236,8 @@ RADAR_O = ('dbz_max', 'storm', 'echo')
 RADAR_Q = ('cover', 'dt')
 ACWIND_O = ('z', 'zmsl', 'u', 'v')
 ACWIND_Q = ('n', 'su', 'sv', 'share')
+WINDOW_O = ('first', 'last', 'n')
+WINDOW_Q = ('ac', 'all', 'fly0', 'fly1', 'lead', 'tail', 'best')
 OGN_Q = ('type',)
 OGN_TYPE = {'glider': 1, 'hg': 2, 'pg': 3}
 
@@ -255,6 +263,8 @@ def obs_schema(kind: str) -> tuple:
         return base + (('elev', 'f32'),) + tuple(((f'o_{n}', 'f32') for n in RADAR_O)) + tuple(((f'q_{n}', 'f32') for n in RADAR_Q))
     if kind == 'acwind':
         return base + (('elev', 'f32'),) + tuple(((f'o_{n}', 'f32') for n in ACWIND_O)) + tuple(((f'q_{n}', 'f32') for n in ACWIND_Q))
+    if kind == 'window':
+        return base + tuple(((f'o_{n}', 'f32') for n in WINDOW_O)) + tuple(((f'q_{n}', 'f32') for n in WINDOW_Q))
     if kind == 'flight_leg':
         return base + (('macro', 'str'),) + tuple(((f'o_{n}', 'f32') for n in LEG_O)) + tuple(((f'q_{n}', 'i8') for n in LEG_Q))
     if kind == 'flight_climb':
@@ -883,6 +893,83 @@ def compact(lake, kind: str, month: str, today: date, pv: str=PV) -> dict:
 
 def _by_id(inputs: dict) -> dict:
     return {_id_of(k): v for k, v in inputs.items()}
+
+def _crossings(lt: np.ndarray, ws: np.ndarray, at: float) -> tuple[float, float]:
+    ok = np.isfinite(ws)
+    lt, ws = (lt[ok], ws[ok])
+    up = ws >= at
+    if not up.any():
+        return (float('nan'), float('nan'))
+    i, j = (int(np.argmax(up)), len(up) - 1 - int(np.argmax(up[::-1])))
+    f = lt[i] if i == 0 else lt[i - 1] + (at - ws[i - 1]) / (ws[i] - ws[i - 1]) * (lt[i] - lt[i - 1])
+    g = lt[j] if j == len(up) - 1 else lt[j] + (ws[j] - at) / (ws[j] - ws[j + 1]) * (lt[j + 1] - lt[j])
+    return (float(f), float(g))
+
+def window_pairs(rec: dict, obs: dict, stations: list, day: str) -> dict:
+    sch = pairs_schema('window')
+    if not n_rows(obs) or not len(rec['obs_ids']) or 'wstar' not in rec['fields']:
+        return empty(sch)
+    d1 = (datetime.fromisoformat(day) + timedelta(days=1)).strftime('%Y-%m-%d')
+    ks = [k for k, s in enumerate(rec['stamps']) if f'{s[:4]}-{s[4:6]}-{s[6:8]}' in (day, d1) and re.fullmatch('\\d{10}', rec['runs'][k] or '') and (rec['leads'][k] >= 0)]
+    if not ks:
+        return empty(sch)
+    tv = np.array([_ts(rec['stamps'][k]) for k in ks], np.int64)
+    pos = {str(x): i for i, x in enumerate(rec['obs_ids'])}
+    cells = {}
+    for st in stations:
+        i = pos.get(str(st[0]))
+        if i is not None:
+            cells.setdefault((math.floor(float(st[1]) / WINDOW_CELL), math.floor(float(st[2]) / WINDOW_CELL)), []).append((i, float(st[2])))
+    codes = rec['codes'][ks]
+    ws_all, zi_all = (decoded(rec, 'wstar', codes), decoded(rec, 'zi', codes))
+    d0 = datetime.fromisoformat(day).replace(tzinfo=UTC).timestamp()
+    rows = []
+    for oid, t_noon in zip(obs['obs_id'], obs['t_valid']):
+        m = re.fullmatch('w(-?\\d+)_(-?\\d+)', str(oid))
+        sts = cells.get((int(m.group(1)), int(m.group(2)))) if m else None
+        if not sts:
+            continue
+        firsts, lasts, wmax, zmax, n = ([], [], [], [], 0)
+        for i, lon in sts:
+            lt = (tv + lon * 240.0 - d0) / 3600.0
+            inday = (lt >= 0) & (lt < 24)
+            w = ws_all[inday, i].astype(np.float64)
+            if not np.isfinite(w).any():
+                continue
+            n += 1
+            o = np.argsort(lt[inday])
+            f, g = _crossings(lt[inday][o], w[o], WINDOW_WS)
+            firsts.append(f)
+            lasts.append(g)
+            wmax.append(np.nanmax(w))
+            z = zi_all[inday, i].astype(np.float64)
+            zmax.append(np.nanmax(z) if np.isfinite(z).any() else np.nan)
+        if not n:
+            continue
+        near = int(np.argmin(np.abs(tv - int(t_noon))))
+        med = lambda xs: float(np.nanmedian(xs)) if np.isfinite(xs).any() else np.nan
+        rows.append((str(oid), int(t_noon), near, med(np.array(firsts)), med(np.array(lasts)), float(np.nanmax(wmax)), float(np.nanmax(zmax)) if np.isfinite(zmax).any() else np.nan, n))
+    if not rows:
+        return empty(sch)
+    at = [r[2] for r in rows]
+    cols = {'kind': 'window', 'obs_id': np.array([r[0] for r in rows], dtype=object), 't_valid': np.array([r[1] for r in rows], np.int64), 'model': rec['model'], 'run': np.array([rec['runs'][ks[i]] for i in at], dtype=object), 'build': rec['build'], 'lead_h': np.array([rec['leads'][ks[i]] for i in at], np.int16), 'avail_t': _avail_of(rec, ks, at), 'src': rec['src'], 'replay': rec['replay'], 'missing_w': rec['missing_w'], 'missing_blh_heat': rec['missing_blh_heat'], 'review': rec['review'], 'n_st': np.array([r[7] for r in rows], np.int16)}
+    for k, v in enumerate(WINDOW_VARS):
+        cols[f'f_{v}'] = np.array([r[3 + k] for r in rows], np.float64).astype(_ftype(v))
+    return table(sch, cols, len(rows))
+
+def window_unit(lake, day: str, batch: str, records: dict, observed: dict, stations: list, pv: str=PV) -> dict:
+    sch = pairs_schema('window')
+    recs, obs = (_by_id(records), _by_id(observed))
+
+    def build(new, _all):
+        new = set(new)
+        out = []
+        for ri, rec in recs.items():
+            for oi, o in obs.items():
+                if ri in new or oi in new:
+                    out.append(window_pairs(rec, o, stations, day))
+        return concat(sch, out)
+    return write_unit(lake, 'pairs', 'window', day, batch, list(records) + list(observed), build, pv)
 
 def station_unit(lake, kind: str, day: str, batch: str, records: dict, pv: str=PV) -> dict:
     if kind not in ('metar', 'sat'):

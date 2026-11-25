@@ -18,7 +18,7 @@ import obs_raob
 import pairs as P
 UTC = timezone.utc
 LEAD_MAX_H = 48
-KINDS = ('metar', 'raob', 'sat', 'snap', 'radar', 'acwind')
+KINDS = ('metar', 'raob', 'sat', 'snap', 'radar', 'acwind', 'window')
 BACK = 10
 MINUTES = 40.0
 OPS_ROOT = 'ops'
@@ -406,6 +406,21 @@ def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: d
             raise
         except Exception:
             _n(counts, 'acwind_failed')
+    if 'window' in kinds:
+        try:
+            wobs = P.read_kind(lk, 'obs', 'window', [day], purpose='review')
+        except lakem.LakeError:
+            raise
+        except Exception:
+            wobs = None
+        if wobs is not None and P.n_rows(wobs):
+            import hashlib
+            cells = sorted({(str(a), int(b)) for a, b in zip(wobs['obs_id'], wobs['t_valid'])})
+            oid = 'window|cells|' + hashlib.sha256(json.dumps(cells).encode()).hexdigest()[:16]
+            for m, rs in sorted(models.items()):
+                res.append(P.window_unit(lk, day, m, rs, {oid: wobs}, stations))
+        else:
+            _n(counts, 'window_no_obs')
     if 'raob' in kinds:
         snds = raob_inputs(lk, day, raob_listing if raob_listing is not None else raob_days(lk), elevs or {}, counts)
         if snds:

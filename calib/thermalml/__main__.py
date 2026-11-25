@@ -3,8 +3,8 @@ import argparse
 import os
 import sys
 import lake
-from . import events, exposure, guard, join
-STAGES = {'events': events.run, 'exposure': exposure.run, 'join': join.run}
+from . import events, exposure, guard, join, window
+STAGES = {'events': events.run, 'exposure': exposure.run, 'join': join.run, 'window': window.run}
 
 def ops_from_env(env):
     if env.get('THERMALML_OPS_LOCAL'):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -287,8 +288,43 @@ def score_month(lk, ops, month: str, now: datetime, counts: dict | None=None, re
             sc = V.summarise(sub, sts, bad)
             regimes.append({'regime': name, 'pairs': sc['pairs'], 'side_by_side': sc['side_by_side']})
     keep = lambda t: ~np.isin(t['st'], list(bad))
-    out = {'schema': f'score/{SV}', 'month': month, 'generated': f'{now:%Y-%m-%dT%H:%MZ}', **main, 'regimes': regimes, 'gap': gap(_subset(ops_t, keep), _subset(re_t, keep)) if re_t else [], 'missing_runs': missing_runs(ops, month, now, counts), 'counts': kind_counts(lk, month) if lk is not None else {}}
+    out = {'schema': f'score/{SV}', 'month': month, 'generated': f'{now:%Y-%m-%dT%H:%MZ}', **main, 'regimes': regimes, 'gap': gap(_subset(ops_t, keep), _subset(re_t, keep)) if re_t else [], 'missing_runs': missing_runs(ops, month, now, counts), 'counts': kind_counts(lk, month) if lk is not None else {}, 'window': window_scores(read or (lambda what, kind, d: P.read_kind(lk, what, kind, [d], purpose='review')), month)}
     _n(counts, 'pairs_scored', main['pairs'])
+    return out
+
+def window_scores(read, month: str) -> list:
+    by = {}
+    for d in month_days(month):
+        pt, ot = (read('pairs', 'window', d), read('obs', 'window', d))
+        if not P.n_rows(pt) or not P.n_rows(ot) or 'f_first' not in pt or ('o_first' not in ot):
+            continue
+        o = {(str(a), int(b)): i for i, (a, b) in enumerate(zip(ot['obs_id'], ot['t_valid']))}
+        for j, (a, b) in enumerate(zip(pt['obs_id'], pt['t_valid'])):
+            i = o.get((str(a), int(b)))
+            if i is None:
+                continue
+            lead = '0-24 h' if int(pt['lead_h'][j]) < 24 else '24-48 h' if int(pt['lead_h'][j]) < 48 else None
+            if lead is None:
+                continue
+            s = by.setdefault((str(pt['model'][j]), lead), {'on': [], 'off': [], 'missed': 0, 'false': 0, 'n': 0})
+            s['n'] += 1
+            ff, fl = (float(pt['f_first'][j]), float(pt['f_last'][j]))
+            of, ol, on = (float(ot['o_first'][i]), float(ot['o_last'][i]), float(ot['o_n'][i]))
+            if math.isfinite(ff) and math.isfinite(of) and (float(ot['q_lead'][i]) >= P.WINDOW_QLEAD_H):
+                s['on'].append(ff - of)
+            if math.isfinite(fl) and math.isfinite(ol) and (float(ot['q_tail'][i]) >= P.WINDOW_QLEAD_H):
+                s['off'].append(fl - ol)
+            if on >= 1 and (not math.isfinite(ff)):
+                s['missed'] += 1
+            if on == 0 and math.isfinite(ff):
+                s['false'] += 1
+    out = []
+    for (m, lead), s in sorted(by.items()):
+        row = {'model': m, 'lead': lead, 'n': s['n'], 'missed': s['missed'], 'false': s['false']}
+        for k in ('on', 'off'):
+            e = np.array(s[k], np.float64)
+            row[k] = {'n': int(len(e)), 'mae': float(np.mean(np.abs(e))) if len(e) else None, 'bias': float(np.mean(e)) if len(e) else None}
+        out.append(row)
     return out
 
 def _fmt_cont(units: str, v: dict) -> str:
@@ -346,6 +382,11 @@ def report_md(sc: dict) -> str:
                     lines.append(f"| {g['model']} | {g['region']} | {V.CONT[nm][0]} | {v['n']:,} | {v['mae_ops']:.2f} ({v['bias_ops']:+.2f}) | {v['mae_rebuilt']:.2f} ({v['bias_rebuilt']:+.2f}) |")
     else:
         lines.append('No station-hours scored from both yet.')
+    if sc.get('window'):
+        lines += ['', '## The soaring window', '', "When the usable thermals came on and went off (the air rising 1.7 m/s through the gliders' climbs; the forecast's W* reaching 1.3 m/s), by 1 degree cell and solar day, in solar hours: the error the forecast less the gliders' (bias in brackets), only where gliders were there half an hour before the first climb or after the last; missed, the cell-days with climbs and no forecast window; false, a forecast window where gliders flew and found none.", '', '| Model | Lead | Cell-days | Onset n | Onset h | End n | End h | Missed | False |', '|---|---|---|---|---|---|---|---|---|']
+        f = lambda v: '' if v['mae'] is None else f"{v['mae']:.2f} ({v['bias']:+.2f})"
+        for r in sc['window']:
+            lines.append(f"| {r['model']} | {r['lead']} | {r['n']:,} | {r['on']['n']:,} | {f(r['on'])} | {r['off']['n']:,} | {f(r['off'])} | {r['missed']:,} | {r['false']:,} |")
     lines += ['', '## Runs missing', '']
     miss = sc['missing_runs']
     if miss is None:
