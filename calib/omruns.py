@@ -20,7 +20,8 @@ MODELS = {'icon': {'om': 'icon_global', 'areas': ('US', 'SH'), 'runs': (0, 12)},
 HOURLY = ('temperature_2m', 'relative_humidity_2m', 'wind_speed_10m', 'wind_direction_10m')
 BATCH = 50
 GAP_S = 0.2
-TRIES = 4
+TRIES = 6
+WAIT_MAX = 60.0
 
 def key() -> str:
     return (os.environ.get('OPEN_METEO_API_KEY') or '').strip()
@@ -65,6 +66,7 @@ def get_json(url: str, opener=None, sleep=time.sleep):
     op = opener or urllib.request.urlopen
     err = None
     for k in range(TRIES):
+        wait = float(2 ** k)
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'lab'})
             with op(req, timeout=120) as r:
@@ -73,9 +75,13 @@ def get_json(url: str, opener=None, sleep=time.sleep):
             if e.code == 400:
                 raise
             err = e
+            if e.code == 429 or e.code >= 500:
+                ra = (e.headers.get('Retry-After') if e.headers else None) or ''
+                wait = float(ra) if ra.strip().isdigit() else 2.0 ** (k + 2)
         except Exception as e:
             err = e
-        sleep(2 ** k)
+        if k < TRIES - 1:
+            sleep(min(WAIT_MAX, wait))
     raise err
 
 def values_of(reply: dict, r0: datetime) -> dict:

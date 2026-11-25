@@ -1,6 +1,6 @@
 from __future__ import annotations
 from . import learn as lab
-STRENGTH_V = 's1'
+STRENGTH_V = 's2'
 STRENGTH = {'cell_deg': 0.1, 'hour_bin': 2, 'band_m': 500, 'q': 0.8}
 
 def samples(d: lab.Day):
@@ -21,11 +21,12 @@ def samples(d: lab.Day):
             got.append(((c['z0'] + c['zt']) / 2, c['rate']))
         air = c.get('air')
         mid = (c['z0'] + c['zt']) / 2
+        y = str(c.get('y') or 'glider')
         for z, v in got:
             band = int(z // STRENGTH['band_m']) * STRENGTH['band_m']
-            yield ((d.sd, cell, hb, band), v, None, d.acday(c), i)
+            yield ((d.sd, cell, hb, band, y), v, None, d.acday(c), i)
         if air is not None:
-            yield ((d.sd, cell, hb, int(mid // STRENGTH['band_m']) * STRENGTH['band_m']), None, air, d.acday(c), i)
+            yield ((d.sd, cell, hb, int(mid // STRENGTH['band_m']) * STRENGTH['band_m'], 'air'), None, air, d.acday(c), i)
 
 def learn(days: list) -> dict:
     import numpy as np
@@ -42,11 +43,11 @@ def learn(days: list) -> dict:
             a[4].add((d.sd, i))
     rows, dropped = ([], 0)
     cd = STRENGTH['cell_deg']
-    for (sd, (ci, cj), hb, band), (vs, airs, wv, wa, cl) in sorted(acc.items()):
+    for (sd, (ci, cj), hb, band, y), (vs, airs, wv, wa, cl) in sorted(acc.items()):
         vs = vs if lab.acdays(wv) >= lab.K else []
         airs = airs if lab.acdays(wa) >= lab.K else []
         if not vs and (not airs):
             dropped += 1
             continue
-        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, len(cl), lab.r(float(np.mean(vs)), 2) if vs else None, lab.r(float(np.quantile(vs, STRENGTH['q'])), 2) if vs else None, lab.r(float(np.mean(airs)), 2) if airs else None, lab.r(float(np.quantile(airs, STRENGTH['q'])), 2) if airs else None])
-    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q'], 'rows': rows, 'below_k': dropped}
+        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, len(cl), lab.r(float(np.mean(vs)), 2) if vs else None, lab.r(float(np.quantile(vs, STRENGTH['q'])), 2) if vs else None, lab.r(float(np.mean(airs)), 2) if airs else None, lab.r(float(np.quantile(airs, STRENGTH['q'])), 2) if airs else None])
+    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q'], 'rows': rows, 'below_k': dropped}

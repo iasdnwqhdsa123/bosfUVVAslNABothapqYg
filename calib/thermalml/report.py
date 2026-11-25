@@ -32,9 +32,23 @@ def where(days: list) -> list:
             out.append([f'{a * lab.REGION_DEG:+.0f}{b * lab.REGION_DEG:+.0f}', N, lab.r(E, 1)])
     return out
 
+def area_covered(t: dict) -> list:
+    deg = float(t.get('cell_deg') or 0)
+    if not deg or not t.get('cells'):
+        return []
+    acc = {}
+    for c in t['cells']:
+        k = lab.region(c[0], c[1])
+        acc[k] = acc.get(k, 0) + 1
+    per = (lab.REGION_DEG / deg) ** 2
+    out = [[f'{a * lab.REGION_DEG:+.0f}{b * lab.REGION_DEG:+.0f}', n, lab.r(n / per, 8)] for (a, b), n in acc.items()]
+    return sorted(out, key=lambda x: (-x[1], x[0]))
+
 def text(rep: dict) -> str:
     v, sk = (rep['volume'], rep['skill'])
     lines = ['thermal learners ' + ', '.join((f'{k} {x}' for k, x in rep['versions'].items())), 'data: ' + ', '.join((f'{k} {v[k]}' for k in ('days', 'acdays', 'climbs', 'thermals', 'multi_climb_thermals', 'failed', 'glides'))), f"k rule: {rep['k']['cells_kept']} cells kept, {rep['k']['cells_dropped']} dropped", f"surface: {rep['trigger']['events']} first finders over {rep['trigger']['coverage_h']} coverage hours in {rep['trigger']['cells']} cells, {len(rep['where'])} regions; {rep['trigger']['events_lost_to_k']} lost to the k rule, {rep['trigger']['no_exposure']} without exposure"]
+    if rep['trigger'].get('area'):
+        lines.append("surface's area: " + ', '.join((f'{r} {n} cells ({sh * 100:.2f} %)' for r, n, sh in rep['trigger']['area'][:8])))
     if sk.get('deviance'):
         lines.append(f"held out {sk['test_days']} days ({sk['test_events']} events): deviance " + ', '.join((f'{k} {x}' for k, x in sk['deviance'].items())))
         lines += [f'  gain {k}: {g[0]} (90 % {g[1]} to {g[2]})' for k, g in sk['gain'].items()]
@@ -62,6 +76,6 @@ def text(rep: dict) -> str:
 
 def learn(days: list, outs: dict, kept: dict, held: int=7, baseline=None) -> dict:
     t = outs['trigger']
-    rep = {'versions': {'trigger': lab.version(tg.TRIGGER_V), 'cycle': lab.version(cycle.CYCLE_V), 'movement': lab.version(movement.MOVEMENT_V), 'strength': lab.version(strength.STRENGTH_V)}, 'volume': volume(days), 'k': {'cells_kept': kept.get('cells_kept', 0), 'cells_dropped': kept.get('cells_dropped', 0)}, 'where': where(days), 'trigger': {'events': int(sum((c[3] for c in t.get('cells', [])))), 'coverage_h': lab.r(sum((c[2] for c in t.get('cells', []))), 1), 'cells': len(t.get('cells', [])), 'hours': t.get('hours', []), 'sigma': t.get('sigma'), 'events_lost_to_k': t.get('counts', {}).get('events_lost_to_k', 0), 'no_exposure': t.get('counts', {}).get('no_exposure', 0)}, 'skill': tg.skill(days, held=held, baseline=baseline), 'cycle': outs['cycle']['bins'], 'cycle_sources': outs['cycle']['sources'], 'cycle_multi': outs['cycle']['multi_use'], 'spacing': t.get('spacing', {}), 'movement': outs['movement']['thermals'], 'mixture': outs['movement']['mixture'], 'strength_rows': len(outs['strength']['rows']), 'strength_below_k': outs['strength']['below_k']}
+    rep = {'versions': {'trigger': lab.version(tg.TRIGGER_V), 'cycle': lab.version(cycle.CYCLE_V), 'movement': lab.version(movement.MOVEMENT_V), 'strength': lab.version(strength.STRENGTH_V)}, 'volume': volume(days), 'k': {'cells_kept': kept.get('cells_kept', 0), 'cells_dropped': kept.get('cells_dropped', 0)}, 'where': where(days), 'trigger': {'events': int(sum((c[3] for c in t.get('cells', [])))), 'coverage_h': lab.r(sum((c[2] for c in t.get('cells', []))), 1), 'cells': len(t.get('cells', [])), 'hours': t.get('hours', []), 'sigma': t.get('sigma'), 'events_lost_to_k': t.get('counts', {}).get('events_lost_to_k', 0), 'no_exposure': t.get('counts', {}).get('no_exposure', 0), 'area': area_covered(t)}, 'skill': tg.skill(days, held=held, baseline=baseline), 'cycle': outs['cycle']['bins'], 'cycle_sources': outs['cycle']['sources'], 'cycle_multi': outs['cycle']['multi_use'], 'spacing': t.get('spacing', {}), 'movement': outs['movement']['thermals'], 'mixture': outs['movement']['mixture'], 'strength_rows': len(outs['strength']['rows']), 'strength_below_k': outs['strength']['below_k']}
     rep['text'] = text(rep)
     return rep
