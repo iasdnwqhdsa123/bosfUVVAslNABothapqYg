@@ -72,7 +72,7 @@ jobs:
           case "$SAT" in
             newest) ;;
             "every day named") set -- "$@" --sat-all ;;
-            none) set -- "$@" --kinds metar,raob,snap ;;
+            none) set -- "$@" --kinds metar,raob,snap,radar,acwind ;;
             *) echo "::error::unknown choice"; exit 1 ;;
           esac
           python3 calib/pairjob.py "$@"

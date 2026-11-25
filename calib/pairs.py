@@ -13,16 +13,18 @@ sys.path.insert(0, HERE)
 import common
 UTC = timezone.utc
 PV = 'p1'
-KINDS = ('metar', 'raob', 'sat', 'flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb')
+KINDS = ('metar', 'raob', 'sat', 'flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb', 'radar', 'acwind')
 SRCS = ('ops', 'archive', 'stcast', 'hind')
 MODELS = ('hrrr', 'gfs', 'ecmwf', 'icon', 'icond2', 'arome')
-LAG_D = {'metar': 1, 'raob': 10, 'sat': 2, 'ogn_climb': 3, 'flight_leg': None, 'flight_climb': None, 'flight_probe': None}
+LAG_D = {'metar': 1, 'raob': 10, 'sat': 2, 'ogn_climb': 3, 'flight_leg': None, 'flight_climb': None, 'flight_probe': None, 'radar': 1, 'acwind': 1}
 REVIEW_KINDS = ('ogn_climb',)
 COLLECTOR_TRAIN_ENV = 'COLLECTOR_TRAIN'
 FEEDS = ('ogn', 'adsb', 'skylines')
 FLIGHT_KINDS = ('flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb')
 METAR_VARS = ('t2', 'td2', 'u_sfc', 'v_sfc', 'gust', 'mslp', 'vis', 'ceil', 'cubase', 'cuclass', 'cloud', 'cloudlow', 'rain', 'overdev_nb', 'elevation', 't2_s', 'td2_s', 'u_sfc_s', 'v_sfc_s')
 SAT_VARS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ctop', 'cuclass', 'cucover', 'cubase', 'elevation')
+RADAR_VARS = ('overdev_nb', 'cuclass', 'rain')
+ACWIND_VARS = ('u_g300', 'v_g300', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'zi', 'elevation')
 RAOB_VARS = ('zi', 'depth', 'blapse', 'cubase', 'cuclass', 'wstar', 't2', 'td2', 'u_sfc', 'v_sfc', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'elevation')
 WIDE = ('mslp',)
 RAOB_NEAR_KM = 25.0
@@ -41,6 +43,10 @@ def kind_vars(kind: str) -> tuple:
         return SAT_VARS
     if kind == 'raob':
         return RAOB_VARS
+    if kind == 'radar':
+        return RADAR_VARS
+    if kind == 'acwind':
+        return ACWIND_VARS
     if kind in ('flight_leg', 'flight_climb', 'ogn_climb'):
         return flight_vars()
     if kind == 'flight_probe':
@@ -220,6 +226,10 @@ LEG_Q = ('ok', 'engine', 'last')
 CLIMB_O = ('rate', 'gain', 'dur', 'agl1', 'z1', 'r100')
 CLIMB_Q = ('engon',)
 OGN_O = ('rate', 'gain', 'dur', 'agl0', 'agl1', 'z1', 'air')
+RADAR_O = ('dbz_max', 'storm', 'echo')
+RADAR_Q = ('cover', 'dt')
+ACWIND_O = ('z', 'zmsl', 'u', 'v')
+ACWIND_Q = ('n', 'su', 'sv', 'share')
 OGN_Q = ('type',)
 OGN_TYPE = {'glider': 1, 'hg': 2, 'pg': 3}
 
@@ -241,6 +251,10 @@ def obs_schema(kind: str) -> tuple:
         return base + (('elev', 'f32'), ('t_release', 'i64?'), ('n_lev', 'i32'), ('top_hpa', 'f32')) + tuple(((f'o_{n}', 'f32') for n in names)) + tuple(((f'q_{n}', 'i32') for n in names))
     if kind == 'sat':
         return base + (('status', 'str'), ('sensor', 'str'), ('parallax', 'str')) + tuple(((f'o_{n}', 'f32') for n in SAT_O)) + tuple(((f'q_{n}', 'f32') for n in SAT_Q))
+    if kind == 'radar':
+        return base + (('elev', 'f32'),) + tuple(((f'o_{n}', 'f32') for n in RADAR_O)) + tuple(((f'q_{n}', 'f32') for n in RADAR_Q))
+    if kind == 'acwind':
+        return base + (('elev', 'f32'),) + tuple(((f'o_{n}', 'f32') for n in ACWIND_O)) + tuple(((f'q_{n}', 'f32') for n in ACWIND_Q))
     if kind == 'flight_leg':
         return base + (('macro', 'str'),) + tuple(((f'o_{n}', 'f32') for n in LEG_O)) + tuple(((f'q_{n}', 'i8') for n in LEG_Q))
     if kind == 'flight_climb':

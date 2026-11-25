@@ -367,6 +367,18 @@ def read_json(path: str):
     with op(path, 'rt', encoding='utf-8') as f:
         return json.load(f)
 
+def no_empty(X):
+    import numpy as np
+    X = np.asarray(X, np.float64)
+    if X.ndim != 2 or not len(X):
+        return X
+    empty = ~np.isfinite(X).any(axis=0)
+    if not empty.any():
+        return X
+    X = X.copy()
+    X[:, empty] = 0.0
+    return X
+
 def write_json(path: str, obj, indent=None) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = path + '.tmp'

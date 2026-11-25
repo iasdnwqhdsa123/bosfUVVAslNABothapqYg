@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import common
 import convpairs
 import lake as lakem
 import score
@@ -47,7 +48,7 @@ def heldout(T: dict) -> tuple[np.ndarray, np.ndarray]:
     for F in folds(T['day']):
         te = np.isin(T['day'], list(F))
         for p, names in ((pb, BASE), (pc, BASE + CONV)):
-            m = model(names).fit(X(T, names)[~te], T['netto'][~te])
+            m = model(names).fit(common.no_empty(X(T, names)[~te]), T['netto'][~te])
             p[te] = m.predict(X(T, names)[te])
     return (pb, pc)
 
@@ -63,7 +64,7 @@ def boot_gain(T: dict, eb: np.ndarray, ec: np.ndarray, n: int=1000, seed: int=1)
 
 def lift_table(T: dict) -> dict:
     names = BASE + CONV
-    m = model(names).fit(X(T, names), T['netto'])
+    m = model(names).fit(common.no_empty(X(T, names)), T['netto'])
     out = {}
     for cls, sel in (('fine', T['step'] <= STEP_FINE), ('coarse', T['step'] > STEP_FINE)):
         if sel.sum() < 200:

@@ -271,15 +271,16 @@ def fit_trees(kind: str, X: np.ndarray, y: np.ndarray, names, seed: int, params=
     from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
     p = dict(params or TREE)
     p['random_state'] = int(seed)
+    Xt = common.no_empty(X.T)
     if kind == 'logit':
         p.pop('loss', None)
         if len(np.unique(y)) < 2:
             r = float(np.clip(np.mean(y), 0.01, 0.99))
             return _const_logit(names, math.log(r / (1 - r)))
-        m = HistGradientBoostingClassifier(**{k: v for k, v in p.items() if k not in ('quantile',)}).fit(X.T, y.astype(int))
+        m = HistGradientBoostingClassifier(**{k: v for k, v in p.items() if k not in ('quantile',)}).fit(Xt, y.astype(int))
     else:
-        m = HistGradientBoostingRegressor(**p).fit(X.T, y)
-    return _export(m, names, kind, X.T)
+        m = HistGradientBoostingRegressor(**p).fit(Xt, y)
+    return _export(m, names, kind, Xt)
 
 def _const_logit(names, L):
     lo = float(-_logit(np.array([0.0]))[0])
@@ -497,7 +498,7 @@ def fit_gate(F, f, rows, X: dict, members, seed):
     keep = wr > 1e-06
     if len(np.unique(yr[keep])) < K:
         return None
-    m = HistGradientBoostingClassifier(**GATE_TREE, random_state=int(seed)).fit(Xr[keep], yr[keep], sample_weight=wr[keep])
+    m = HistGradientBoostingClassifier(**GATE_TREE, random_state=int(seed)).fit(common.no_empty(Xr[keep]), yr[keep], sample_weight=wr[keep])
     return m
 
 def gate_weights(m, F, rows, f, present: dict, members) -> np.ndarray:
@@ -654,7 +655,7 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
         sp = dict(SPREAD_TREE if params is None else dict(params, loss='quantile', quantile=0.8))
         sp['random_state'] = int(seed)
         import train
-        spread = train.export(HistGradientBoostingRegressor(**sp).fit(Xs.T, y), names)
+        spread = train.export(HistGradientBoostingRegressor(**sp).fit(common.no_empty(Xs.T), y), names)
         log.add(field=f, member='blend', stage=('spread',), train=rows_s[ok], scored=np.zeros(0, np.int64), trees=True)
     verdict, cv = _verdict(F, f, test_parts, gate_cmp, cells, b, members, wt, seed)
     cv['scale'] = scale_verdict(F, scale_cmp, seed) if f in SCALE_FIELDS else {'wins': False, 'why': 'not a scale field'}

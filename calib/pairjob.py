@@ -18,7 +18,7 @@ import obs_raob
 import pairs as P
 UTC = timezone.utc
 LEAD_MAX_H = 48
-KINDS = ('metar', 'raob', 'sat', 'snap')
+KINDS = ('metar', 'raob', 'sat', 'snap', 'radar', 'acwind')
 BACK = 10
 MINUTES = 40.0
 OPS_ROOT = 'ops'
@@ -359,7 +359,7 @@ def write_static(lk, ops, recs: dict, day: str, counts: dict) -> int:
     _n(counts, 'static_written', n)
     return n
 
-def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: dict | None=None, raob_listing=None, elevs=None, truth=None, counts: dict | None=None, sat_due=None, cells=None) -> list[dict]:
+def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: dict | None=None, raob_listing=None, elevs=None, truth=None, counts: dict | None=None, sat_due=None, cells=None, raw_listing=None) -> list[dict]:
     counts = counts if counts is not None else {}
     res = []
     recs = {**stcast_records(lk, snap, day, counts), **ops_records(ops, day, counts)}
@@ -380,6 +380,32 @@ def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: d
                 res.append(P.station_unit(lk, 'metar', day, m, rs))
         else:
             _n(counts, 'metar_no_parts')
+    if 'radar' in kinds:
+        import numpy as np
+        import radar as R
+
+        def radar_table(_new, _all):
+            tabs = []
+            for tv, r in R.day_rows(day, stations, common.US_BOX, counts=counts):
+                n = len(r['obs_id'])
+                tabs.append(P.table(P.obs_schema('radar'), {'kind': 'radar', 'obs_id': np.array(r['obs_id'], dtype=object), 't_valid': np.full(n, tv, np.int64), 'lat': r['lat'], 'lon': r['lon'], 'elev': r['elev'], 'review': np.zeros(n, bool), 'o_dbz_max': r['dbz_max'], 'o_storm': r['storm'], 'o_echo': r['echo'], 'q_cover': r['cover'], 'q_dt': r['dt']}, n))
+            return P.concat(P.obs_schema('radar'), tabs)
+        try:
+            res.append(P.write_unit(lk, 'obs', 'radar', day, 'all', [R.input_id(day)], radar_table))
+        except lakem.LakeError:
+            raise
+        except Exception:
+            _n(counts, 'radar_failed')
+    if 'acwind' in kinds:
+        import acwind as A
+        try:
+            r = A.write_day(lk, day, stations, counts, raw_listing)
+            if r.get('status') != 'none':
+                res.append(r)
+        except lakem.LakeError:
+            raise
+        except Exception:
+            _n(counts, 'acwind_failed')
     if 'raob' in kinds:
         snds = raob_inputs(lk, day, raob_listing if raob_listing is not None else raob_days(lk), elevs or {}, counts)
         if snds:
@@ -446,12 +472,16 @@ def run(lk, ops, days: list[str], stations: list, today: date, kinds=KINDS, minu
     elevs = raob_elevations(lk, today) if 'raob' in kinds else {}
     old_enough = [d for d in sorted(days, reverse=True) if date.fromisoformat(d) <= today - timedelta(days=SAT_AFTER_D)]
     sat_due = None if sat_all else set(old_enough[:SAT_BACK])
+    raw_listing = None
+    if 'acwind' in kinds:
+        import acwind as A
+        raw_listing = A.listing(lk)
     res = []
     for d in days:
         if clock() - t0 > minutes * 60:
             _n(counts, 'days_left', len(days) - days.index(d))
             break
-        res += run_day(lk, ops, d, stations, today, kinds, snap, listing, elevs, truth, counts, sat_due, cells)
+        res += run_day(lk, ops, d, stations, today, kinds, snap, listing, elevs, truth, counts, sat_due, cells, raw_listing)
         _n(counts, 'days')
     return {'counts': counts, 'summary': P.summary(res) if res else 'pairs: nothing to do'}
 

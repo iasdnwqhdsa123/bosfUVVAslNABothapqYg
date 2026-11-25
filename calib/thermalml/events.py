@@ -8,7 +8,7 @@ from . import guard, objects
 EVENTS_V = 'e1'
 VERSIONS = (1, 2)
 KINDS = ('c', 's', 'f')
-OTHER_KINDS = ('x', 'p')
+OTHER_KINDS = ('x', 'p', 'wa')
 TYPES = tuple(collector.TYPES)
 GLIDE_TOL_S = 90
 ALT_RANGE = (-1000.0, 20000.0)

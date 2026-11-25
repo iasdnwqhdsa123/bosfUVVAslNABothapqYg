@@ -8,6 +8,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import airpairs
+import common
 import lake as lakem
 import score
 SV = 'air'
@@ -66,7 +67,7 @@ def heldout(T: dict) -> dict:
         if not te.any() or te.all():
             continue
         for k, (names, con) in SETS.items():
-            m = model(list(names), con).fit(X(T, names)[~te], T['netto'][~te])
+            m = model(list(names), con).fit(common.no_empty(X(T, names)[~te]), T['netto'][~te])
             out[k][te] = m.predict(X(T, names)[te])
     out['layers'] = layers(T)
     return out
@@ -142,7 +143,7 @@ def refit(cols: dict) -> dict:
     else:
         out['pass'], out['why'] = (True, f'held out the head gains {g_l:.3f} m/s on the layers and {g_a:.3f} on the air alone, no band or region worse')
     names = list(COARSE + FINE)
-    m = model(names, True).fit(X(T, names), T['netto'])
+    m = model(names, True).fit(common.no_empty(X(T, names)), T['netto'])
     out['response'] = response(m, names, T)
     out['_model'] = (m, names)
     return out

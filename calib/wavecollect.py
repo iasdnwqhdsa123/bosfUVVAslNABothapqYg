@@ -141,7 +141,13 @@ def flight_file(fid: int, day: str, detail: dict, s: dict, data: dict) -> dict:
     return {'id': fid, 'date': day, 'aircraft': ac.get('name'), 'aircraft_kind': ac.get('kind'), 'polar': {'encoded_coeffs': ac.get('encoded_coeffs'), 'reference_mass': ac.get('reference_mass'), 'wingarea': ac.get('wingarea')}, 'mass': ac.get('reference_mass'), 'takeoff': {'airport': (detail.get('takeoff_airport') or {}).get('name'), 'time': detail.get('takeoff_time')}, 'engine_sensor_present': any((e is not None for e in data.get('engine_sensor') or [])), **s}
 
 def run(state: str, requests: int, wind: float, per_day: int, gap: float, client=None) -> dict:
-    weglide.GAP = gap
+    old, weglide.GAP = (weglide.GAP, gap)
+    try:
+        return _run(state, requests, wind, per_day, client)
+    finally:
+        weglide.GAP = old
+
+def _run(state: str, requests: int, wind: float, per_day: int, client=None) -> dict:
     wd_path = os.path.join(state, 'wavedays.json')
     wd = load(wd_path, None)
     if not wd:

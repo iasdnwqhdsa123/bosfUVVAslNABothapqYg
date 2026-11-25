@@ -20,7 +20,7 @@ import common
 import track
 TYPES = ('glider', 'hg', 'pg')
 FEEDS_OUT = ('skylines',)
-NOT_CLIMBS = ('f', 'x', 'p')
+NOT_CLIMBS = ('f', 'x', 'p', 'wa')
 KEEP_KINDS = ('c', 'f')
 GAGGLE_S, GAGGLE_M = (15 * 60, 600.0)
 RATE_MAX = 10.0
