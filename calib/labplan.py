@@ -140,8 +140,11 @@ def order(units: list[dict], early_old: int=0, table: dict | None=None) -> list[
     first = {u['name'] for u in om}
     rest = [u for u in ranked if u['name'] not in first]
     if st:
-        rest = side_by_side(rest, st, table or DEFAULT_S)
+        rest = st + rest if stcast_first() else side_by_side(rest, st, table or DEFAULT_S)
     return om + rest
+
+def stcast_first() -> bool:
+    return (os.environ.get('CALIB_STCAST_ORDER') or 'first').strip().lower() != 'turns'
 
 def timing(model: str | None, init: str | None, kind: str | None=None) -> tuple:
     if kind == catalog.STCAST:
