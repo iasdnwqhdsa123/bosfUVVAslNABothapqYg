@@ -18,7 +18,7 @@ import obs_raob
 import pairs as P
 UTC = timezone.utc
 LEAD_MAX_H = 48
-KINDS = ('metar', 'raob', 'sat', 'snap', 'radar', 'acwind', 'window')
+KINDS = ('metar', 'raob', 'sat', 'snap', 'radar', 'acwind', 'window', 'vis')
 BACK = 10
 MINUTES = 40.0
 OPS_ROOT = 'ops'
@@ -453,6 +453,21 @@ def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: d
                     res.append(P.sat_unit(lk, day, m, rs, seen))
         if os.environ.get('SAT_GRID', '1') != '0':
             res += grid_sat(lk, ops, day, counts, cells)
+    if 'vis' in kinds and (sat_due is None or day in sat_due) and (date.fromisoformat(day) <= today - timedelta(days=SAT_AFTER_D)):
+        pts, oids = sat_points(stations, day)
+        if pts:
+            import satvis as SV
+
+            def vis_table(_new, _all):
+                rows = SV.day_rows(day, pts, oids, counts=counts)
+                _n(counts, 'vis_points', len(rows))
+                return SV.table_of(rows)
+            try:
+                res.append(P.write_unit(lk, 'obs', 'vis', day, 'all', [f'vis|v{SV.VIS_V}|' + sat_input(stations)], vis_table))
+            except lakem.LakeError:
+                raise
+            except Exception:
+                _n(counts, 'vis_failed')
     if 'snap' in kinds and recs:
         import snap as S
         res.append(S.write_day(lk, day, 'all', recs))

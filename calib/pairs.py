@@ -13,10 +13,10 @@ sys.path.insert(0, HERE)
 import common
 UTC = timezone.utc
 PV = 'p1'
-KINDS = ('metar', 'raob', 'sat', 'flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb', 'radar', 'acwind', 'window')
+KINDS = ('metar', 'raob', 'sat', 'flight_leg', 'flight_climb', 'flight_probe', 'ogn_climb', 'radar', 'acwind', 'window', 'vis')
 SRCS = ('ops', 'archive', 'stcast', 'hind')
 MODELS = ('hrrr', 'gfs', 'ecmwf', 'icon', 'icond2', 'arome')
-LAG_D = {'metar': 1, 'raob': 10, 'sat': 2, 'ogn_climb': 3, 'flight_leg': None, 'flight_climb': None, 'flight_probe': None, 'radar': 1, 'acwind': 1, 'window': 3}
+LAG_D = {'metar': 1, 'raob': 10, 'sat': 2, 'ogn_climb': 3, 'flight_leg': None, 'flight_climb': None, 'flight_probe': None, 'radar': 1, 'acwind': 1, 'window': 3, 'vis': 2}
 REVIEW_KINDS = ('ogn_climb',)
 COLLECTOR_TRAIN_ENV = 'COLLECTOR_TRAIN'
 FEEDS = ('ogn', 'adsb', 'skylines')
@@ -26,6 +26,7 @@ SAT_VARS = ('cloud', 'cloudlow', 'cloudmid', 'cloudhigh', 'ctop', 'cuclass', 'cu
 RADAR_VARS = ('overdev_nb', 'cuclass', 'rain')
 ACWIND_VARS = ('u_g300', 'v_g300', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'zi', 'elevation')
 WINDOW_VARS = ('first', 'last', 'wsmax', 'zimax')
+VIS_VARS = ('cucover', 'cuclass', 'cloudlow', 'cloud')
 WINDOW_CELL = 1.0
 WINDOW_WS = 1.7 / 1.3
 WINDOW_QLEAD_H = 0.5
@@ -53,6 +54,8 @@ def kind_vars(kind: str) -> tuple:
         return ACWIND_VARS
     if kind == 'window':
         return WINDOW_VARS
+    if kind == 'vis':
+        return VIS_VARS
     if kind in ('flight_leg', 'flight_climb', 'ogn_climb'):
         return flight_vars()
     if kind == 'flight_probe':
@@ -238,6 +241,8 @@ ACWIND_O = ('z', 'zmsl', 'u', 'v')
 ACWIND_Q = ('n', 'su', 'sv', 'share')
 WINDOW_O = ('first', 'last', 'n')
 WINDOW_Q = ('ac', 'all', 'fly0', 'fly1', 'lead', 'tail', 'best')
+VIS_O = ('cloud', 'cu', 'broken', 'cv')
+VIS_Q = ('n', 'sun', 'bg', 'dt')
 OGN_Q = ('type',)
 OGN_TYPE = {'glider': 1, 'hg': 2, 'pg': 3}
 
@@ -265,6 +270,8 @@ def obs_schema(kind: str) -> tuple:
         return base + (('elev', 'f32'),) + tuple(((f'o_{n}', 'f32') for n in ACWIND_O)) + tuple(((f'q_{n}', 'f32') for n in ACWIND_Q))
     if kind == 'window':
         return base + tuple(((f'o_{n}', 'f32') for n in WINDOW_O)) + tuple(((f'q_{n}', 'f32') for n in WINDOW_Q))
+    if kind == 'vis':
+        return base + tuple(((f'o_{n}', 'f32') for n in VIS_O)) + tuple(((f'q_{n}', 'f32') for n in VIS_Q))
     if kind == 'flight_leg':
         return base + (('macro', 'str'),) + tuple(((f'o_{n}', 'f32') for n in LEG_O)) + tuple(((f'q_{n}', 'i8') for n in LEG_Q))
     if kind == 'flight_climb':
@@ -338,10 +345,16 @@ def to_parquet(schema, t: dict) -> bytes:
 def from_parquet(schema, blob: bytes, columns=None) -> dict:
     pa, pq = _pa()
     names = [n for n, _ in schema if columns is None or n in columns]
-    tab = pq.read_table(io.BytesIO(blob), columns=names)
+    have = set(pq.read_schema(io.BytesIO(blob)).names)
+    tab = pq.read_table(io.BytesIO(blob), columns=[n for n in names if n in have])
     out = {}
     ty = dict(schema)
+    gone = [n for n in names if n not in have]
+    if gone:
+        out.update(table([(n, ty[n]) for n in gone], {}, tab.num_rows))
     for n in names:
+        if n in gone:
+            continue
         col = tab.column(n)
         if ty[n] in ('str', 'i64?'):
             out[n] = np.array(col.to_pylist(), dtype=object)
@@ -349,7 +362,7 @@ def from_parquet(schema, blob: bytes, columns=None) -> dict:
             out[n] = np.asarray(col.to_numpy(zero_copy_only=False), np.float16)
         else:
             out[n] = np.asarray(col.to_numpy(zero_copy_only=False), _NP[ty[n]])
-    return out
+    return {n: out[n] for n in names}
 
 def _avail_of(rec: dict, ks, at):
     by = rec.get('avail_runs')
