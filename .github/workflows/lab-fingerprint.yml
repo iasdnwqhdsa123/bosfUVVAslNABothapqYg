@@ -324,7 +324,7 @@ jobs:
           if [ "$n" -gt 0 ]; then echo "a lab run waits already: it goes first"; exit 0; fi
           oc=()
           case "$ON_CHANGE" in finish|restart) oc=(-f on_change="$ON_CHANGE");; esac
-          gh workflow run lab-build.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f sweep="$SWEEP" -f wave="$WAVE" "${oc[@]}"
+          for i in 1 2 3 4; do gh workflow run lab-build.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f sweep="$SWEEP" -f wave="$WAVE" "${oc[@]}" && break; [ "$i" = 4 ] && exit 1; sleep $((i * 20)); done
           echo "lab-build asked for: sweep $SWEEP, wave $WAVE"
   again:
     needs: gate
@@ -354,5 +354,5 @@ jobs:
           case "$WHAT" in start|resume|then) args=(-f then=resume);; esac
           [[ "$SWEEP" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] && args+=(-f sweep="$SWEEP")
           case "$ON_CHANGE" in finish|restart) args+=(-f on_change="$ON_CHANGE");; esac
-          gh workflow run lab-fingerprint.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" "${args[@]}"
+          for i in 1 2 3 4; do gh workflow run lab-fingerprint.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" "${args[@]}" && break; [ "$i" = 4 ] && exit 1; sleep $((i * 20)); done
           echo "lab-fingerprint asked for again"

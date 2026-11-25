@@ -164,6 +164,32 @@ def refs_key(area: str, group: str, gv: str) -> str:
         raise ValueError('refs')
     return f'{STAMPS}{area}/refs/{group}-{gv}.lenc'
 
+def retired_key(area: str, group: str, gv: str) -> str:
+    if area not in AREAS or not _GROUP.fullmatch(group) or (not _GV.fullmatch(gv)):
+        raise ValueError('retired')
+    return f'{STAMPS}{area}/retired/{group}-{gv}.lenc'
+
+def moved_gv(gv: str, cs: str) -> str:
+    import hashlib
+    return hashlib.sha256(f'{gv}|moved|{cs}'.encode()).hexdigest()[:12]
+
+def retired(lk) -> dict:
+    out = {}
+    for k in lk.list(STAMPS):
+        parts = k[len(STAMPS):].split('/')
+        if len(parts) != 3 or parts[0] not in AREAS or parts[1] != 'retired' or (not parts[2].endswith('.lenc')):
+            continue
+        g, _, v = parts[2][:-5].partition('-')
+        if not _GROUP.fullmatch(g) or not _GV.fullmatch(v):
+            continue
+        try:
+            to = str(catalog.decode(lk.get(k)).get('to') or '')
+        except Exception:
+            continue
+        if _GV.fullmatch(to):
+            out[parts[0], g, v] = to
+    return out
+
 def _npz(arrays: dict) -> bytes:
     import labbuild
     return labbuild.npz_bytes(arrays)
@@ -180,18 +206,26 @@ def need(lk, cs: str | None=None) -> bool:
 
 def kept(lk, out: str) -> int:
     import fingerprint
+    gone = retired(lk)
     reps = {}
     for k in lk.list(STAMPS):
         parts = k[len(STAMPS):].split('/')
         if len(parts) != 3 or parts[0] not in AREAS or parts[1] != 'refs' or (not parts[2].endswith('.lenc')):
             continue
         g, _, v = parts[2][:-5].partition('-')
-        if not _GROUP.fullmatch(g) or not _GV.fullmatch(v):
+        if not _GROUP.fullmatch(g) or not _GV.fullmatch(v) or (parts[0], g, v) in gone:
             continue
         reps[parts[0], g, v] = _arrays(lk.get(k))
     os.makedirs(out, exist_ok=True)
     fingerprint.save_group_reps(os.path.join(out, fingerprint.GROUP_REPS), reps)
     cur = gv_in_force(lk)
+    for a, gs in (cur or {}).items():
+        for g, v in list((gs or {}).items()):
+            seen = set()
+            while (a, g, v) in gone and v not in seen:
+                seen.add(v)
+                v = gone[a, g, v]
+            gs[g] = v
     if cur:
         with open(os.path.join(out, 'current.json'), 'w') as f:
             json.dump(cur, f, sort_keys=True)
@@ -211,18 +245,21 @@ def write(lk, gv_dir: str, rechecks: str, parts: int, cs: str | None=None) -> bo
         log(f'the rechecks came back from {len(got)} of {parts} parts: no stamps written')
         return False
     tot = {k: sum((int(r.get(k) or 0) for r in results)) for k in ('picked', 'same', 'moved', 'missed', 'unstable', 'failed', 'nogrids', 'left')}
-    groups, at = ({}, {})
+    groups, at, moved_in = ({}, {}, {})
     for r in results:
         for g, n in (r.get('groups') or {}).items():
             groups[g] = groups.get(g, 0) + int(n)
         for k, n in (r.get('at') or {}).items():
             at[k] = at.get(k, 0) + int(n)
+        for a, gs in (r.get('moved_in') or {}).items():
+            for g, n in (gs or {}).items():
+                moved_in.setdefault(a, {})[g] = moved_in.get(a, {}).get(g, 0) + int(n)
     log('recheck: ' + ', '.join((f'{k} {v}' for k, v in tot.items())))
     if at:
         log('recheck by model: ' + ', '.join((f'{k} {n}' for k, n in sorted(at.items()))))
     if tot['unstable']:
         log(f"{tot['unstable']} stored unit(s) built twice with this code came out different: not reproducible there, so their move says nothing of the code (look at that model's build)")
-    if tot['missed']:
+    if tot['missed'] and (not moved_in):
         log(f"the reference boxes missed a change on {tot['missed']} stored unit(s) (" + ', '.join((f'{g} {n}' for g, n in sorted(groups.items()))) + '): no stamps written; look before a sweep builds on them')
         return False
     tried = tot['picked'] - tot['nogrids'] - tot['moved'] - tot['left'] - tot['unstable']
@@ -239,6 +276,19 @@ def write(lk, gv_dir: str, rechecks: str, parts: int, cs: str | None=None) -> bo
         log("the stamps don't cover every area: none written")
         return False
     reps = fingerprint.load_group_reps(os.path.join(gv_dir, fingerprint.GROUP_REPS))
+    retire = []
+    for a, gs in sorted(moved_in.items()):
+        for g in sorted(gs):
+            v = (gv.get(a) or {}).get(g)
+            if not v or (a, g, v) not in reps:
+                log("a moved group's reference fields are missing: none written")
+                return False
+            b = moved_gv(v, cs)
+            reps[a, g, b] = reps[a, g, v]
+            gv[a][g] = b
+            retire.append((a, g, v, b))
+    if retire:
+        log(f"the reference boxes missed a change on {tot['missed']} stored unit(s): the stamp moved for " + ', '.join((f'{a} {g}' for a, g, _, _ in retire)) + ' (their stored units are rebuilt; look at what moved there)')
     refs = {}
     for a in AREAS:
         for g, v in sorted(gv[a].items()):
@@ -252,6 +302,8 @@ def write(lk, gv_dir: str, rechecks: str, parts: int, cs: str | None=None) -> bo
                 log("a stamp's reference fields are missing: none written")
                 return False
             lk.put(k, _npz(reps[a, g, v]), strict=False)
+    for a, g, v, b in retire:
+        lk.put(retired_key(a, g, v), catalog.encode({'v': 1, 'to': b, 'cs': cs}), strict=False)
     for a in AREAS:
         lk.put(stamps_key(a, cs), catalog.encode({'v': 1, 'cs': cs, 'gv': gv[a], 'refs': refs.get(a, {})}), strict=False)
     stood = labplan.read_stamps(lk, cs)
@@ -348,7 +400,7 @@ def recheck(lk, gv_path: str, part: int, parts: int, out: str, n: int=RECHECK_N,
     steps = steps or labbuild.Steps()
     t0 = clock() - max(0.0, elapsed)
     mine = pick(lk, n)[part::parts]
-    res = {'v': 1, 'part': part, 'picked': len(mine), 'same': 0, 'moved': 0, 'missed': 0, 'unstable': 0, 'failed': 0, 'nogrids': 0, 'left': 0, 'groups': {}, 'at': {}}
+    res = {'v': 1, 'part': part, 'picked': len(mine), 'same': 0, 'moved': 0, 'missed': 0, 'unstable': 0, 'failed': 0, 'nogrids': 0, 'left': 0, 'groups': {}, 'at': {}, 'moved_in': {}}
     own = work is None
     work = work or tempfile.mkdtemp(prefix='lab-rc-')
     os.makedirs(work, exist_ok=True)
@@ -364,6 +416,9 @@ def recheck(lk, gv_path: str, part: int, parts: int, out: str, n: int=RECHECK_N,
             res[st] += 1
             for g in gs:
                 res['groups'][g] = res['groups'].get(g, 0) + 1
+                if st == 'missed':
+                    a = res['moved_in'].setdefault(str(u.get('area')), {})
+                    a[g] = a.get(g, 0) + 1
             if st in ('missed', 'unstable'):
                 k = f"{st} {u.get('area')}/{u.get('model')}"
                 res['at'][k] = res['at'].get(k, 0) + 1

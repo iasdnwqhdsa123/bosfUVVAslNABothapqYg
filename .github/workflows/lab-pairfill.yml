@@ -53,7 +53,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$(jq -r '.more' "$RUNNER_TEMP/pairfill.json" 2>/dev/null)" = true ]; then
-            gh workflow run lab-pairfill.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+            for i in 1 2 3 4; do gh workflow run lab-pairfill.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" && break; [ "$i" = 4 ] && exit 1; sleep $((i * 20)); done
             echo "days left: the next run asked for"
           else
             echo "the backfill's days are paired"
