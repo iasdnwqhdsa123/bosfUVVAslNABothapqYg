@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - run: pip install -q -r pipeline/requirements.txt h5py
+      - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt h5py && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Check, a month at a time
         run: |
           [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }

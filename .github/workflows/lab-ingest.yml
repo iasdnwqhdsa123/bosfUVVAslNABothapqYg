@@ -43,7 +43,7 @@ jobs:
           cache-dependency-path: calib/requirements.txt
       - name: Python packages
         if: steps.on.outputs.go == 'true'
-        run: pip install -q -r calib/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Ingest
         if: steps.on.outputs.go == 'true'
         run: |

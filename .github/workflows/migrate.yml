@@ -86,7 +86,7 @@ jobs:
         if: needs.plan.outputs.what == 'verify'
         with:
           node-version: "22"
-      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Migrate (${{ needs.plan.outputs.what }}, ${{ matrix.part }})
         env:
           WHAT: ${{ needs.plan.outputs.what }}

@@ -59,7 +59,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
-      - run: pip install -q -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Restore
         id: restore
         run: |
@@ -112,7 +112,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
-      - run: pip install -q -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Restore
         id: restore
         run: |
@@ -161,7 +161,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
-      - run: pip install -q -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Restore
         run: |
           for k in obs hrrr gfs ecmwf-0 ecmwf-1 icon icond2; do

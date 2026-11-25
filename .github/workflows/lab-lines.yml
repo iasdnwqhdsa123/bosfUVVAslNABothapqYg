@@ -44,7 +44,7 @@ jobs:
             pipeline/requirements.txt
       - name: Python packages
         if: steps.on.outputs.go == 'true'
-        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Pairs
         if: steps.on.outputs.go == 'true'
         run: python3 calib/convpairs.py --minutes 55
@@ -78,7 +78,7 @@ jobs:
           node-version: "22"
       - name: Python packages
         if: steps.on.outputs.go == 'true'
-        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Air pairs
         if: steps.on.outputs.go == 'true'
         run: python3 calib/airpairs.py --minutes 55
@@ -111,7 +111,7 @@ jobs:
             pipeline/requirements.txt
       - name: Python packages
         if: steps.on.outputs.go == 'true'
-        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Fit
         if: steps.on.outputs.go == 'true'
         run: |

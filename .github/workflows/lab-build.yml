@@ -75,7 +75,7 @@ jobs:
             calib/requirements.txt
             pipeline/requirements.txt
       - if: steps.check.outputs.ready == 'yes'
-        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - id: plan
         if: steps.check.outputs.ready == 'yes'
         env:
@@ -134,7 +134,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Chunk
         env:
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
@@ -186,7 +186,7 @@ jobs:
             calib/requirements.txt
             pipeline/requirements.txt
       - if: steps.check.outputs.ready == 'yes'
-        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Plan the next wave
         id: next
         if: steps.check.outputs.ready == 'yes'

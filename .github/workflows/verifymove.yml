@@ -64,7 +64,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install -q "numpy>=1.26"
+      - run: for i in 1 2 3; do pip install -q "numpy>=1.26" && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Carry ${{ matrix.key }} over
         run: |
           [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
@@ -141,7 +141,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
-      - run: pip install -q -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Fetch both
         run: |
           [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }

@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - run: pip install -q -r calib/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Restore the data
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -43,7 +43,7 @@ jobs:
             pipeline/requirements.txt
       - name: Python packages
         if: steps.on.outputs.go == 'true'
-        run: pip install -q -r calib/requirements.txt -r calib/requirements-pairs.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r calib/requirements-pairs.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Pairs
         if: steps.on.outputs.go == 'true'
         run: python3 calib/pairjob.py run --days hindcast --kinds metar,snap --minutes 330 --status "$RUNNER_TEMP/pairfill.json"

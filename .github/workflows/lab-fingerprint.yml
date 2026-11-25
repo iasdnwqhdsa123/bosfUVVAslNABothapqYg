@@ -96,7 +96,7 @@ jobs:
             calib/requirements.txt
             pipeline/requirements.txt
       - if: steps.check.outputs.ready == 'yes'
-        run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - id: need
         if: steps.check.outputs.ready == 'yes'
         run: python3 calib/labjobs.py need
@@ -138,7 +138,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: The stamps
         run: |
           python3 calib/labjobs.py kept --out /tmp/kept
@@ -199,7 +199,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - uses: actions/download-artifact@v8
         with:
           name: lab-gv
@@ -253,7 +253,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - uses: actions/download-artifact@v8
         with:
           path: /tmp/in
@@ -288,7 +288,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
+      - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - id: relay
         env:
           WHAT: ${{ needs.gate.outputs.what }}
