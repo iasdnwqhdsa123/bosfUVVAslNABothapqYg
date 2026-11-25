@@ -210,16 +210,22 @@ def write(lk, gv_dir: str, rechecks: str, parts: int, cs: str | None=None) -> bo
     if got != set(range(parts)):
         log(f'the rechecks came back from {len(got)} of {parts} parts: no stamps written')
         return False
-    tot = {k: sum((int(r.get(k) or 0) for r in results)) for k in ('picked', 'same', 'moved', 'missed', 'failed', 'nogrids', 'left')}
-    groups = {}
+    tot = {k: sum((int(r.get(k) or 0) for r in results)) for k in ('picked', 'same', 'moved', 'missed', 'unstable', 'failed', 'nogrids', 'left')}
+    groups, at = ({}, {})
     for r in results:
         for g, n in (r.get('groups') or {}).items():
             groups[g] = groups.get(g, 0) + int(n)
+        for k, n in (r.get('at') or {}).items():
+            at[k] = at.get(k, 0) + int(n)
     log('recheck: ' + ', '.join((f'{k} {v}' for k, v in tot.items())))
+    if at:
+        log('recheck by model: ' + ', '.join((f'{k} {n}' for k, n in sorted(at.items()))))
+    if tot['unstable']:
+        log(f"{tot['unstable']} stored unit(s) built twice with this code came out different: not reproducible there, so their move says nothing of the code (look at that model's build)")
     if tot['missed']:
         log(f"the reference boxes missed a change on {tot['missed']} stored unit(s) (" + ', '.join((f'{g} {n}' for g, n in sorted(groups.items()))) + '): no stamps written; look before a sweep builds on them')
         return False
-    tried = tot['picked'] - tot['nogrids'] - tot['moved'] - tot['left']
+    tried = tot['picked'] - tot['nogrids'] - tot['moved'] - tot['left'] - tot['unstable']
     if tried > 0 and tot['failed'] * 2 > tried:
         log(f"too few units rebuilt to tell ({tot['failed']} of {tried} failed): no stamps written")
         return False
@@ -280,7 +286,7 @@ def pick(lk, n: int=RECHECK_N, snap: dict | None=None) -> list[dict]:
     return out
 
 def recheck_one(lk, u: dict, gv_now: dict, steps, work: str, cs: str, timeout: float | None=None) -> tuple[str, list[str]]:
-    import shutil
+    import time as _time
     import common
     import fingerprint
     import labbuild
@@ -293,30 +299,45 @@ def recheck_one(lk, u: dict, gv_now: dict, steps, work: str, cs: str, timeout: f
     kept_groups = sorted((g for g in held if sgv.get(g) and sgv.get(g) == now.get(g)))
     if not kept_groups:
         return ('moved', [])
+    t0 = _time.monotonic()
+    arrays = _rebuild(lk, u, steps, work, cs, now, timeout)
+    if arrays is None:
+        return ('failed', [])
+
+    def group(x, g):
+        return {f"{g}/{k.rsplit('.', 1)[1]}": v for k, v in x.items() if k.startswith(f'g.{g}.')}
+    missed = [g for g in kept_groups if not fingerprint.group_close(group(stored, g), group(arrays, g))]
+    if not missed:
+        return ('same', [])
+    left = None if timeout is None else timeout - (_time.monotonic() - t0)
+    again = _rebuild(lk, u, steps, work, cs, now, left) if left is None or left > 0 else None
+    if again is None:
+        return ('missed', missed)
+    unstable = [g for g in missed if not fingerprint.group_close(group(arrays, g), group(again, g))]
+    stable = [g for g in missed if g not in unstable]
+    return ('missed', stable) if stable else ('unstable', unstable)
+
+def _rebuild(lk, u: dict, steps, work: str, cs: str, now: dict, timeout: float | None):
+    import shutil
+    import common
+    import labbuild
     wd = tempfile.mkdtemp(prefix='rc-', dir=work)
     try:
         kind = u['unit']['kind']
         items = [f for f in labbuild.load_items(lk, u.get('raw') or []) if (f.get('kind') == 'collector') == (kind == 'collector')]
         B = next((b for b in labbuild.dayb.boxes(items) if b['region'] == u['box']), None)
         if B is None:
-            return ('failed', [])
+            return None
         model_id = labbuild.model_id_of(u['unit'])
         limit = labbuild.dayb.BUILD_TIMEOUT if timeout is None else min(labbuild.dayb.BUILD_TIMEOUT, timeout)
         base = steps.build(common.day_of(u['unit']['daykey']), B, model_id, wd, limit)
         if not base:
-            return ('failed', [])
-        arrays = labbuild.unit_arrays(base, u['unit'], model_id, B['bbox'], now, cs)
+            return None
+        return labbuild.unit_arrays(base, u['unit'], model_id, B['bbox'], now, cs)
     except Exception:
-        return ('failed', [])
+        return None
     finally:
         shutil.rmtree(wd, ignore_errors=True)
-    missed = []
-    for g in kept_groups:
-        a = {f"{g}/{k.rsplit('.', 1)[1]}": v for k, v in stored.items() if k.startswith(f'g.{g}.')}
-        b = {f"{g}/{k.rsplit('.', 1)[1]}": v for k, v in arrays.items() if k.startswith(f'g.{g}.')}
-        if not fingerprint.group_close(a, b):
-            missed.append(g)
-    return ('missed' if missed else 'same', missed)
 
 def recheck(lk, gv_path: str, part: int, parts: int, out: str, n: int=RECHECK_N, steps=None, work: str | None=None, clock=time.monotonic, elapsed: float=0.0, cs: str | None=None) -> dict:
     import shutil
@@ -327,7 +348,7 @@ def recheck(lk, gv_path: str, part: int, parts: int, out: str, n: int=RECHECK_N,
     steps = steps or labbuild.Steps()
     t0 = clock() - max(0.0, elapsed)
     mine = pick(lk, n)[part::parts]
-    res = {'v': 1, 'part': part, 'picked': len(mine), 'same': 0, 'moved': 0, 'missed': 0, 'failed': 0, 'nogrids': 0, 'left': 0, 'groups': {}}
+    res = {'v': 1, 'part': part, 'picked': len(mine), 'same': 0, 'moved': 0, 'missed': 0, 'unstable': 0, 'failed': 0, 'nogrids': 0, 'left': 0, 'groups': {}, 'at': {}}
     own = work is None
     work = work or tempfile.mkdtemp(prefix='lab-rc-')
     os.makedirs(work, exist_ok=True)
@@ -343,12 +364,15 @@ def recheck(lk, gv_path: str, part: int, parts: int, out: str, n: int=RECHECK_N,
             res[st] += 1
             for g in gs:
                 res['groups'][g] = res['groups'].get(g, 0) + 1
+            if st in ('missed', 'unstable'):
+                k = f"{st} {u.get('area')}/{u.get('model')}"
+                res['at'][k] = res['at'].get(k, 0) + 1
     finally:
         if own:
             shutil.rmtree(work, ignore_errors=True)
     with open(out, 'w') as f:
         json.dump(res, f, sort_keys=True)
-    log(f'recheck part {part}: ' + ', '.join((f'{k} {res[k]}' for k in ('picked', 'same', 'moved', 'missed', 'failed', 'nogrids', 'left'))))
+    log(f'recheck part {part}: ' + ', '.join((f'{k} {res[k]}' for k in ('picked', 'same', 'moved', 'missed', 'unstable', 'failed', 'nogrids', 'left'))))
     return res
 
 def relay(lk, what: str='none', sweep: str | None=None, then: str='none', here: str | None=None, cs: str | None=None, standing: dict | None=None, now: float | None=None) -> tuple[tuple[str, int] | None, str]:
