@@ -17,6 +17,7 @@ UTC = timezone.utc
 SCHEMA = 'shadow-score/1'
 SHADOW_DAYS = 14
 NAMES = ('blend',)
+REGION_MODEL = {'conus': 'blend', 'sh': 'blendsh'}
 FIELDS = ('t2', 'td2', 'wind', 'cubase', 'cu')
 SHADOW = 'shadow/'
 MODELS_ROOT = 'derived/models/'
@@ -54,24 +55,28 @@ def bundle_of(lk, name: str, bid: str) -> dict:
         raise lakem.LakeMissing('shadow: no such bundle')
     b = json.loads(raw)
     oof = _get_any(lk, base + 'oof_ops.json')
-    rows = json.loads(oof).get('fields', {}) if oof else {}
-    return {'bundle': b, 'oof': rows}
+    o = json.loads(oof) if oof else {}
+    rows = o.get('fields', {})
+    by_region = {r: (x or {}).get('fields', {}) for r, x in (o.get('regions') or {}).items()}
+    return {'bundle': b, 'oof': rows, 'oof_regions': by_region}
 
-def _region(b: dict) -> dict:
+def _region(b: dict, region: str | None=None) -> dict:
     regs = b.get('regions') or {}
+    if region is not None:
+        return regs.get(region) or {}
     return regs.get('conus') or (next(iter(regs.values())) if regs else {})
 
-def _bins(b: dict) -> tuple[list, list]:
+def _bins(b: dict, region: str | None=None) -> tuple[list, list]:
     import blendtrain as BT
-    for fd in (_region(b).get('fields') or {}).values():
+    for fd in (_region(b, region).get('fields') or {}).values():
         bins = (fd.get('weights') or {}).get('bins') or {}
         if bins.get('lead') and bins.get('solar'):
             return (list(bins['lead']), list(bins['solar']))
     d = BT.bins()
     return (list(d['lead']), list(d['solar']))
 
-def base_of(b: dict) -> str:
-    return _region(b).get('base') or 'hrrr'
+def base_of(b: dict, region: str | None=None) -> str:
+    return _region(b, region).get('base') or 'hrrr'
 
 def _records(store, prefix: str, model: str, counts: dict) -> list:
     out, lists = ({}, {})
@@ -178,7 +183,7 @@ def _oof_arrays(oof: dict) -> dict:
     keys = ('day', 'area', 'lead_bin', 'sun', 'blend', 'base')
     return {k: np.asarray(oof.get(k) or [], np.float64 if k in ('blend', 'base') else np.int64) for k in keys}
 
-def score(name: str, bid: str, b: dict, oof: dict, rows: dict, lead_edges, solar_bins, now: datetime | None=None, seed: int | None=None) -> dict:
+def score(name: str, bid: str, b: dict, oof: dict, rows: dict, lead_edges, solar_bins, now: datetime | None=None, seed: int | None=None, reg: str | None=None) -> dict:
     import split
     seed = split.SEED if seed is None else seed
     days = sorted({int(d) for f in FIELDS for d in rows.get(f, {}).get('day', [])})
@@ -201,7 +206,7 @@ def score(name: str, bid: str, b: dict, oof: dict, rows: dict, lead_edges, solar
         mean = lambda a: float(np.nanmean(a)) if np.isfinite(a).any() else None
         fields[f] = {'rows_shadow': int(n_s), 'rows_oof': int(n_o), 'mae_blend': mean(new), 'mae_base': mean(base), 'diff': v['overall'].get('diff'), 'ci95': [lo, hi], 'power': (float(hi) - float(lo)) / 2 if lo is not None and hi is not None and np.isfinite(lo) and np.isfinite(hi) else None, 'pass': bool(v['ship']), 'verdict': _plain(v)}
     iso = lambda d: date.fromordinal(date(1970, 1, 1).toordinal() + d).isoformat()
-    return {'schema': SCHEMA, 'name': name, 'id': bid, 'days': len(days), 'first': iso(days[0]) if days else None, 'last': iso(days[-1]) if days else None, 'base': base_of(b), 'fields': fields, 'made_at': (now or datetime.now(UTC)).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    return {'schema': SCHEMA, 'name': name, 'id': bid, 'days': len(days), 'first': iso(days[0]) if days else None, 'last': iso(days[-1]) if days else None, 'base': base_of(b, reg), 'fields': fields, 'made_at': (now or datetime.now(UTC)).strftime('%Y-%m-%dT%H:%M:%SZ')}
 
 def _plain(x):
     if isinstance(x, dict):
@@ -250,18 +255,31 @@ def run(lk, ops, name: str='blend', bid: str | None=None, now: datetime | None=N
             counts['no_bundle'] = counts.get('no_bundle', 0) + 1
             continue
         b = got['bundle']
-        base = base_of(b)
-        lead_edges, solar_bins = _bins(b)
-        shadow = _records(ops, shadow_key(name, i), 'blend', counts)
-        if not shadow:
+        by_region, runs = ({}, 0)
+        for r in b.get('regions') or {}:
+            model = REGION_MODEL.get(r)
+            if model is None:
+                continue
+            lead_edges, solar_bins = _bins(b, r)
+            shadow = _records(ops, shadow_key(name, i), model, counts)
+            oof = got['oof'] if r == ('conus' if 'conus' in b['regions'] else sorted(b['regions'])[0]) else {}
+            oof = got.get('oof_regions', {}).get(r, oof)
+            if not shadow and (not oof):
+                continue
+            base_recs = _records(ops, '', base_of(b, r), counts) if shadow else []
+            rows = shadow_rows(shadow, base_recs, obs_by_day, lead_edges, solar_bins) if shadow else {}
+            by_region[r] = score(name, i, b, oof, rows, lead_edges, solar_bins, now, reg=r)
+            runs += len(shadow)
+        if not runs:
             counts['no_shadow_runs'] = counts.get('no_shadow_runs', 0) + 1
             continue
-        base_recs = _records(ops, '', base, counts)
-        rows = shadow_rows(shadow, base_recs, obs_by_day, lead_edges, solar_bins)
-        sc = score(name, i, b, got['oof'], rows, lead_edges, solar_bins, now)
+        main_r = 'conus' if 'conus' in by_region else sorted(by_region)[0]
+        sc = dict(by_region[main_r])
+        sc['region'] = main_r
+        sc['regions'] = {r: {k: v[k] for k in ('days', 'first', 'last', 'base', 'fields')} for r, v in by_region.items()}
         written.append(write_score(lk, sc, now))
         counts['scored'] = counts.get('scored', 0) + 1
-        counts['shadow_runs'] = counts.get('shadow_runs', 0) + len(shadow)
+        counts['shadow_runs'] = counts.get('shadow_runs', 0) + runs
     return written
 
 def main(argv=None) -> int:

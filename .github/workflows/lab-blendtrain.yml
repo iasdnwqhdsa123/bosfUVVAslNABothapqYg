@@ -1,0 +1,44 @@
+name: Lab blend train
+on:
+  push:
+    branches: [main]
+    paths: ["calib/lab-train.request"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lab-blendtrain
+  cancel-in-progress: false
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN || '1' }}
+      LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
+      LAKE_S3_KEY: ${{ secrets.LAKE_S3_KEY }}
+      LAKE_S3_SECRET: ${{ secrets.LAKE_S3_SECRET }}
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+    steps:
+      - name: Set up?
+        id: on
+        run: |
+          if [ -n "$LAKE_S3_ENDPOINT" ] && [ -n "$LAKE_S3_BUCKET" ] && [ -n "$LAKE_S3_KEY" ] && [ -n "$LAKE_S3_SECRET" ] && [ -n "$CALIB_DATA_KEY" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "lab blend train: the lake's secrets (LAKE_S3_*, CALIB_DATA_KEY) are not set: nothing done"; fi
+      - uses: actions/checkout@v7
+        if: steps.on.outputs.go == 'true'
+      - uses: actions/setup-python@v7
+        if: steps.on.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            calib/requirements.txt
+            calib/requirements-pairs.txt
+            pipeline/requirements.txt
+      - name: Python packages
+        if: steps.on.outputs.go == 'true'
+        run: pip install -q -r calib/requirements.txt -r calib/requirements-pairs.txt -r pipeline/requirements.txt
+      - name: Train
+        if: steps.on.outputs.go == 'true'
+        run: python3 calib/blendtrain.py run

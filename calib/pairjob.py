@@ -235,6 +235,11 @@ def _truth(points: list) -> list:
     import sattruth
     return sattruth.truth(points)
 
+def hindcast_span(today: date, back: int=BACK) -> str:
+    import labingest
+    first = labingest.hindcast_span(today).split(':')[0]
+    return f'{first}:{(today - timedelta(days=back + 1)).isoformat()}'
+
 def days_due(today: date, back: int=BACK, span: str | None=None) -> list[str]:
     if span:
         a, _, b = span.partition(':')
@@ -270,7 +275,8 @@ def main(argv=None) -> int:
     a = sub.add_parser('run')
     a.add_argument('--local', help='a folder as the lake (else the LAKE_S3_* secrets)')
     a.add_argument('--ops-local', help='a folder as OPS (else OPS_S3_ENDPOINT, OPS_S3_BUCKET, OPS_RO_*)')
-    a.add_argument('--days', help='YYYY-MM-DD[:YYYY-MM-DD]: these days instead of the last BACK')
+    a.add_argument('--days', help='YYYY-MM-DD[:YYYY-MM-DD]: these days instead of the last BACK; "hindcast": the station hindcast\'s (labingest.hindcast_span)')
+    a.add_argument('--status', help='a file to write {"more": true|false} to: days left for time (a backfill\'s relay)')
     a.add_argument('--back', type=int, default=BACK)
     a.add_argument('--kinds', default=','.join(KINDS))
     a.add_argument('--minutes', type=float, default=MINUTES)
@@ -290,12 +296,18 @@ def main(argv=None) -> int:
         print("pairjob: no OPS read secrets: the station hindcast's runs alone", flush=True)
     today = date.fromisoformat(x.day) if x.day else datetime.now(UTC).date()
     import labbuild
+    span = x.days
+    if span == 'hindcast':
+        span = hindcast_span(today, x.back)
     try:
-        out = run(lk, ops, days_due(today, x.back, x.days), labbuild.stations(), today, kinds, x.minutes, sat_all=x.sat_all)
+        out = run(lk, ops, days_due(today, x.back, span), labbuild.stations(), today, kinds, x.minutes, sat_all=x.sat_all)
     except lakem.LakeError:
         print('pairjob: the lake failed', flush=True)
         print(lk.summary(), flush=True)
         return 1
+    if x.status:
+        with open(x.status, 'w', encoding='utf-8') as f:
+            json.dump({'more': bool(out['counts'].get('days_left'))}, f)
     print('pairjob: ' + ', '.join((f'{k} {v}' for k, v in sorted(out['counts'].items()))), flush=True)
     print(out['summary'], flush=True)
     print(lk.summary(), flush=True)

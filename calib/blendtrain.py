@@ -20,6 +20,7 @@ import blend
 UTC = timezone.utc
 REGION = 'conus'
 BASE = 'hrrr'
+REGIONS = {'conus': {'base': 'hrrr', 'members': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'box': None}, 'sh': {'base': 'ecmwf', 'members': ('ecmwf', 'gfs', 'icon'), 'box': (112.0, -49.0, 179.75, -18.5)}}
 MEMBERS = ('hrrr', 'gfs', 'ecmwf', 'icon')
 MAX_AGE_H = {'gfs': 12, 'ecmwf': 22, 'icon': 12}
 GRID_STEP = 0.125
@@ -497,7 +498,8 @@ def serve_rows(F, f, members, wide: bool=False) -> np.ndarray:
         for m in members:
             anym |= F[f'present_{m}'] & np.isfinite(_f(F[f'cubase_{m}']))
         return np.flatnonzero(o & anym)
-    b = BASE if BASE in members else members[0]
+    base = F.get('_base', BASE)
+    b = base if base in members else members[0]
     return np.flatnonzero(o & F[f'present_{b}'] & np.isfinite(_f(F[f'{f}_{b}'])))
 
 def _present(F, f, m, rows):
@@ -559,7 +561,7 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
         pres = {m: _present(F, f, m, te) for m in members}
         W = row_weights(wt, members, pres, cells[te])
         Xte = {m: np.where(pres[m], xo[m][te], np.nan) for m in members}
-        base_x = xo[BASE][te] if BASE in members else Xte[members[0]]
+        base_x = xo[F.get('_base', BASE)][te] if F.get('_base', BASE) in members else Xte[members[0]]
         p_tab = blended(W, Xte, members, base_x)
         if f == 'cu':
             p_tab = np.clip(p_tab, 0, 1)
@@ -591,7 +593,7 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
     pres = {m: _present(F, f, m, rows_w) for m in members}
     W = row_weights(wt, members, pres, cells[rows_w])
     Xr = {m: np.where(pres[m], xo[m][rows_w], np.nan) for m in members}
-    pb = blended(W, Xr, members, xo[BASE][rows_w] if BASE in members else Xr[members[0]])
+    pb = blended(W, Xr, members, xo[F.get('_base', BASE)][rows_w] if F.get('_base', BASE) in members else Xr[members[0]])
     rows_s = rows_w
     spread = None
     ok = np.isfinite(pb)
@@ -654,7 +656,8 @@ def _verdict(F, f, parts, gate_cmp, cells, b, members, wt, seed):
     mean = lambda a: float(np.nanmean(a)) if np.isfinite(a).any() else None
     worse = [list(map(str, c)) for c in v['conditions']['cells']['worse']]
     cv = {'loss': 'brier' if f == 'cu' else 'mae', 'rows': int(len(rows)), 'mae_blend': mean(L['blend']), 'mae_best_raw': mean(L['base']), 'mae_best_debiased': mean(L['deb']), 'mae_equal_debiased': mean(L['eq']), 'ci95': [v['overall'].get('lo'), v['overall'].get('hi')], 'diff': v['overall'].get('diff'), 'bins_failed': worse, 'pass': bool(v['ship']), 'base_choice': [p['choice'] for p in parts], 'n_min_folds': [p['n_min'] for p in parts], 'verdict': v}
-    ops = _f(F[f'src_{BASE}'])[rows] == SRC_CODE['ops'] if f'src_{BASE}' in F else np.zeros(len(rows), bool)
+    bm = F.get('_base', BASE)
+    ops = _f(F[f'src_{bm}'])[rows] == SRC_CODE['ops'] if f'src_{bm}' in F else np.zeros(len(rows), bool)
     if ops.any():
         vo = split.ship_verdict(L['blend'][ops], L['base'][ops], blocks[ops], {'region': region_cells[ops], 'time of day': tod[ops]}, seed=seed)
         cv['ops'] = {'rows': int(ops.sum()), 'mae_blend': mean(L['blend'][ops]), 'mae_best_raw': mean(L['base'][ops]), 'mae_best_debiased': mean(L['deb'][ops]), 'mae_equal_debiased': mean(L['eq'][ops]), 'pass': bool(vo['ship']), 'verdict': vo}
@@ -696,9 +699,10 @@ def code_stamp() -> str:
             h.update(fh.read())
     return h.hexdigest()[:12]
 
-def train_bundle(F, fields=FIELDS, seed: int=SEED, params=None, n_min: int=N_MIN, log: Log | None=None, k_outer: int=K_OUTER, k_inner: int=K_INNER, pv: str='p1') -> tuple:
+def train_region(F, fields=FIELDS, seed: int=SEED, params=None, n_min: int=N_MIN, log: Log | None=None, k_outer: int=K_OUTER, k_inner: int=K_INNER) -> tuple:
     members = list(F['_members'])
-    if BASE not in members:
+    base = F.get('_base', BASE)
+    if base not in members:
         raise ValueError('blend train: the base has no rows')
     log = log if log is not None else Log()
     fields_out, cv = ({}, {})
@@ -706,19 +710,35 @@ def train_bundle(F, fields=FIELDS, seed: int=SEED, params=None, n_min: int=N_MIN
         entry, c = train_field(F, f, members, seed, params, n_min, log, k_outer, k_inner)
         fields_out[f] = entry
         cv[f] = c
-    day = int(np.max(F['day'])) if n_of(F) else 0
-    ymd = datetime.fromtimestamp(day * 86400, UTC).strftime('%Y%m%d')
     groups = {g: [x for x in fs if x in fields_out] for g, fs in GROUPS.items()}
-    b = {'schema': blend.SCHEMA, 'id': '', 'code': code_stamp(), 'pairs': pv, 'seed': int(seed), 'ships': any((e['pass'] for e in fields_out.values())), 'regions': {REGION: {'base': BASE, 'members': members, 'grid_step': GRID_STEP, 'max_age_h': {m: a for m, a in MAX_AGE_H.items() if m in members}, 'groups': {g: fs for g, fs in groups.items() if fs}, 'fields': fields_out}}, 'cv': {f: {k: c.get(k) for k in ('loss', 'rows', 'mae_blend', 'mae_best_raw', 'mae_best_debiased', 'mae_equal_debiased', 'ci95', 'bins_failed', 'pass')} for f, c in cv.items()}}
+    entry = {'base': base, 'members': members, 'grid_step': GRID_STEP, 'max_age_h': {m: a for m, a in MAX_AGE_H.items() if m in members}, 'groups': {g: fs for g, fs in groups.items() if fs}, 'fields': fields_out}
+    return (entry, cv)
+
+def _cv_summary(cv: dict) -> dict:
+    return {f: {k: c.get(k) for k in ('loss', 'rows', 'mae_blend', 'mae_best_raw', 'mae_best_debiased', 'mae_equal_debiased', 'ci95', 'bins_failed', 'pass')} for f, c in cv.items()}
+
+def bundle_of(parts: dict, seed: int=SEED, pv: str='p1') -> tuple:
+    if not parts:
+        raise ValueError('blend train: no region trained')
+    main_r = 'conus' if 'conus' in parts else sorted(parts)[0]
+    day = max((int(np.max(F['day'])) for F, _, _ in parts.values() if n_of(F)))
+    ymd = datetime.fromtimestamp(day * 86400, UTC).strftime('%Y%m%d')
+    b = {'schema': blend.SCHEMA, 'id': '', 'code': code_stamp(), 'pairs': pv, 'seed': int(seed), 'ships': any((e['pass'] for _, entry, _ in parts.values() for e in entry['fields'].values())), 'regions': {r: entry for r, (_, entry, _) in parts.items()}, 'cv': _cv_summary(parts[main_r][2]), 'cv_regions': {r: _cv_summary(cv) for r, (_, _, cv) in parts.items()}}
     b = _clean(b)
     body = json.dumps(b, sort_keys=True, separators=(',', ':')).encode()
     b['id'] = f'bl1-{ymd}-{hashlib.sha256(body).hexdigest()[:8]}'
     data = json.dumps(b, sort_keys=True, separators=(',', ':')).encode()
-    return (b, data, hashlib.sha256(data).hexdigest(), cv)
+    return (b, data, hashlib.sha256(data).hexdigest(), {r: cv for r, (_, _, cv) in parts.items()})
 
-def report_text(bundle: dict, cv: dict, sha: str) -> str:
-    r = bundle['regions'][REGION]
-    lines = [f"blend bundle {bundle['id']} (sha256 {sha[:12]}): ships {('yes' if bundle['ships'] else 'no')}; members {', '.join(r['members'])}; base {r['base']}", '']
+def train_bundle(F, fields=FIELDS, seed: int=SEED, params=None, n_min: int=N_MIN, log: Log | None=None, k_outer: int=K_OUTER, k_inner: int=K_INNER, pv: str='p1') -> tuple:
+    entry, cv = train_region(F, fields, seed, params, n_min, log, k_outer, k_inner)
+    b, data, sha, _ = bundle_of({F.get('_region', REGION): (F, entry, cv)}, seed, pv)
+    return (b, data, sha, cv)
+
+def report_text(bundle: dict, cv: dict, sha: str, region: str | None=None) -> str:
+    region = region or (REGION if REGION in bundle['regions'] else sorted(bundle['regions'])[0])
+    r = bundle['regions'][region]
+    lines = [f"blend bundle {bundle['id']} (sha256 {sha[:12]}), region {region}: ships {('yes' if bundle['ships'] else 'no')}; members {', '.join(r['members'])}; base {r['base']}", '']
     for f, c in cv.items():
         e = r['fields'][f]
         v = c['verdict']['conditions']
@@ -742,13 +762,19 @@ def report_text(bundle: dict, cv: dict, sha: str) -> str:
         lines.append('')
     return '\n'.join(lines)
 
-def cv_json(bundle, cv, sha) -> bytes:
-    fields = {f: {k: v for k, v in c.items() if k != 'oof_ops'} for f, c in cv.items()}
-    return json.dumps(_clean({'id': bundle['id'], 'sha256': sha, 'ships': bundle['ships'], 'fields': fields}), sort_keys=True, indent=1).encode()
+def cv_json(bundle, cv, sha, by_region: dict | None=None) -> bytes:
+    strip = lambda c_: {f: {k: v for k, v in c.items() if k != 'oof_ops'} for f, c in c_.items()}
+    out = {'id': bundle['id'], 'sha256': sha, 'ships': bundle['ships'], 'fields': strip(cv)}
+    if by_region:
+        out['regions'] = {r: {'fields': strip(c)} for r, c in by_region.items()}
+    return json.dumps(_clean(out), sort_keys=True, indent=1).encode()
 
-def oof_json(bundle, cv) -> bytes:
-    rows = {f: {k: np.asarray(a).tolist() for k, a in c['oof_ops'].items()} for f, c in cv.items() if 'oof_ops' in c}
-    return json.dumps(_clean({'id': bundle['id'], 'fields': rows}), sort_keys=True, separators=(',', ':')).encode()
+def oof_json(bundle, cv, by_region: dict | None=None) -> bytes:
+    rows = lambda c_: {f: {k: np.asarray(a).tolist() for k, a in c['oof_ops'].items()} for f, c in c_.items() if 'oof_ops' in c}
+    out = {'id': bundle['id'], 'fields': rows(cv)}
+    if by_region:
+        out['regions'] = {r: {'fields': rows(c)} for r, c in by_region.items()}
+    return json.dumps(_clean(out), sort_keys=True, separators=(',', ':')).encode()
 
 def static_points(lk, members=MEMBERS, pv: str='p1') -> dict:
     import pairs as P
@@ -762,13 +788,17 @@ SNAP_COLS = ('obs_id', 't_valid', 'slot', 'lat', 'lon', 'lead_h', 'solar_h', 'su
 PAIR_COLS = ('obs_id', 't_valid', 'model', 'run', 'build', 'src', 'replay', 'review')
 OBS_COLS = ('obs_id', 't_valid', 'elev', 'o_t2', 'o_td2', 'o_ws', 'o_cu', 'o_cubase', 'review')
 
-def read_day(lk, day: str, members=MEMBERS, pv: str='p1', cap: int | None=None, seed: int=SEED) -> tuple:
+def read_day(lk, day: str, members=MEMBERS, pv: str='p1', cap: int | None=None, seed: int=SEED, base: str=BASE, box=None) -> tuple:
     import pairs as P
     cols = list(SNAP_COLS) + [f'{k}_{m}' for m in members for k in ('run', 'build', 'src', 'lead', 'age', 'regime')]
     snap = P.read_kind(lk, 'snap', 'snap', [day], pv, purpose='train', columns=cols)
     if not P.n_rows(snap):
         return None
-    keep = np.asarray(snap[f'run_{BASE}'], dtype=object).astype(str) != ''
+    keep = np.asarray(snap[f'run_{base}'], dtype=object).astype(str) != ''
+    if box is not None:
+        w, s_, e, n = box
+        lat, lon = (_f(snap['lat']), _f(snap['lon']))
+        keep &= (lat >= s_) & (lat <= n) & (lon >= w) & (lon <= e)
     snap = {k: np.asarray(v)[keep] for k, v in snap.items()}
     if cap is not None:
         snap = sample(snap, cap, seed)
@@ -784,7 +814,7 @@ def read_day(lk, day: str, members=MEMBERS, pv: str='p1', cap: int | None=None, 
     obs = P.read_kind(lk, 'obs', 'metar', [day], pv, purpose='train', columns=list(OBS_COLS))
     return (snap, pairs, obs)
 
-def load_frame(lk, days=None, members=MEMBERS, pv: str='p1', max_rows: int=MAX_ROWS, seed: int=SEED) -> dict | None:
+def load_frame(lk, days=None, members=MEMBERS, pv: str='p1', max_rows: int=MAX_ROWS, seed: int=SEED, base: str=BASE, box=None) -> dict | None:
     import pairs as P
     sdays = sorted({d for d, *_ in P.markers(lk, 'snap', 'snap', pv)})
     if days is not None:
@@ -795,10 +825,10 @@ def load_frame(lk, days=None, members=MEMBERS, pv: str='p1', max_rows: int=MAX_R
     cap = max(1, max_rows // len(sdays))
     frames = []
     for d in sdays:
-        got = read_day(lk, d, members, pv, cap, seed)
+        got = read_day(lk, d, members, pv, cap, seed, base, box)
         if got is None:
             continue
-        F = assemble(got[0], got[1], got[2], static, members)
+        F = assemble(got[0], got[1], got[2], static, members, base)
         if n_of(F):
             frames.append(F)
     return concat_frames(frames, members)
@@ -842,15 +872,28 @@ def main(argv=None) -> int:
     days = None
     if a.d0 or a.d1:
         days = [d for d, *_ in P.markers(lk, 'snap', 'snap') if (not a.d0 or d >= a.d0) and (not a.d1 or d <= a.d1)]
-    F = load_frame(lk, days, seed=a.seed)
-    if F is None or not n_of(F):
-        print('blend train: no snapshot rows the base serves: nothing trained', flush=True)
+    log, parts = (Log(), {})
+    for r, cfg in REGIONS.items():
+        F = load_frame(lk, days, members=cfg['members'], seed=a.seed, base=cfg['base'], box=cfg['box'])
+        if F is None or not n_of(F):
+            print(f"blend train: {r}: no snapshot rows its base ({cfg['base']}) serves: left out", flush=True)
+            continue
+        F['_region'] = r
+        try:
+            entry, cv = train_region(F, seed=a.seed, log=log)
+        except ValueError as e:
+            print(f'blend train: {r}: {e}: left out', flush=True)
+            continue
+        parts[r] = (F, entry, cv)
+        print(f"blend train: {r}: {n_of(F)} rows; passing {', '.join((f for f, e in entry['fields'].items() if e['pass'])) or 'none'}", flush=True)
+    if not parts:
+        print('blend train: no region has rows: nothing trained', flush=True)
         return 0
-    log = Log()
-    bundle, data, sha, cv = train_bundle(F, seed=a.seed, log=log)
-    text = report_text(bundle, cv, sha)
-    cvb = cv_json(bundle, cv, sha)
-    oof = oof_json(bundle, cv)
+    bundle, data, sha, cvs = bundle_of(parts, a.seed)
+    main_r = 'conus' if 'conus' in cvs else sorted(cvs)[0]
+    text = '\n'.join((report_text(bundle, cvs[r], sha, r) for r in sorted(cvs, key=lambda r: r != main_r)))
+    cvb = cv_json(bundle, cvs[main_r], sha, cvs)
+    oof = oof_json(bundle, cvs[main_r], cvs)
     st = write_bundle(lk, bundle, data, cvb, text, oof)
     if a.out:
         os.makedirs(a.out, exist_ok=True)
@@ -858,7 +901,7 @@ def main(argv=None) -> int:
         for name, blob in blobs.items():
             with open(os.path.join(a.out, name), 'wb') as fh:
                 fh.write(blob)
-    print(f"blend train: {n_of(F)} rows, {len(log.fits)} fits; bundle {bundle['id']} sha256 {sha}; ships {('yes' if bundle['ships'] else 'no')}; passing {', '.join((f for f, e in bundle['regions'][REGION]['fields'].items() if e['pass'])) or 'none'}; written {', '.join(st)}", flush=True)
+    print(f"blend train: {sum((n_of(F) for F, _, _ in parts.values()))} rows, {len(log.fits)} fits; bundle {bundle['id']} sha256 {sha}; regions {', '.join(parts)}; ships {('yes' if bundle['ships'] else 'no')}; written {', '.join(st)}", flush=True)
     print(lk.summary(), flush=True)
     return 0
 if __name__ == '__main__':
