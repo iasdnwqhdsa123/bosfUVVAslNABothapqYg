@@ -25,8 +25,10 @@ NIGHT_ELEV = build.SUN_GATE[0]
 CU_EPS = 0.02
 CU_AT = 0.5
 CB_MIN_AGL = 50.0
+LAPSE = {'t2': 0.0065, 'td2': 0.0018}
+SCALE_FIELDS = ('t2', 'td2', 'wind')
 RELIEF_KM_DEG = 0.05
-FEATURES = {'x', 'lead_h', 'run_age_h', 'solar_h', 'sun_elev', 'lat', 'relief5km', 'dz_terrain', 'regime', 'n_models', 'zi', 'depth', 'wstar', 'cuclass', 'ws', 'wd', 'src', 'replay'} | {f'spread_{f}' for f in FIELDS}
+FEATURES = {'x', 'lead_h', 'run_age_h', 'solar_h', 'sun_elev', 'lat', 'relief5km', 'tpi', 'dz_terrain', 'regime', 'n_models', 'zi', 'depth', 'wstar', 'cuclass', 'ws', 'wd', 'src', 'replay'} | {f'spread_{f}' for f in FIELDS}
 WENC = {'bw': (0, 1, None), 'blead': (0, 254, None)}
 SPREAD_ENC = {'t2': (0, 20, None), 'td2': (0, 20, None), 'wind': (0, 20, None), 'cu': (0, 1, None), 'cubase': (0, 2000, None)}
 
@@ -88,7 +90,11 @@ def _trees(t, what):
     return t
 
 def n_cells(bins: dict) -> int:
-    return (len(bins['lead']) - 1) * len(bins['solar']) * len(bins['regime'])
+    return (len(bins['lead']) - 1) * len(bins['solar']) * len(bins['regime']) * n_relief(bins)
+
+def n_relief(bins: dict) -> int:
+    r = bins.get('relief')
+    return len(r) - 1 if r else 1
 
 def _clamp_ok(c, kind, what):
     if isinstance(c, bool) or c is None:
@@ -146,6 +152,10 @@ def _validate(b: dict) -> dict:
                 raise BundleError(f'{w}: not a field the blend knows')
             if f.get('kind') not in KINDS:
                 raise BundleError(f"{w}: kind {f.get('kind')!r}")
+            if f.get('move') not in (None, 'lapse') or (f.get('move') == 'lapse' and fn not in LAPSE):
+                raise BundleError(f"{w}: move {f.get('move')!r}")
+            if f.get('scale') not in (None, True, False) or (f.get('scale') and fn not in SCALE_FIELDS):
+                raise BundleError(f"{w}: scale {f.get('scale')!r}")
             if f.get('gate') is not None:
                 raise BundleError(f'{w}: a gate (version 1 weighs by its table only)')
             if not isinstance(f.get('pass'), bool):
@@ -170,6 +180,8 @@ def _validate(b: dict) -> dict:
                 raise BundleError(f'{w}: solar bands must touch')
             if sorted(bins.get('regime') or []) != sorted(REGIMES):
                 raise BundleError(f'{w}: regime bins')
+            if bins.get('relief') is not None:
+                _edges(bins['relief'], f'{w}.relief')
             nc = n_cells(bins)
             table = wt.get('table') or {}
             for s in subsets(mem):
@@ -225,20 +237,68 @@ def grid2d(region):
 
 def regrid_codes(codes: dict, rg) -> dict:
     out = {}
+    near = rg.nearest if isinstance(rg, Bilinear) else rg
     for k, a in codes.items():
-        v = rg(np.asarray(a, np.float32))
-        out[k] = np.where(np.isfinite(v), v, 255).astype(np.uint8)
+        a = np.asarray(a, np.float32)
+        v = near(a)
+        if isinstance(rg, Bilinear) and k in SMOOTH_CODES:
+            b = rg(a)
+            v = np.where(np.isfinite(v) & (v != 255) & np.isfinite(b), b, v)
+        out[k] = np.where(np.isfinite(v), np.round(v), 255).astype(np.uint8)
     return out
+SMOOTH_CODES = ('t2', 'td2', 'u_sfc', 'v_sfc', 'cubase', 'cucover', 'wstar', 'zi', 'depth', 'elevation')
 
-def regridder(lat, lon, region):
+class Bilinear:
+
+    def __init__(self, lat, lon, region):
+        lat, lon = (np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+        self.near = build.Regridder(np.repeat(lat[:, None], len(lon), 1), np.repeat(lon[None, :], len(lat), 0), region[:5])
+        tlon, tlat = build.target_grid(region[:5])
+        gy, gx = np.meshgrid(tlat, tlon, indexing='ij')
+        self.shape = gy.shape
+        fy = (gy - lat[0]) / (lat[1] - lat[0]) if len(lat) > 1 else np.zeros(gy.shape)
+        fx = (gx - lon[0]) / (lon[1] - lon[0]) if len(lon) > 1 else np.zeros(gx.shape)
+        ny, nx = (len(lat), len(lon))
+        self.off = (fy < -0.5) | (fy > ny - 0.5) | (fx < -0.5) | (fx > nx - 0.5)
+        y0 = np.clip(np.floor(fy), 0, max(ny - 2, 0)).astype(np.int64)
+        x0 = np.clip(np.floor(fx), 0, max(nx - 2, 0)).astype(np.int64)
+        ty, tx = (np.clip(fy - y0, 0, 1), np.clip(fx - x0, 0, 1))
+        y1, x1 = (np.minimum(y0 + 1, ny - 1), np.minimum(x0 + 1, nx - 1))
+        self.corners = [(y0, x0, (1 - ty) * (1 - tx)), (y0, x1, (1 - ty) * tx), (y1, x0, ty * (1 - tx)), (y1, x1, ty * tx)]
+
+    def nearest(self, field):
+        return self.near(field)
+
+    def __call__(self, field):
+        f = np.asarray(field, np.float32)
+        f = np.where(f == 255, np.nan, f)
+        num, den = (np.zeros(self.shape), np.zeros(self.shape))
+        for y, x, w in self.corners:
+            v = f[y, x]
+            ok = np.isfinite(v)
+            num += np.where(ok, w * v, 0.0)
+            den += np.where(ok, w, 0.0)
+        out = np.where(den > 1e-09, num / np.maximum(den, 1e-09), np.nan)
+        return np.where(self.off, np.nan, out).astype(np.float32)
+
+def regridder(lat, lon, region, bilinear: bool=False):
     lat, lon = (np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    if bilinear and lat.ndim == 1 and (len(lat) > 1) and (len(lon) > 1):
+        return Bilinear(lat, lon, region)
     if lat.ndim == 1:
         lat, lon = (np.repeat(lat[:, None], len(lon), 1), np.repeat(lon[None, :], len(lat), 0))
     return build.Regridder(lat, lon, region[:5])
 
 def member(model: str, run: datetime, codes: dict, lat, lon, base_region, wregion, aircorr_on: bool) -> dict:
     keep = {k: v for k, v in codes.items() if k in INPUTS or k == 'cusky'}
-    return {'model': model, 'run': run, 'aircorr': bool(aircorr_on), 'codes': regrid_codes(keep, regridder(lat, lon, base_region)), 'wcodes': regrid_codes(keep, regridder(lat, lon, wregion))}
+    return {'model': model, 'run': run, 'aircorr': bool(aircorr_on), 'codes': regrid_codes(keep, regridder(lat, lon, base_region, bilinear=True)), 'wcodes': regrid_codes(keep, regridder(lat, lon, wregion))}
+
+def height_moved(f: str, x, z_from, z_to):
+    if f not in LAPSE:
+        return x
+    x = np.asarray(x, np.float64)
+    dz = np.asarray(z_to, np.float64) - np.asarray(z_from, np.float64)
+    return np.where(np.isfinite(dz), x - LAPSE[f] * dz, x)
 
 def _dec(codes, k):
     if k not in codes:
@@ -332,6 +392,11 @@ def cell_index(cond: dict, bins: dict) -> np.ndarray:
     order = [bins['regime'].index(r) for r in REGIMES]
     ri = np.where(cond['regime'] >= 0, np.take(order, np.maximum(cond['regime'], 0)), 0)
     c = (li * len(bins['solar']) + si) * len(bins['regime']) + ri
+    nr = n_relief(bins)
+    if nr > 1:
+        rel = np.asarray(cond.get('relief5km', np.zeros(np.shape(ri))), np.float64)
+        rb = np.where(np.isfinite(rel), _bin(np.nan_to_num(rel), bins['relief']), 0)
+        c = c * nr + rb
     return np.where(cond['regime'] >= 0, c, -1)
 
 def _node_weights(bits, cells, wt):
@@ -428,6 +493,31 @@ def debias(kind: str, x: np.ndarray, e: np.ndarray, clamp=None) -> np.ndarray:
 def relief(elev: np.ndarray, step: float) -> np.ndarray:
     return aircorr.relief_grid(elev, step, RELIEF_KM_DEG)
 
+def at_nodes(a: np.ndarray, breg, lat, lon) -> np.ndarray:
+    w, s_, e, n, step = breg[:5]
+    a = np.asarray(a, np.float64)
+    y = np.round((n - np.asarray(lat, np.float64)) / step).astype(np.int64)
+    x = np.round((np.asarray(lon, np.float64) - w) / step).astype(np.int64)
+    ok = (y >= 0) & (y < a.shape[0]) & (x >= 0) & (x < a.shape[1])
+    out = np.full(np.shape(lat), np.nan)
+    out[ok] = a[y[ok], x[ok]]
+    return out
+
+def ground_mean(elev: np.ndarray, step: float) -> np.ndarray:
+    from scipy.ndimage import uniform_filter
+    e = np.asarray(elev, np.float64)
+    r = int(round(RELIEF_KM_DEG / step))
+    if r <= 0:
+        return e.copy()
+    known = np.isfinite(e)
+    size = 2 * r + 1
+    s = uniform_filter(np.where(known, e, 0.0), size=size, mode='constant')
+    n = uniform_filter(known.astype(np.float64), size=size, mode='constant')
+    return np.where(n > 1e-09, s / np.maximum(n, 1e-09), np.nan)
+
+def tpi(elev: np.ndarray, step: float) -> np.ndarray:
+    return np.asarray(elev, np.float64) - ground_mean(elev, step)
+
 def feature_arrays(names, x, codes, ctx: dict, cells) -> np.ndarray:
     rows = []
     for k in names:
@@ -492,9 +582,10 @@ def blend(base_hour: dict, members: dict, bundle: dict, region: str='conus', nat
     elev = _dec(base_hour['codes'], 'elevation')
     dem = np.asarray(base_hour['dem'], np.float64) if base_hour.get('dem') is not None else elev if elev is not None else np.zeros(lat.shape)
     ground = elev if elev is not None else dem
-    ctx = {'lat': lat, 'solar_h': up.nearest(cond['solar_h']).reshape(lat.shape), 'sun_elev': build.sun_elevation(valid.replace(tzinfo=None), lat, lon), 'relief5km': relief(dem, breg[4]), 'dem': dem, 'regime': _nan_neg(up.nearest(cond['regime']).reshape(lat.shape)), 'n_models': up.nearest(cond['n_models']).reshape(lat.shape)}
+    ctx = {'lat': lat, 'solar_h': up.nearest(cond['solar_h']).reshape(lat.shape), 'sun_elev': build.sun_elevation(valid.replace(tzinfo=None), lat, lon), 'relief5km': relief(dem, breg[4]), 'tpi': tpi(dem, breg[4]), 'dem': dem, 'regime': _nan_neg(up.nearest(cond['regime']).reshape(lat.shape)), 'n_models': up.nearest(cond['n_models']).reshape(lat.shape)}
     for f in FIELDS:
         ctx[f'spread_{f}'] = up.nearest(cond[f'spread_{f}']).reshape(lat.shape)
+    cond['relief5km'] = at_nodes(ctx['relief5km'], breg, cond['lat'], cond['lon'])
     inside = base_hour['codes']['wstar'] != 255 if 'wstar' in base_hour['codes'] else np.ones(lat.shape, bool)
     from_base, vals = ({}, {})
     order = [f for f in ('t2', 'td2', 'wind', 'cu', 'cubase') if f in r['fields']]
@@ -502,6 +593,9 @@ def blend(base_hour: dict, members: dict, bundle: dict, region: str='conus', nat
         fdef = r['fields'][f]
         if not fdef['pass']:
             from_base[f] = 'failed its test'
+            continue
+        if fdef.get('off'):
+            from_base[f] = 'its source code moved since its training (the guard)'
             continue
         if f == 'cubase' and 'cu' not in vals:
             from_base[f] = 'no blended cumulus presence'
@@ -540,12 +634,15 @@ def blend(base_hour: dict, members: dict, bundle: dict, region: str='conus', nat
 def _field(f, fdef, allm, avail, base, valid, issued, ctx, cond, bundle, region, up, ground, native):
     mem = bundle['regions'][region]['members']
     shape = ground.shape
-    xs, present, uv = ({}, {}, {})
+    xs, present, uv, raw = ({}, {}, {}, {})
     for m in avail:
         codes = allm[m]['codes']
         x = _values(codes, f)
         if x is None:
             continue
+        raw[m] = (x, _dec(codes, 'u_sfc'), _dec(codes, 'v_sfc')) if f == 'wind' else x
+        if fdef.get('move') == 'lapse':
+            x = height_moved(f, x, _dec(codes, 'elevation'), ctx['dem'])
         c = {**ctx, 'lead_h': _hours(valid, allm[m]['run']), 'run_age_h': _hours(issued, allm[m]['run'])}
         xt = debiased(f, fdef, m, x, codes, c, native)
         if f == 'cubase':
@@ -566,7 +663,46 @@ def _field(f, fdef, allm, avail, base, valid, issued, ctx, cond, bundle, region,
             num += W[i] * np.nan_to_num(xs[m])
     some = W.sum(0) > 0
     out = np.where(some, num, xs[base])
+    if fdef.get('scale') and f in SCALE_FIELDS:
+        out = scale_separated(out, W, raw, base, mem, ground.shape, _step_of(ctx))
     return (out, W, xs, {'uv': uv} if f == 'wind' else {})
+
+def _step_of(ctx) -> float:
+    lat = np.asarray(ctx['lat'])
+    return float(abs(lat[0, 0] - lat[1, 0])) if lat.ndim == 2 and lat.shape[0] > 1 else 0.03
+
+def box_mean(a: np.ndarray, rs: int) -> np.ndarray:
+    from scipy.ndimage import uniform_filter
+    a = np.asarray(a, np.float64)
+    if rs <= 0:
+        return a.copy()
+    ok = np.isfinite(a)
+    size = 2 * rs + 1
+    s_ = uniform_filter(np.where(ok, a, 0.0), size=size, mode='constant')
+    n = uniform_filter(ok.astype(np.float64), size=size, mode='constant')
+    return np.where(ok & (n > 1e-09), s_ / np.maximum(n, 1e-09), np.nan)
+
+def scale_separated(out, W, raw: dict, base: str, mem: list, shape, step: float) -> np.ndarray:
+    import verify
+    rs = verify.smooth_cells(step)
+
+    def departure(r):
+        if isinstance(r, tuple):
+            sp, u, v = r
+            return sp - np.hypot(box_mean(u, rs), box_mean(v, rs))
+        return r - box_mean(r, rs)
+    anom = {m: departure(raw[m]) for m in raw}
+    a_base = anom.get(base)
+    if a_base is None:
+        return out
+    corr = np.zeros(shape)
+    for i, m in enumerate(mem):
+        if m in anom:
+            corr += W[i] * np.nan_to_num(anom[m])
+    ss = out + a_base - corr
+    if isinstance(raw.get(base), tuple):
+        ss = np.maximum(ss, 0.0)
+    return np.where(np.isfinite(a_base), ss, out)
 
 def _nan_neg(a):
     return np.where(a >= 0, a, np.nan).astype(np.float64)
@@ -620,6 +756,10 @@ def _codes_out(q, vals, inside, base_hour, ground, from_base):
         zi = _dec(base_hour['codes'], 'zi')
         add = has & ~np.isfinite(agl)
         agl = np.where(add & np.isfinite(zi) & (zi > 0), zi, agl)
+        reach = zi + np.maximum(build.CU_OVERSHOOT * zi, build.CU_OVERSHOOT_MIN)
+        over = has & np.isfinite(agl) & np.isfinite(zi) & (zi > 0) & (agl > reach)
+        agl = np.where(over, reach, agl)
+        vals['cu']['held'] = int(over.sum())
         agl = np.where(has, agl, np.nan)
         cb = np.where(inside, build.quantize(agl, *E['cubase']), q['cubase']).astype(np.uint8)
         dq = None

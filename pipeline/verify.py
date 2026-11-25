@@ -223,7 +223,8 @@ def cmd_sample(a):
             os.remove(os.path.join(state, f))
     return 0
 OBS = ('t2', 'td2', 't_half', 'ws', 'ws_half', 'wd', 'gust', 'vis', 'ceil', 'base_half', 'cu', 'cubase', 'low_lo', 'low_hi', 'precip', 'storm', 'fog', 'mslp', 'p_half', 'auto')
-CU_BASE_FT = (1000, 9000)
+CU_BASE_FT = (1000, 16000)
+AUTO_TOP_FT = 12000
 LOW_FT = 6500
 OKTAS = {'FEW': (1 / 8, 2 / 8), 'SCT': (3 / 8, 4 / 8), 'BKN': (5 / 8, 7 / 8), 'OVC': (1.0, 1.0), 'VV': (1.0, 1.0)}
 CALM_KT = 3
@@ -272,11 +273,14 @@ def parse_metar(r, elev):
         o['ceil'] = min(ceil) * FT if ceil else math.inf
         o['base_half'] = base_half(min(ceil)) * FT if ceil else 0.0
         low = [b for _, b, _ in layers if b < CU_BASE_FT[0]]
-        cu = [b for c, b, t in layers if CU_BASE_FT[0] <= b <= CU_BASE_FT[1] and (c in ('FEW', 'SCT') or t in ('TCU', 'CB'))]
-        o['cu'] = 1.0 if cu and (not low) else 0.0
-        if cu and (not low):
-            o['cubase'] = min(cu) * FT
-            o['base_half'] = base_half(min(cu)) * FT if not ceil else o['base_half']
+        band = sorted(((b, c, t) for c, b, t in layers if CU_BASE_FT[0] <= b <= CU_BASE_FT[1]))
+        o['cu'] = 0.0
+        if band and (not low):
+            b, c, t = band[0]
+            o['cu'] = 1.0 if c in ('FEW', 'SCT') or t in ('TCU', 'CB') else math.nan if c == 'BKN' else 0.0
+            if o['cu'] != 0.0:
+                o['cubase'] = b * FT
+                o['base_half'] = base_half(b) * FT if not ceil else o['base_half']
         below = [c for c, b, _ in layers if b < LOW_FT]
         o['low_lo'], o['low_hi'] = OKTAS[below[-1]] if below else (0.0, 1 / 16)
     wx = (r.get('wxcodes') or '').split()
@@ -457,10 +461,11 @@ def measures(fc, o, elev, day):
     if 'mslp' in fc:
         put('mslp', fc['mslp'] - o['mslp'], o['p_half'], np.asarray(elev) < LOW_P_M)
     cls = fc.get('cuclass')
-    lo_m, hi_m = (CU_BASE_FT[0] * FT, CU_BASE_FT[1] * FT)
+    lo_m = CU_BASE_FT[0] * FT
+    hi_m = np.where(o['auto'] == 1, AUTO_TOP_FT * FT, CU_BASE_FT[1] * FT)
     if cls is not None and 'cubase' in fc:
         f_cu = np.isin(cls, (2, 3, 4, 5)) & (fc['cubase'] >= lo_m) & (fc['cubase'] <= hi_m)
-        both = day & f_cu & (o['cu'] == 1)
+        both = day & f_cu & np.isfinite(o['cubase'])
         put('cubase', fc['cubase'] - o['cubase'], o['base_half'], both)
         cat['cumulus'] = (f_cu, o['cu'] == 1, day & np.isfinite(o['cu']) & (cls >= 0))
     if 'cloudlow' in fc:

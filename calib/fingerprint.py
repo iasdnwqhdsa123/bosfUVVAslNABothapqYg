@@ -162,7 +162,8 @@ def merge(src: str, dest: str) -> None:
     if os.path.exists(rs) and rs != rd:
         save_reps(rd, {**load_reps(rd), **load_reps(rs)})
 GROUP_EXTRA = {'EU': [('build_eu.py', 'icon', '2025-06-18', 'Europe/Berlin', '10.0,51.8,11.0,52.4', 13, 14), ('build_eu.py', 'icond2', '2025-07-02', 'Europe/Berlin', '7.6,46.4,8.6,47.0', 13, 14), ('build_eu.py', 'arome', '2025-07-02', 'Europe/Berlin', '7.6,46.4,8.6,47.0', 13, 14)], 'SH': [('build_sh.py', 'gfs', '2025-12-10', 'Australia/Sydney', '147.7,-32.6,148.7,-31.8', 13, 14), ('build_sh.py', 'icon', '2025-12-10', 'Australia/Sydney', '147.7,-32.6,148.7,-31.8', 13, 14)]}
-GROUP_REFS = {area: [(BUILDER[m], m, d, tz, bb, a, b) for m, d, tz, bb, a, b in REFS.get(area, [])] + GROUP_EXTRA.get(area, []) for area in ('US', 'EU', 'SH')}
+GROUP_LATE = {'US': [('build_day.py', 'hrrr', '2025-07-15', 'America/Denver', '-105.6,39.4,-104.6,40.2', 16, 17)], 'EU': [('build_eu.py', 'ecmwf', '2025-07-02', 'Europe/Berlin', '7.6,46.4,8.6,47.0', 16, 17), ('build_eu.py', 'arome', '2025-07-02', 'Europe/Berlin', '7.6,46.4,8.6,47.0', 16, 17)], 'SH': [('build_sh.py', 'gfs', '2025-12-10', 'Australia/Sydney', '147.7,-32.6,148.7,-31.8', 16, 17)]}
+GROUP_REFS = {area: [(BUILDER[m], m, d, tz, bb, a, b) for m, d, tz, bb, a, b in REFS.get(area, [])] + GROUP_EXTRA.get(area, []) + GROUP_LATE.get(area, []) for area in ('US', 'EU', 'SH')}
 GROUP_REPS = 'gvref.npz'
 
 def group_of(key: str) -> str | None:

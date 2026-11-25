@@ -250,7 +250,7 @@ def obs_schema(kind: str) -> tuple:
     if kind == 'flight_probe':
         return base + (('macro', 'str'),)
     raise ValueError('pairs: kind')
-STATIC_SCHEMA = (('obs_id', 'str'), ('model', 'str'), ('elev_obs', 'f32'), ('elev_model', 'f32'), ('dz_terrain', 'f32'), ('relief5km', 'f32'))
+STATIC_SCHEMA = (('obs_id', 'str'), ('model', 'str'), ('elev_obs', 'f32'), ('elev_model', 'f32'), ('dz_terrain', 'f32'), ('relief5km', 'f32'), ('tpi', 'f32'))
 _NP = {'str': object, 'i64': np.int64, 'i64?': object, 'i32': np.int32, 'i16': np.int16, 'i8': np.int8, 'bool': bool, 'f32': np.float32, 'f16': np.float16}
 
 def empty(schema) -> dict:
@@ -672,15 +672,19 @@ def static_rows(rec: dict, elev_grid: np.ndarray | None=None, grid: dict | None=
     k = next((i for i, r in enumerate(rec['runs']) if r), 0)
     em = decoded(rec, 'elevation', rec['codes'][k:k + 1])[0] if len(rec['stamps']) else np.zeros(0)
     rel = np.full(len(rec['obs_ids']), np.nan)
+    tp = np.full(len(rec['obs_ids']), np.nan)
     if elev_grid is not None and grid is not None:
         _pipeline()
         import blend
-        r = blend.relief(np.asarray(elev_grid, np.float64), grid['step'])
+        e = np.asarray(elev_grid, np.float64)
+        r = blend.relief(e, grid['step'])
+        gm = blend.ground_mean(e, grid['step'])
         x = np.round((rec['lon'] - grid['west']) / grid['step']).astype(int)
         y = np.round((grid['north'] - rec['lat']) / grid['step']).astype(int)
         ok = (x >= 0) & (y >= 0) & (y < r.shape[0]) & (x < r.shape[1])
         rel[ok] = r[y[ok], x[ok]]
-    cols = {'obs_id': rec['obs_ids'], 'model': rec['model'], 'elev_obs': rec['elev_st'], 'elev_model': em, 'dz_terrain': rec['elev_st'] - em, 'relief5km': rel}
+        tp[ok] = np.asarray(rec['elev_st'], np.float64)[ok] - gm[y[ok], x[ok]]
+    cols = {'obs_id': rec['obs_ids'], 'model': rec['model'], 'elev_obs': rec['elev_st'], 'elev_model': em, 'dz_terrain': rec['elev_st'] - em, 'relief5km': rel, 'tpi': tp}
     return table(STATIC_SCHEMA, cols, len(rec['obs_ids']))
 _TOKEN = re.compile('[a-z0-9]{1,16}')
 _DAY = re.compile('\\d{4}-\\d{2}-\\d{2}')

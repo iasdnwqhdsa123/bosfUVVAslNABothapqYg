@@ -26,6 +26,7 @@ IEM_ROOT = 'raw/obs/iem'
 SAT_HOURS = (15, 18, 21)
 SAT_AREA = 'US'
 SAT_AFTER_D = 1
+METAR_V = 2
 SAT_V = 2
 SAT_BACK = 2
 SAT_GRID_V = 1
@@ -288,17 +289,93 @@ def grid_sat(lk, ops, day: str, counts: dict, cells=None, now=None) -> list:
 
 def sat_input(stations: list, hours=SAT_HOURS, area: str=SAT_AREA) -> str:
     return f'sat|v{SAT_V}|{area}|{catalog.stations_version(stations)}|' + '-'.join((str(h) for h in hours))
+STATIC_GROUNDS = ('hrrr', 'icond2', 'ecmwf')
+GROUND_ROOT = f'derived/static/{P.PV}/ground'
+
+def ground_grids(lk, ops, day: str, counts: dict) -> dict:
+    import numpy as np
+    out = {}
+    for m in STATIC_GROUNDS:
+        key = f'{GROUND_ROOT}/{m}.npz.lenc'
+        blob = None
+        try:
+            blob = lk.get(key) if lk.exists(key) else None
+        except lakem.LakeError:
+            raise
+        except Exception:
+            blob = None
+        if blob is None:
+            k = next((k for k, mm in slim_keys(ops, day, counts, models=(m,)) if mm == m), None)
+            got = slim_load(ops, k, day, counts) if k else None
+            if got is None:
+                continue
+            z = got[1]
+            g = json.loads(P._s(z['grid']))
+            enc = z['enc']
+            enc = json.loads(P._s(enc)) if not isinstance(enc, dict) else enc
+            e = enc.get('elevation')
+            if not e:
+                continue
+            codes = np.asarray(z['elev'], np.uint8)
+            vals = np.where(codes == 255, np.nan, float(e[0]) + codes.astype(np.float64) / 254 * (float(e[1]) - float(e[0])))
+            buf = io.BytesIO()
+            np.savez_compressed(buf, elev=vals.astype(np.float32), west=g['west'], north=g['north'], step=g['step'])
+            blob = buf.getvalue()
+            lk.put(key, blob, strict=False)
+            del got, z
+        with np.load(io.BytesIO(blob)) as z:
+            out[m] = (np.asarray(z['elev'], np.float64), {'west': float(z['west']), 'north': float(z['north']), 'step': float(z['step'])})
+    return out
+
+def write_static(lk, ops, recs: dict, day: str, counts: dict) -> int:
+    import numpy as np
+    have = set(lk.list(f'derived/static/{P.PV}/model='))
+    grounds, n = (None, 0)
+    for model, rec in recs.values():
+        v = rec.get('stations_v')
+        if not v or model not in P.MODELS:
+            continue
+        try:
+            key = P.static_key(model, v)
+        except ValueError:
+            continue
+        if key in have:
+            continue
+        if grounds is None:
+            grounds = ground_grids(lk, ops, day, counts)
+        if not grounds:
+            _n(counts, 'static_no_ground')
+            return n
+        t = P.static_rows(rec)
+        for g in STATIC_GROUNDS:
+            if g not in grounds:
+                continue
+            tg = P.static_rows(rec, *grounds[g])
+            for c in ('relief5km', 'tpi'):
+                t[c] = np.where(np.isfinite(t[c]), t[c], tg[c]).astype(t[c].dtype)
+        lk.put(key, P.to_parquet(P.STATIC_SCHEMA, t), strict=False)
+        have.add(key)
+        n += 1
+    _n(counts, 'static_written', n)
+    return n
 
 def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: dict | None=None, raob_listing=None, elevs=None, truth=None, counts: dict | None=None, sat_due=None, cells=None) -> list[dict]:
     counts = counts if counts is not None else {}
     res = []
     recs = {**stcast_records(lk, snap, day, counts), **ops_records(ops, day, counts)}
     models = by_model(recs)
+    try:
+        write_static(lk, ops, recs, day, counts)
+    except lakem.LakeError:
+        raise
+    except Exception:
+        _n(counts, 'static_failed')
     if 'metar' in kinds:
         ids, texts = iem_inputs(lk, day)
         if ids:
             text_of = dict(zip((P._id_of(i) for i in ids), texts))
-            res.append(P.write_unit(lk, 'obs', 'metar', day, 'all', ids, lambda new, _a: metar_table([text_of[i] for i in new], day, stations)))
+            ver = f'metar|v{METAR_V}'
+            res.append(P.write_unit(lk, 'obs', 'metar', day, 'all', ids + [ver], lambda new, _a: metar_table([text_of[i] for i in (text_of if ver in new else new) if i in text_of], day, stations)))
             for m, rs in sorted(models.items()):
                 res.append(P.station_unit(lk, 'metar', day, m, rs))
         else:

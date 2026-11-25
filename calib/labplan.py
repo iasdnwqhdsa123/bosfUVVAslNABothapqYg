@@ -230,6 +230,7 @@ def plan(raw: list[dict], rows: dict[str, dict], prev_pin: dict | None, now: dic
     if decision == 'finish' and stcast and to_do(stcast, rows, now, catalog.stcast_consumers)[0]:
         decision, pin = ('restart', dict(now))
     hold_st = decision == 'wait'
+    hold_all = decision == 'wait' and bool(prev_pin)
 
     def what(p):
         todo, counts = to_do(units, rows, p, consumers)
@@ -248,8 +249,8 @@ def plan(raw: list[dict], rows: dict[str, dict], prev_pin: dict | None, now: dic
         decision, pin = ('finished', dict(now))
         todo, counts = what(pin)
     base = {'v': 1, 'id': catalog.plan_id(sweep, wave_no), 'sweep': sweep, 'wave': int(wave_no), 'code_sha': (pin or {}).get('code_sha'), 'cs': (pin or {}).get('cs'), 'gv': (pin or {}).get('gv'), 'decision': decision, 'on_change': on_change, 'par': int(par), 'paused': bool(paused), 'todo': len(todo)}
-    if paused or par <= 0 or (not pin):
-        return {**base, 'chunks': [], 'counts': counts, 'left': len(todo)}
+    if paused or par <= 0 or (not pin) or hold_all:
+        return {**base, 'chunks': [], 'counts': counts, 'left': len(todo), **({'held': True} if hold_all else {})}
     table = seconds(rows)
     cs = wave(chunks(order(todo, early_old if int(wave_no) == 0 else 0, table), table), par, om_par)
     n = sum((len(c) for c in cs))
@@ -313,7 +314,7 @@ def read_stamps(lake, cs: str) -> dict | None:
 
 def log_line(p: dict) -> str:
     c = p.get('counts') or {}
-    why = 'paused' if p.get('paused') else 'no room (par 0)' if p.get('par', 0) <= 0 else 'no stamps' if not p.get('cs') else ''
+    why = 'paused' if p.get('paused') else 'no room (par 0)' if p.get('par', 0) <= 0 else 'no stamps' if not p.get('cs') else "held for the new code's stamps" if p.get('held') else ''
     return f"plan: wave {p['wave']}, {p['decision']}, par {p['par']}: {c.get('planned', 0)} units in {c.get('chunks', 0)} chunks{(' (' + why + ')' if why else '')}; {p.get('left', 0)} left; of {c.get('units', 0)}: {c.get('current', 0)} current, {c.get('missing', 0)} missing, {c.get('stale', 0)} stale, {c.get('tried', 0)} tried, {c.get('failed', 0)} failed, {c.get('nocover', 0)} not covered, {c.get('no_stamps', 0)} without stamps; {c.get('bad_unit', 0)} refused by the unit check, {c.get('no_lead_run', 0)} leads without a run hour" + (f"; station hindcast: {c['stcast']} units, {c.get('stcast_todo', 0)} to do" if 'stcast' in c else '') + (" (held for the new code's stamps)" if c.get('stcast_held') else '')
 
 def _output(**kv) -> None:
@@ -347,7 +348,7 @@ def status(p: dict | None, made: str) -> dict:
         why = 'paused'
     elif int(p.get('par') or 0) <= 0:
         why = 'noroom'
-    elif not p.get('cs'):
+    elif not p.get('cs') or p.get('held'):
         why = 'nostamps'
     else:
         why = 'done'
@@ -402,7 +403,7 @@ def main(argv: list[str]) -> int:
     cs = catalog.source_stamp()
     now = {'code_sha': a.code_sha or os.environ.get('GITHUB_SHA') or 'local', 'cs': cs, 'gv': read_stamps(store, cs)}
     before = prev_plan(store, a.sweep, a.wave)
-    on_change = a.on_change or (before or {}).get('on_change') or 'finish'
+    on_change = a.on_change or (before or {}).get('on_change') or 'restart'
     _, pin = pin_rule(pin_of(before), now, on_change)
     snap = catalog.build(store, cs=(pin or {}).get('cs'))
     print(catalog.summary(snap))

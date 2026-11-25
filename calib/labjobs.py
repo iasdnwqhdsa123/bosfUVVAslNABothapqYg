@@ -76,12 +76,22 @@ def resolve(lk, what: str, sweep: str | None=None, wave: int | None=None) -> tup
             raise ValueError('sweep')
         if not any((sw == sweep for sw, _ in plans(lk))):
             return (sweep, 0)
-    elif what != 'resume':
+    elif what not in ('resume', 'watch'):
         raise ValueError('what')
-    ps = [p for p in plans(lk) if what == 'resume' or p[0] == sweep]
+    ps = [p for p in plans(lk) if what in ('resume', 'watch') or p[0] == sweep]
     if not ps:
         return None
     sw, w = ps[-1]
+    if what == 'watch':
+        if os.path.exists(os.path.join(HERE, PAUSE_FILE)):
+            return None
+        if begun(lk, sw, w):
+            try:
+                left = int(catalog.decode(lk.get(catalog.plan_key(sw, w))).get('left') or 0)
+            except Exception:
+                left = 1
+            if left <= 0:
+                return None
     return (sw, w) if not begun(lk, sw, w) else (sw, w + 1)
 
 def after(made: str, wave: int) -> int:
@@ -468,7 +478,7 @@ def main(argv=None) -> int:
         p = sub.add_parser(name)
         p.add_argument('--local', help='a folder as the lake (tests, a dry run)')
         if name == 'resolve':
-            p.add_argument('--what', required=True, choices=('start', 'resume', 'wave'))
+            p.add_argument('--what', required=True, choices=('start', 'resume', 'wave', 'watch'))
             p.add_argument('--sweep')
             p.add_argument('--wave', type=int)
         elif name == 'kept':

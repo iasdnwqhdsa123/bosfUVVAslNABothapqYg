@@ -27,9 +27,11 @@ GRID_STEP = 0.125
 GROUPS = {'surface': ['t2', 'td2', 'wind'], 'cumulus': ['cubase', 'cu']}
 FIELDS = ('t2', 'td2', 'wind', 'cubase', 'cu')
 KIND = {'t2': 'add', 'td2': 'add', 'wind': 'add', 'cubase': 'add', 'cu': 'logit'}
+MOVE = tuple(blend.LAPSE)
 CLAMP = {'t2': 5.0, 'td2': 6.0, 'wind': 5.0, 'cubase': 600.0, 'cu': 10.0}
 LEAD_BINS = [0, 6, 12, 24, 48, 72]
 SOLAR_BINS = ['night', [0, 10], [10, 13], [13, 16], [16, 24]]
+RELIEF_BINS = [0, 150, 500, 20000]
 N_MIN = 500
 SHRINK_N = 500
 OPS_DAYS_MIN = {'icon': 60, 'arome': 60, 'icond2': 60}
@@ -47,7 +49,8 @@ SPREAD_TREE = dict(TREE, loss='quantile', quantile=0.8, max_iter=40)
 GATE_TREE = dict(max_iter=40, learning_rate=0.08, max_leaf_nodes=6, min_samples_leaf=40, l2_regularization=1.0, early_stopping=False)
 GATE_IN_BUNDLE = False
 CU_FLOOR = blend.CU_EPS
-BASE_FEATURES = ('x', 'lead_h', 'run_age_h', 'solar_h', 'sun_elev', 'lat', 'relief5km', 'dz_terrain', 'regime', 'n_models', 'cuclass', 'ws', 'wd', 'src', 'replay')
+AUTO_TOP_M = 12000 * 0.3048
+BASE_FEATURES = ('x', 'lead_h', 'run_age_h', 'solar_h', 'sun_elev', 'lat', 'relief5km', 'tpi', 'dz_terrain', 'regime', 'n_models', 'cuclass', 'ws', 'wd', 'src', 'replay')
 OWN_OPTIONAL = ('zi', 'depth', 'wstar')
 SPREAD_FEATURES = ('x', 'lead_h', 'solar_h', 'sun_elev', 'lat', 'relief5km', 'regime', 'n_models')
 GATE_FEATURES = ('lead_h', 'solar_h', 'sun_elev', 'lat', 'regime', 'n_models')
@@ -133,7 +136,7 @@ def assemble(snap: dict, pairs: dict, obs: dict, static: dict | None=None, membe
         src = np.asarray(snap.get(f'src_{m}', [''] * n), dtype=object).astype(str)
         F[f'opsday_{m}'] = pres & ((src == 'ops') | (src == 'stcast') & (m in ARCHIVED_RUNS))
         t = pairs.get(m)
-        for v in ('t2', 'td2', 'wind', 'cubase', 'cu', 'ws', 'wd', 'cuclass', 'elev', 'replay', 'zi', 'depth', 'wstar'):
+        for v in ('t2', 'td2', 'wind', 'cubase', 'cu', 'ws', 'wd', 'cuclass', 'elev', 'replay', 'zi', 'depth', 'wstar', 'anom_t2', 'anom_td2', 'anom_wind'):
             F[f'{v}_{m}'] = np.full(n, np.nan)
         if t is None or not len(t.get('obs_id', [])):
             F[f'present_{m}'] = np.zeros(n, bool)
@@ -155,6 +158,9 @@ def assemble(snap: dict, pairs: dict, obs: dict, static: dict | None=None, membe
         cb = col('f_cubase')
         F[f't2_{m}'], F[f'td2_{m}'] = (col('f_t2'), col('f_td2'))
         F[f'wind_{m}'] = np.hypot(u, v)
+        F[f'anom_t2_{m}'] = F[f't2_{m}'] - col('f_t2_s')
+        F[f'anom_td2_{m}'] = F[f'td2_{m}'] - col('f_td2_s')
+        F[f'anom_wind_{m}'] = F[f'wind_{m}'] - np.hypot(col('f_u_sfc_s'), col('f_v_sfc_s'))
         F[f'ws_{m}'], F[f'wd_{m}'] = (np.hypot(u, v), (np.degrees(np.arctan2(-u, -v)) + 360) % 360)
         F[f'cubase_{m}'] = cb + np.nan_to_num(el, nan=0.0)
         F[f'cu_{m}'] = np.where(pres, np.isfinite(cb).astype(np.float64), np.nan)
@@ -173,18 +179,30 @@ def assemble(snap: dict, pairs: dict, obs: dict, static: dict | None=None, membe
             F[f'dz_{m}'] = np.where(j >= 0, _f(st['dz_terrain'])[np.maximum(j, 0)], np.nan)
             if m == base:
                 F['relief5km'] = np.where(j >= 0, _f(st['relief5km'])[np.maximum(j, 0)], np.nan)
+                F['tpi'] = np.where(j >= 0, _f(st['tpi'])[np.maximum(j, 0)], np.nan) if 'tpi' in st else np.full(n, np.nan)
     F.setdefault('relief5km', np.full(n, np.nan))
+    F.setdefault('tpi', np.full(n, np.nan))
     j = _lookup(K.key(K.code('obs', obs['obs_id']), np.asarray(obs['t_valid'], np.int64) // 3600), K.key(sid, sh))
     hit = j >= 0
     jj = np.maximum(j, 0)
     ocol = lambda k: np.where(hit, _f(obs[k])[jj], np.nan) if k in obs else np.full(n, np.nan)
     F['o_t2'], F['o_td2'], F['o_wind'], F['o_cu'] = (ocol('o_t2'), ocol('o_td2'), ocol('o_ws'), ocol('o_cu'))
-    F['o_cubase'] = np.where(F['o_cu'] == 1, ocol('o_cubase') + np.nan_to_num(ocol('elev'), nan=0.0), np.nan)
+    F['elev_obs'] = ocol('elev')
+    ob = ocol('o_cubase')
+    F['o_cubase'] = np.where(np.isfinite(ob), ob + np.nan_to_num(ocol('elev'), nan=0.0), np.nan)
+    tops = np.stack([F[f'cubase_{m}'] for m in members]) - np.nan_to_num(ocol('elev'), nan=0.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        high = np.nanmax(np.where(np.isfinite(tops), tops, -np.inf), axis=0) > AUTO_TOP_M
+    F['o_cu'] = np.where((F['o_cu'] == 0) & (ocol('q_auto') == 1) & high, np.nan, F['o_cu'])
     R = np.stack([F[f'regime_{m}'] for m in members])
     F['regime'] = _mode_regime(R).astype(np.float64)
     F['n_models'] = (R >= 0).sum(0).astype(np.float64)
     for f in FIELDS:
         F[f'spread_{f}'] = spread_of(np.stack([F[f'{f}_{m}'] for m in members]))
+    for m in members:
+        for f in MOVE:
+            F[f'{f}_{m}'] = blend.height_moved(f, F[f'{f}_{m}'], 0.0, F[f'dz_{m}'])
     F['ground'] = F.get(f'elev_{base}', np.full(n, np.nan))
     keep = F[f'present_{base}']
     out = {k: v[keep] for k, v in F.items()}
@@ -386,7 +404,7 @@ def _renorm(w):
     return np.maximum(w, 0)
 
 def bins() -> dict:
-    return {'lead': list(LEAD_BINS), 'solar': [SOLAR_BINS[0]] + [list(b) for b in SOLAR_BINS[1:]], 'regime': list(blend.REGIMES)}
+    return {'lead': list(LEAD_BINS), 'solar': [SOLAR_BINS[0]] + [list(b) for b in SOLAR_BINS[1:]], 'regime': list(blend.REGIMES), 'relief': list(RELIEF_BINS)}
 
 def cells_of(F, b: dict | None=None) -> np.ndarray:
     b = b or bins()
@@ -394,7 +412,7 @@ def cells_of(F, b: dict | None=None) -> np.ndarray:
     lead = _f(F['lead_h'])
     for L in np.unique(lead):
         sel = lead == L
-        cond = {'lead_h': float(L), 'solar_h': _f(F['solar_h'])[sel], 'sun_elev': _f(F['sun_elev'])[sel], 'regime': np.asarray(_f(F['regime'])[sel], np.int64)}
+        cond = {'lead_h': float(L), 'solar_h': _f(F['solar_h'])[sel], 'sun_elev': _f(F['sun_elev'])[sel], 'regime': np.asarray(_f(F['regime'])[sel], np.int64), 'relief5km': _f(F['relief5km'])[sel]}
         out[sel] = blend.cell_index(cond, b)
     return out
 
@@ -432,6 +450,28 @@ def blended(W, X, members, base_x) -> np.ndarray:
         num += W[:, i] * np.nan_to_num(X[m])
     some = W.sum(1) > 0
     return np.where(some, num, base_x)
+SCALE_FIELDS = ('t2', 'td2', 'wind')
+
+def scale_separated(p, W, F, f, members, base, rows) -> np.ndarray:
+    a_base = _f(F[f'anom_{f}_{base}'])[rows] if f'anom_{f}_{base}' in F else np.full(len(rows), np.nan)
+    corr = np.zeros(len(rows))
+    for i, m in enumerate(members):
+        a = _f(F[f'anom_{f}_{m}'])[rows] if f'anom_{f}_{m}' in F else np.zeros(len(rows))
+        corr += W[:, i] * np.nan_to_num(a)
+    out = p + a_base - corr
+    if f == 'wind':
+        out = np.maximum(out, 0.0)
+    return np.where(np.isfinite(a_base), out, np.nan)
+
+def scale_verdict(F, cmp, seed) -> dict:
+    if not cmp or not sum((len(c[0]) for c in cmp)):
+        return {'wins': False, 'why': "no rows with the base's 40 km mean"}
+    rows = np.concatenate([c[0] for c in cmp])
+    ls, lt = (np.concatenate([c[1] for c in cmp]), np.concatenate([c[2] for c in cmp]))
+    bt = split.paired_bootstrap(ls, lt, split.blocks_of(split.week_of(F['day'][rows]), areas(F)[rows]), seed=seed)
+    wins = bool(np.isfinite(bt['hi']) and bt['hi'] < 0)
+    mean = lambda a: float(np.nanmean(a)) if np.isfinite(a).any() else None
+    return {'wins': wins, 'rows': int(len(rows)), 'loss_scale': mean(ls), 'loss_table': mean(lt), 'diff': bt['diff'], 'ci95': [bt['lo'], bt['hi']]}
 
 def _gate_X(F, rows, f):
     names = list(GATE_FEATURES) + [f'spread_{f}']
@@ -543,6 +583,7 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
     report_cells = {}
     test_parts = []
     gate_cmp = []
+    scale_cmp = []
     for o in outer:
         te = np.intersect1d(o.test, rows_f)
         tr = np.intersect1d(o.train, rows_f)
@@ -568,6 +609,10 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
         if f == 'cu':
             p_tab = np.clip(p_tab, 0, 1)
         o_te = _f(F[f'o_{f}'])[te]
+        if f in SCALE_FIELDS:
+            p_ss = scale_separated(p_tab, W, F, f, members, F.get('_base', BASE), te)
+            ok = np.isfinite(p_ss)
+            scale_cmp.append((te[ok], loss(f, o_te[ok], p_ss[ok]), loss(f, o_te[ok], p_tab[ok])))
         gm = fit_gate(F, f, tr, {m: np.where(_present(F, f, m, tr), xi[m][tr], np.nan) for m in members}, members, seed)
         if gm is not None:
             Wg = gate_weights(gm, F, te, f, pres, members)
@@ -585,7 +630,7 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)
             eq = np.nanmean(np.column_stack([Xte[m] for m in members]), 1)
-        test_parts.append({'rows': te, 'blend': loss(f, o_te, p_tab), 'base': base_loss[len(tr):], 'deb': deb_loss[len(tr):], 'eq': loss(f, o_te, eq), 'choice': {str(k): v for k, v in choice.items()}, 'n_min': nmin_fold})
+        test_parts.append({'rows': te, 'blend': loss(f, o_te, p_tab), 'base': base_loss[len(tr):], 'deb': deb_loss[len(tr):], 'eq': loss(f, o_te, eq), 'choice': {str(k): v for k, v in choice.items()}, 'n_min': nmin_fold, 'pred': p_tab})
     final = {}
     for m in members:
         final[m] = _fit(F, f, m, allrows, seed, params, log, ('final',), ())
@@ -612,12 +657,18 @@ def train_field(F, f: str, members: list, seed: int=SEED, params=None, n_min: in
         spread = train.export(HistGradientBoostingRegressor(**sp).fit(Xs.T, y), names)
         log.add(field=f, member='blend', stage=('spread',), train=rows_s[ok], scored=np.zeros(0, np.int64), trees=True)
     verdict, cv = _verdict(F, f, test_parts, gate_cmp, cells, b, members, wt, seed)
+    cv['scale'] = scale_verdict(F, scale_cmp, seed) if f in SCALE_FIELDS else {'wins': False, 'why': 'not a scale field'}
+    cv['_pred'] = (np.concatenate([p['rows'] for p in test_parts]), np.concatenate([p['pred'] for p in test_parts])) if test_parts else None
     gate = None
     if cv['gate']['wins'] and GATE_IN_BUNDLE:
         gm = fit_gate(F, f, rows_w, Xr, members, seed)
         gate = export_multi(gm, list(GATE_FEATURES) + [f'spread_{f}']) if gm is not None else None
     feats = sorted({k for e in final.values() if e for k in e['features']})
     entry = {'kind': KIND[f], 'features': feats, 'clamp': CLAMP[f], 'debias': {m: _strip(e) for m, e in final.items() if e}, 'weights': wt, 'gate': gate, 'spread': spread, 'pass': bool(verdict['ship'])}
+    if f in MOVE:
+        entry['move'] = 'lapse'
+    if cv['scale']['wins']:
+        entry['scale'] = True
     if not entry['pass']:
         entry['from'] = 'base'
     cv['table_rows'] = tcounts.get(blend.subset_key(members), [])
@@ -687,11 +738,34 @@ def _verdict(F, f, parts, gate_cmp, cells, b, members, wt, seed):
 
 def cell_names(b) -> list:
     sun_names = ['night'] + [f'solar {x[0]}-{x[1]}' for x in b['solar'][1:]]
+    rel = b.get('relief')
+    rel_names = [f'relief {rel[i]}-{rel[i + 1]}' for i in range(len(rel) - 1)] if rel else [None]
     out = []
     for li in range(len(b['lead']) - 1):
         for si in range(len(b['solar'])):
             for r in b['regime']:
-                out.append(f"lead {b['lead'][li]}-{b['lead'][li + 1]}|{sun_names[si]}|{r}")
+                for rn in rel_names:
+                    out.append(f"lead {b['lead'][li]}-{b['lead'][li + 1]}|{sun_names[si]}|{r}" + (f'|{rn}' if rn else ''))
+    return out
+FIELD_GROUPS = {'t2': ('surface',), 'td2': ('surface',), 'wind': ('wind',), 'cubase': ('cloud', 'static'), 'cu': ('cloud', 'thermal')}
+FEATURE_GROUPS = {'zi': 'thermal', 'depth': 'thermal', 'wstar': 'thermal', 'cuclass': 'cloud', 'ws': 'wind', 'wd': 'wind', 'dz_terrain': 'static', 'relief5km': 'static', 'tpi': 'static'}
+REGION_BOX = {'conus': 'US', 'sh': 'SH', 'alps': 'EU'}
+
+def fields_moved(bundle: dict, now: dict | None) -> dict:
+    then = bundle.get('stamps') or {}
+    if not then or not now:
+        return {}
+    out = {}
+    for rn, r in (bundle.get('regions') or {}).items():
+        box = REGION_BOX.get(rn, 'US')
+        areas = {common.gv_area(m, box) for m in r.get('members') or []}
+        off = []
+        for f, fdef in sorted((r.get('fields') or {}).items()):
+            groups = set(FIELD_GROUPS.get(f, ())) | {FEATURE_GROUPS[k] for k in fdef.get('features') or [] if k in FEATURE_GROUPS}
+            if any(((then.get(a) or {}).get(g) != (now.get(a) or {}).get(g) for a in areas for g in groups)):
+                off.append(f)
+        if off:
+            out[rn] = off
     return out
 
 def code_stamp() -> str:
@@ -712,20 +786,49 @@ def train_region(F, fields=FIELDS, seed: int=SEED, params=None, n_min: int=N_MIN
         entry, c = train_field(F, f, members, seed, params, n_min, log, k_outer, k_inner)
         fields_out[f] = entry
         cv[f] = c
+    cv.update(consistency(F, cv))
     groups = {g: [x for x in fs if x in fields_out] for g, fs in GROUPS.items()}
     entry = {'base': base, 'members': members, 'grid_step': GRID_STEP, 'max_age_h': {m: a for m, a in MAX_AGE_H.items() if m in members}, 'groups': {g: fs for g, fs in groups.items() if fs}, 'fields': fields_out}
     return (entry, cv)
+LCL_M_PER_K = 125.0
+LCL_GAP_MAX = 300.0
+
+def consistency(F, cv: dict) -> dict:
+    got = {f: cv[f].get('_pred') for f in ('t2', 'td2', 'cubase') if f in cv and cv[f].get('_pred') is not None}
+    if len(got) < 3:
+        return {}
+    n = n_of(F)
+    full = {}
+    for f, (rows, pred) in got.items():
+        a = np.full(n, np.nan)
+        a[rows] = pred
+        full[f] = a
+    elev = _f(F.get('elev_obs', np.full(n, np.nan)))
+    ok = np.isfinite(full['t2']) & np.isfinite(full['td2']) & np.isfinite(full['cubase']) & np.isfinite(elev)
+    if not ok.any():
+        return {}
+    gap_b = full['cubase'] - elev - LCL_M_PER_K * (full['t2'] - full['td2'])
+    obs_ok = ok & np.isfinite(F['o_cubase']) & np.isfinite(F['o_t2']) & np.isfinite(F['o_td2'])
+    gap_o = F['o_cubase'] - elev - LCL_M_PER_K * (F['o_t2'] - F['o_td2'])
+    q = lambda a: (float(np.median(a)), float(np.subtract(*np.percentile(a, [75, 25])))) if len(a) else (None, None)
+    bm, bi = q(gap_b[ok])
+    om, oi = q(gap_o[obs_ok])
+    good = bm is not None and om is not None and (abs(bm - om) <= LCL_GAP_MAX)
+    return {'_consistency': {'rows': int(ok.sum()), 'blend_median': bm, 'blend_iqr': bi, 'obs_median': om, 'obs_iqr': oi, 'ok': bool(good)}}
 
 def _cv_summary(cv: dict) -> dict:
-    return {f: {k: c.get(k) for k in ('loss', 'rows', 'mae_blend', 'mae_best_raw', 'mae_best_debiased', 'mae_equal_debiased', 'ci95', 'bins_failed', 'pass')} for f, c in cv.items()}
+    out = {f: {k: c.get(k) for k in ('loss', 'rows', 'mae_blend', 'mae_best_raw', 'mae_best_debiased', 'mae_equal_debiased', 'ci95', 'bins_failed', 'pass')} for f, c in cv.items() if not f.startswith('_')}
+    if '_consistency' in cv:
+        out['consistency'] = cv['_consistency']
+    return out
 
-def bundle_of(parts: dict, seed: int=SEED, pv: str='p1') -> tuple:
+def bundle_of(parts: dict, seed: int=SEED, pv: str='p1', stamps: dict | None=None) -> tuple:
     if not parts:
         raise ValueError('blend train: no region trained')
     main_r = 'conus' if 'conus' in parts else sorted(parts)[0]
     day = max((int(np.max(F['day'])) for F, _, _ in parts.values() if n_of(F)))
     ymd = datetime.fromtimestamp(day * 86400, UTC).strftime('%Y%m%d')
-    b = {'schema': blend.SCHEMA, 'id': '', 'code': code_stamp(), 'pairs': pv, 'seed': int(seed), 'ships': any((e['pass'] for _, entry, _ in parts.values() for e in entry['fields'].values())), 'regions': {r: entry for r, (_, entry, _) in parts.items()}, 'cv': _cv_summary(parts[main_r][2]), 'cv_regions': {r: _cv_summary(cv) for r, (_, _, cv) in parts.items()}}
+    b = {'schema': blend.SCHEMA, 'id': '', 'code': code_stamp(), 'pairs': pv, 'seed': int(seed), 'stamps': stamps or {}, 'ships': any((e['pass'] for _, entry, _ in parts.values() for e in entry['fields'].values())), 'regions': {r: entry for r, (_, entry, _) in parts.items()}, 'cv': _cv_summary(parts[main_r][2]), 'cv_regions': {r: _cv_summary(cv) for r, (_, _, cv) in parts.items()}}
     b = _clean(b)
     body = json.dumps(b, sort_keys=True, separators=(',', ':')).encode()
     b['id'] = f'bl1-{ymd}-{hashlib.sha256(body).hexdigest()[:8]}'
@@ -742,6 +845,8 @@ def report_text(bundle: dict, cv: dict, sha: str, region: str | None=None) -> st
     r = bundle['regions'][region]
     lines = [f"blend bundle {bundle['id']} (sha256 {sha[:12]}), region {region}: ships {('yes' if bundle['ships'] else 'no')}; members {', '.join(r['members'])}; base {r['base']}", '']
     for f, c in cv.items():
+        if f.startswith('_'):
+            continue
         e = r['fields'][f]
         v = c['verdict']['conditions']
         lines.append(f"{f} ({c['loss']}, {c.get('rows', 0)} test rows): {('passes' if e['pass'] else 'from the base')}")
@@ -757,18 +862,22 @@ def report_text(bundle: dict, cv: dict, sha: str, region: str | None=None) -> st
         g = c.get('gate', {})
         lines.append(f"  gate: {('beats' if g.get('wins') else 'does not beat')} the table" + (f" ({fmt(g.get('loss_gate'))} against {fmt(g.get('loss_table'))})" if 'loss_gate' in g else ''))
         tab = e['weights']['table'][blend.subset_key(r['members'])]
-        nb = len(e['weights']['bins']['solar']) * len(e['weights']['bins']['regime'])
+        nb = len(e['weights']['bins']['solar']) * len(e['weights']['bins']['regime']) * blend.n_relief(e['weights']['bins'])
         for li in range(len(e['weights']['bins']['lead']) - 1):
             w = np.mean(tab[li * nb:(li + 1) * nb], 0)
             lines.append(f'  lead {LEAD_BINS[li]}-{LEAD_BINS[li + 1]} h: ' + ', '.join((f'{m} {x:.2f}' for m, x in zip(r['members'], w))))
         lines.append('')
+    k = cv.get('_consistency')
+    if k:
+        fm = lambda x: '-' if x is None else f'{x:.0f}'
+        lines.append(f"cloud base against the blended t2 and td2's LCL ({k['rows']} rows): blend {fm(k['blend_median'])} m (IQR {fm(k['blend_iqr'])}), the reports {fm(k['obs_median'])} m (IQR {fm(k['obs_iqr'])}): " + ('consistent' if k['ok'] else f'more than {LCL_GAP_MAX:.0f} m apart: look before shipping the cloud base'))
     return '\n'.join(lines)
 
 def cv_json(bundle, cv, sha, by_region: dict | None=None) -> bytes:
-    strip = lambda c_: {f: {k: v for k, v in c.items() if k != 'oof_ops'} for f, c in c_.items()}
-    out = {'id': bundle['id'], 'sha256': sha, 'ships': bundle['ships'], 'fields': strip(cv)}
+    strip = lambda c_: {f: {k: v for k, v in c.items() if k not in ('oof_ops', '_pred')} for f, c in c_.items() if not f.startswith('_')}
+    out = {'id': bundle['id'], 'sha256': sha, 'ships': bundle['ships'], 'fields': strip(cv), 'consistency': cv.get('_consistency')}
     if by_region:
-        out['regions'] = {r: {'fields': strip(c)} for r, c in by_region.items()}
+        out['regions'] = {r: {'fields': strip(c), 'consistency': c.get('_consistency')} for r, c in by_region.items()}
     return json.dumps(_clean(out), sort_keys=True, indent=1).encode()
 
 def oof_json(bundle, cv, by_region: dict | None=None) -> bytes:
@@ -788,7 +897,7 @@ def static_points(lk, members=MEMBERS, pv: str='p1') -> dict:
     return out
 SNAP_COLS = ('obs_id', 't_valid', 'slot', 'lat', 'lon', 'lead_h', 'solar_h', 'sun_elev', 'review')
 PAIR_COLS = ('obs_id', 't_valid', 'model', 'run', 'build', 'src', 'replay', 'review')
-OBS_COLS = ('obs_id', 't_valid', 'elev', 'o_t2', 'o_td2', 'o_ws', 'o_cu', 'o_cubase', 'review')
+OBS_COLS = ('obs_id', 't_valid', 'elev', 'o_t2', 'o_td2', 'o_ws', 'o_cu', 'o_cubase', 'q_auto', 'review')
 
 def read_day(lk, day: str, members=MEMBERS, pv: str='p1', cap: int | None=None, seed: int=SEED, base: str=BASE, box=None) -> tuple:
     import pairs as P
@@ -891,7 +1000,8 @@ def main(argv=None) -> int:
     if not parts:
         print('blend train: no region has rows: nothing trained', flush=True)
         return 0
-    bundle, data, sha, cvs = bundle_of(parts, a.seed)
+    import labjobs
+    bundle, data, sha, cvs = bundle_of(parts, a.seed, stamps=labjobs.gv_in_force(lk))
     main_r = 'conus' if 'conus' in cvs else sorted(cvs)[0]
     text = '\n'.join((report_text(bundle, cvs[r], sha, r) for r in sorted(cvs, key=lambda r: r != main_r)))
     cvb = cv_json(bundle, cvs[main_r], sha, cvs)

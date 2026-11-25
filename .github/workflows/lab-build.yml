@@ -240,9 +240,9 @@ jobs:
           if [ "$ACT" = fingerprint ]; then
             oc=()
             case "$ON_CHANGE" in finish|restart) oc=(-f on_change="$ON_CHANGE");; esac
-            for i in 1 2 3 4; do gh workflow run lab-fingerprint.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f then=resume -f sweep="$SWEEP" "${oc[@]}" && break; [ "$i" = 4 ] && exit 1; sleep $((i * 20)); done
+            for i in 1 2 3 4 5; do gh workflow run lab-fingerprint.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f then=resume -f sweep="$SWEEP" "${oc[@]}" && break; [ "$i" = 5 ] && exit 1; sleep $((30 << (i - 1))); done
             echo "no code has stamps: lab-fingerprint asked for (it resumes sweep $SWEEP)"
           else
-            for i in 1 2 3 4; do gh workflow run lab-build.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f sweep="$SWEEP" -f wave="$WAVE" && break; [ "$i" = 4 ] && exit 1; sleep $((i * 20)); done
+            for i in 1 2 3 4 5; do gh workflow run lab-build.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f sweep="$SWEEP" -f wave="$WAVE" && break; [ "$i" = 5 ] && exit 1; sleep $((30 << (i - 1))); done
             echo "wave $WAVE asked for"
           fi

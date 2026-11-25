@@ -291,6 +291,41 @@ def ship_verdict(new, base, blocks, cells: dict | None=None, *, w=None, gain: fl
     cond['cells'] = {'ok': not worse and (not why), 'worse': worse, 'groups': groups, **({'why': why} if why else {})}
     cond['coverage'] = cond_cov
     return {'ship': all((c['ok'] for c in cond.values())), 'overall': overall, 'conditions': cond}
+LAUNCH_WON = 0.9
+LAUNCH_WEEKS = 8
+LAUNCH_WEEKS_WON = 7
+LAUNCH_LOST = 0.02
+SOARABLE_W = 0.2
+
+def launch_verdict(comparisons: list, *, level: float=LEVEL, n: int=RESAMPLES, seed: int=SEED) -> dict:
+    rows, counted = ([], 0)
+    for c in comparisons:
+        name = c.get('name')
+        if not c.get('changed', True):
+            rows.append({'name': name, 'counted': False, 'why': 'the blend takes it from its base: a tie by construction'})
+            continue
+        counted += 1
+        new, base = (np.asarray(c['new'], float), np.asarray(c['base'], float))
+        w = None
+        if c.get('soarable') is not None:
+            w = np.where(np.asarray(c['soarable'], bool), 1.0, SOARABLE_W)
+        cs = int.from_bytes(hashlib.blake2b(f'{seed}|launch|{name!r}'.encode(), digest_size=4).digest(), 'big')
+        pooled = paired_bootstrap(new, base, c['blocks'], w=w, n=n, level=level, seed=cs)
+        wk = np.asarray(c['week'])
+        weeks = sorted(set(wk[np.isfinite(new) & np.isfinite(base)].tolist()))[-LAUNCH_WEEKS:]
+        per = []
+        for k in weeks:
+            sel = (wk == k) & np.isfinite(new) & np.isfinite(base)
+            ww = w[sel] if w is not None else np.ones(int(sel.sum()))
+            per.append(bool(np.sum(ww * new[sel]) < np.sum(ww * base[sel])))
+        won = bool(np.isfinite(pooled['hi']) and pooled['hi'] < 0)
+        lost = bool(np.isfinite(pooled['lo']) and pooled['lo'] > LAUNCH_LOST)
+        consistent = len(per) >= LAUNCH_WEEKS and sum(per) >= LAUNCH_WEEKS_WON
+        rows.append({'name': name, 'counted': True, 'diff': pooled['diff'], 'lo': pooled['lo'], 'hi': pooled['hi'], 'won': won, 'lost': lost, 'weeks': len(per), 'weeks_won': int(sum(per)), 'consistent': consistent, **({} if len(per) >= LAUNCH_WEEKS else {'why': f'{len(per)} weeks of rows, {LAUNCH_WEEKS} asked'})})
+    good = sum((1 for r in rows if r.get('counted') and r['won'] and r['consistent']))
+    lost = [r['name'] for r in rows if r.get('counted') and r['lost']]
+    share = good / counted if counted else 0.0
+    return {'launch': bool(counted and share >= LAUNCH_WON and (not lost)), 'counted': counted, 'won': good, 'share': share, 'lost': lost, 'chance_lost': counted * (1 - level) / 2, 'rows': rows}
 MIN_COVER = 0.95
 
 def pick_base(losses: dict, cells, fit, *, min_cover: float=MIN_COVER) -> tuple[np.ndarray, dict]:
