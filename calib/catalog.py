@@ -20,7 +20,7 @@ STATION_LISTS = 'derived/stations/'
 KINDS = ('flight', 'collector')
 STCAST = 'stcast'
 STCAST_RUN_H = (0, 12)
-STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU'), 'ecmwf': ('US', 'EU')}
+STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU', 'SH'), 'ecmwf': ('US', 'EU', 'SH')}
 STCAST_CONSUMERS = ('pairs',)
 
 def stcast_consumers(area_gv: dict | None) -> tuple:

@@ -15,13 +15,14 @@ import common
 UTC = timezone.utc
 UNIT_V = 1
 LEAD_MAX_H = 48
-DAYLIGHT_H = {'US': tuple(range(14, 24))}
+DAYLIGHT_H = {'US': tuple(range(14, 24)), 'SH': (*range(20, 24), *range(0, 8))}
 LEAD_STEP = {'hrrr': 1, 'gfs': 1, 'ecmwf': 3}
 JOB_ENV = {'ACC_CLASS': 'own', 'AIR_CORRECTIONS': '0'}
 READY_AFTER_H = LEAD_MAX_H + 12
 MONTHS = '2026-05:2026-11'
-PLAN_AREAS = {'hrrr': ('US',), 'gfs': ('US',), 'ecmwf': ('US',)}
-AREA_BOX = {'US': common.US_BOX, 'EU': common.EU_BOX}
+PLAN_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'SH'), 'ecmwf': ('US', 'SH')}
+AREA_BOX = {'US': common.US_BOX, 'EU': common.EU_BOX, 'SH': (112.0, -49.0, 179.75, -18.5)}
+AREA_MONTHS = {'SH': '2026-10:2026-11'}
 AREA_MARGIN = 1.0
 BUILD_TIMEOUT = 45 * 60
 
@@ -136,6 +137,8 @@ def units(name_of, month_list=None, now: datetime | None=None, areas: dict | Non
                     if model in first and run < first[model]:
                         continue
                     for area in areas.get(model, ()):
+                        if area in AREA_MONTHS and (y, m) not in months(AREA_MONTHS[area]):
+                            continue
                         try:
                             u = catalog.check_unit({'kind': catalog.STCAST, 'daykey': common.day_key(d.isoformat(), area), 'model': model, 'init': f'{run:%Y%m%d%H}', 'box': area})
                         except catalog.UnitError:

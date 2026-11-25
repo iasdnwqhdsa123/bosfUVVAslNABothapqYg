@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import gzip
+import json
 import os
 import sys
 import time
@@ -143,6 +144,14 @@ def span_window(span: str) -> tuple[date, int, int]:
         d0, d1 = (d1, d0)
     return (d1, 0, (d1 - d0).days)
 
+def hindcast_span(today: date) -> str:
+    import stationcast
+    y, m = stationcast.months()[0]
+    return f'{date(y, m, 1).isoformat()}:{(today - timedelta(days=IEM_LAG)).isoformat()}'
+
+def more_left(out: dict) -> bool:
+    return 'out of time' in (out.get('iem') or {})
+
 def run(lk, today: date, what: str='all', minutes: float=IEM_MINUTES, opener=None, sleep=time.sleep, span: str | None=None) -> dict:
     out = {}
     if what in ('all', 'iem'):
@@ -166,14 +175,19 @@ def main(argv=None) -> int:
     a1.add_argument('--local', help='a folder as the lake (else the LAKE_S3_* secrets)')
     a1.add_argument('--day', help='today, YYYY-MM-DD (default: today, UTC)')
     a1.add_argument('--minutes', type=float, default=IEM_MINUTES, help='no METAR request started after this')
-    a1.add_argument('--days', help='YYYY-MM-DD[:YYYY-MM-DD]: the METARs of these days (a backfill), not the last IEM_BACK')
+    a1.add_argument('--days', help='YYYY-MM-DD[:YYYY-MM-DD]: the METARs of these days (a backfill), not the last IEM_BACK; "hindcast": the station hindcast\'s (hindcast_span)')
+    a1.add_argument('--status', help='a file to write {"more": true|false} to: a backfill with days left (more_left)')
     a = ap.parse_args(argv)
     lk = lakemod.from_env('LAKE', a.local)
     if lk is None:
         print('lab ingest: no lake (LAKE_S3_* not set): nothing fetched', flush=True)
         return 0
     today = date.fromisoformat(a.day) if a.day else datetime.now(timezone.utc).date()
-    out = run(lk, today, a.what, a.minutes, span=a.days)
+    span = hindcast_span(today) if a.days == 'hindcast' else a.days
+    out = run(lk, today, a.what, a.minutes, span=span)
+    if a.status:
+        with open(a.status, 'w', encoding='utf-8') as f:
+            json.dump({'more': more_left(out)}, f)
     for k, counts in out.items():
         print(f'{k}: {_line(counts)}', flush=True)
     print(weglide_note(), flush=True)
