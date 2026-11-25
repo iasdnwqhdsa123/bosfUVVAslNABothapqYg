@@ -2,6 +2,10 @@ name: Lab watch
 on:
   schedule:
     - cron: "41 * * * *"
+  workflow_run:
+    workflows: ["Collect"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read

@@ -18,8 +18,9 @@ import common
 import lake as lakem
 import linecheck as lc
 import track
-PREFIX = 'derived/air/p1/'
-VERSION = 1
+PREFIX = 'derived/air/p2/'
+VERSION = 2
+OFF_MIN = 5
 WIN = 3
 LEG_S = (10.0, 40.0)
 MIN_VG = 15.0
@@ -37,7 +38,7 @@ LEVEL_REACH_FT = 2000.0
 FT = 0.3048
 LIFT_FIELDS = ('ridge', 'sink', 'conv', 'wblmax', 'wavemax')
 FAR_KM = 60.0
-NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at')
+NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off')
 NODE_TIMEOUT = 600
 
 def object_key(lk, r: dict) -> str:
@@ -194,12 +195,23 @@ def site_ridge(qs: list, step: float, node: str='node', script: str | None=None,
         return nan
     return [float('nan') if x is None else float(x) for x in a]
 
+def offsets(ps: list[dict]) -> None:
+    by = {}
+    for p in ps:
+        if p.get('band') == 1 and p.get('netto') is not None and math.isfinite(p['netto']):
+            by.setdefault(p['_f'], []).append(p['netto'])
+    med = {f: float(np.median(v)) for f, v in by.items() if len(v) >= OFF_MIN}
+    mid = float(np.median(list(med.values()))) if len(med) >= 2 else None
+    for p in ps:
+        f = p.pop('_f', None)
+        p['off'] = med[f] - mid if mid is not None and f in med else 0.0
+
 def unit_pieces(z: dict, flights: list, model: str, cls_of: dict, ridge=site_ridge, log=print) -> list[dict]:
     B = box_from_unit(z)
     if B is None:
         return []
     out = []
-    for f in flights:
+    for fi, f in enumerate(flights):
         if not f.get('track'):
             continue
         cls = cls_of.get(f.get('ac')) or '15m'
@@ -213,8 +225,9 @@ def unit_pieces(z: dict, flights: list, model: str, cls_of: dict, ridge=site_rid
             except Exception:
                 j = None
             if j is not None:
-                j['region'], j['cls'] = (f.get('region'), cls)
+                j['region'], j['cls'], j['_f'] = (f.get('region'), cls, fi)
                 out.append(j)
+    offsets(out)
     vals = ridge([p['_q'] for p in out], float(B['g']['step']), log=log) if out else []
     for p, r in zip(out, vals):
         p['ridge_site'] = r

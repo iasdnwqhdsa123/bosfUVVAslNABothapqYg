@@ -31,6 +31,8 @@ def frame(cols: dict) -> tuple[dict, np.ndarray]:
     m = np.isin(cols['band'], FIT_BANDS) & np.isfinite(cols['netto'])
     T = {k: v[m] if isinstance(v, np.ndarray) and len(v) == len(m) else v for k, v in cols.items()}
     T['line_km'] = np.where(np.isfinite(T['line_km']), T['line_km'], airpairs.FAR_KM)
+    if 'off' in T:
+        T['netto'] = T['netto'] - np.nan_to_num(np.asarray(T['off'], np.float64), nan=0.0)
     T['band'] = T['band'].astype(np.float64)
     T['day'] = np.array([datetime.fromtimestamp(t, timezone.utc).strftime('%Y-%m-%d') for t in T['t0']])
     return (T, m)
@@ -125,13 +127,14 @@ def refit(cols: dict) -> dict:
     out['ci_layers'] = boot_gain(Tk, E['layers'], E['head'])
     out['ci_air'] = boot_gain(Tk, E['air'], E['head'])
     worse = []
-    for name, col, groups in (('bands', 'band', sorted(set(Tk['band']))), ('regions', 'region', sorted(set(map(str, Tk['region']))))):
+    out['by_model'] = {}
+    for name, col, groups in (('bands', 'band', sorted(set(Tk['band']))), ('regions', 'region', sorted(set(map(str, Tk['region'])))), ('by_model', 'model', sorted(set(map(str, Tk['model']))))):
         for g in groups:
             s = np.asarray(Tk[col]).astype(str) == str(g)
             if s.sum() >= REGION_MIN:
                 out[name][str(g)] = {k: float(E[k][s].mean()) for k in E} | {'n': int(s.sum())}
                 if E['head'][s].mean() > E['layers'][s].mean() + REGION_SLACK:
-                    worse.append(f'{name[:-1]} {g}')
+                    worse.append(f'model {g}' if name == 'by_model' else f'{name[:-1]} {g}')
     out['worse'] = worse
     g_l, g_a = (out['mae']['layers'] - out['mae']['head'], out['mae']['air'] - out['mae']['head'])
     if g_l < GAIN_MIN or out['ci_layers'][0] <= 0:
@@ -141,7 +144,7 @@ def refit(cols: dict) -> dict:
     elif worse:
         out['pass'], out['why'] = (False, 'worse than the layers held out in ' + ', '.join(worse))
     else:
-        out['pass'], out['why'] = (True, f'held out the head gains {g_l:.3f} m/s on the layers and {g_a:.3f} on the air alone, no band or region worse')
+        out['pass'], out['why'] = (True, f'held out the head gains {g_l:.3f} m/s on the layers and {g_a:.3f} on the air alone, no band, region or model worse')
     names = list(COARSE + FINE)
     m = model(names, True).fit(common.no_empty(X(T, names)), T['netto'])
     out['response'] = response(m, names, T)
