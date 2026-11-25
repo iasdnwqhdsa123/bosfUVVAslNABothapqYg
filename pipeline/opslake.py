@@ -26,6 +26,7 @@ SUN_MIN = 5.0
 BLEND_FIELDS = ('t2', 'td2', 'u_sfc', 'v_sfc', 'cubase', 'cucover', 'cuclass', 'wstar', 'zi', 'depth')
 BLEND_LEADS = frozenset([*range(0, 49), *range(51, 73, 3)])
 BLEND_BASE = 'hrrr'
+BLEND_REGIONS = {'conus': (BLEND_BASE, None), 'sh': ('ecmwf', (112.0, -49.0, 179.75, -18.5))}
 BLEND_V = 1
 PHYS_GLOBS = ('*.py', 'native/*.cpp', 'native/*.h')
 
@@ -136,11 +137,13 @@ def _read_hour(v):
                     slim[j] = np.where(off, 255, h[name])
         bl = None
         if v in c['bl']:
-            y0, y1, x0, x1 = c['win']
-            bl = np.full((len(BLEND_FIELDS), y1 - y0, x1 - x0), 255, np.uint8)
-            for j, name in enumerate(BLEND_FIELDS):
-                if name in h.files:
-                    bl[j] = h[name][y0:y1, x0:x1]
+            bl = {}
+            for rname, (y0, y1, x0, x1) in c['wins'].items():
+                a = np.full((len(BLEND_FIELDS), y1 - y0, x1 - x0), 255, np.uint8)
+                for j, name in enumerate(BLEND_FIELDS):
+                    if name in h.files:
+                        a[j] = h[name][y0:y1, x0:x1]
+                bl[rname] = a
     return (elev, st, slim, bl)
 
 def write(hours_dir, run, out, model=None, build_id=None, published=False, day_has_grids=False, region=None, stations=None, blend_in=None, workers=None, published_t=None, complete=None, cells=None):
@@ -172,8 +175,8 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
     files = {}
     st_hours = [(v, ld) for v, ld in hours if ld in STATION_LEADS]
     slim_hours = [(v, ld) for v, ld in hours if ld in SLIM_LEADS] if grids_due(model, run, day_has_grids) else []
-    win = conus_window(region) if blend_in and complete and (model != BLEND_BASE) else None
-    bl_hours = [(v, ld) for v, ld in hours if ld in BLEND_LEADS] if win else []
+    wins = blend_windows(model, region) if blend_in and complete else {}
+    bl_hours = [(v, ld) for v, ld in hours if ld in BLEND_LEADS] if wins else []
     idx, iy, ix = cells if cells is not None else verify.station_cells(model, stations, region)
     r_nb = verify.near_cells(step)
     st_codes = np.full((len(st_hours), len(idx), len(STATION_FIELDS)), 255, np.uint8)
@@ -183,12 +186,11 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
         slim.begin('codes', (len(slim_hours), len(SLIM_FIELDS), len(lats), len(lons)))
     bl = None
     if bl_hours:
-        y0, y1, x0, x1 = win
-        bl = np.full((len(bl_hours), len(BLEND_FIELDS), y1 - y0, x1 - x0), 255, np.uint8)
+        bl = {rname: np.full((len(bl_hours), len(BLEND_FIELDS), y1 - y0, x1 - x0), 255, np.uint8) for rname, (y0, y1, x0, x1) in wins.items()}
     elev = None
     st_set, slim_set, bl_set = ({v: k for k, (v, _) in enumerate(x)} for x in (st_hours, slim_hours, bl_hours))
     todo = [v for v, _ in hours if v in st_set or v in slim_set or v in bl_set]
-    _CTX.update(hours_dir=hours_dir, model=model, lats=lats, lons=lons, keep=keep, iy=iy, ix=ix, r_nb=r_nb, win=win, st=set(st_set), slim=set(slim_set), bl=set(bl_set))
+    _CTX.update(hours_dir=hours_dir, model=model, lats=lats, lons=lons, keep=keep, iy=iy, ix=ix, r_nb=r_nb, wins=wins, st=set(st_set), slim=set(slim_set), bl=set(bl_set))
     workers = max(1, min(workers or os.cpu_count() or 1, len(todo)))
     pool = mp.get_context('fork').Pool(workers) if workers > 1 else None
     try:
@@ -202,7 +204,8 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
                 if slim_h is not None:
                     slim.part(slim_h)
                 if bl_h is not None:
-                    bl[bl_set[v]] = bl_h
+                    for rname, a in bl_h.items():
+                        bl[rname][bl_set[v]] = a
     finally:
         if pool:
             pool.close()
@@ -237,12 +240,14 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
             with open(marker, 'w') as f:
                 json.dump({'day': day, 'model': model, 'run': run, 'build': build_id, 'key': f'ops/{model}/{day}/{r0:%H}/b{build_id}/slim.npz'}, f)
     if bl is not None:
-        try:
-            files['blendin'] = write_blendin(out, model, run, region, lons, lats, win, bl, bl_hours, elev)
-        except Exception as e:
-            log(f'ops: {model} {run}: blend inputs not written: {e!r}')
-            files['blendin'] = {'error': repr(e)[:300]}
-    elif blend_in and (not complete) and (model != BLEND_BASE) and conus_window(region):
+        for rname, win in wins.items():
+            fk = 'blendin' if rname == 'conus' else f'blendin_{rname}'
+            try:
+                files[fk] = write_blendin(out, model, run, region, lons, lats, win, bl[rname], bl_hours, elev, rname)
+            except Exception as e:
+                log(f'ops: {model} {run}: blend inputs ({rname}) not written: {e!r}')
+                files[fk] = {'error': repr(e)[:300]}
+    elif blend_in and (not complete) and blend_windows(model, region):
         files['blendin'] = {'skipped': 'run built in part'}
     meta = os.path.join(out, 'ops', 'meta', f'stations-{stations_v}.json')
     os.makedirs(os.path.dirname(meta), exist_ok=True)
@@ -256,15 +261,25 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
     log(f"ops: {model} {run}: {what}, {size / 1000000.0:.1f} MB in {done['sec']} s")
     return done
 
-def write_blendin(out, model, run, region, lons, lats, win, bl, bl_hours, elev):
+def blend_windows(model, region):
+    out = {}
+    for rname, (base, box) in BLEND_REGIONS.items():
+        if model == base:
+            continue
+        win = conus_window(region, box or build.REGIONS[base][:4])
+        if win is not None:
+            out[rname] = win
+    return out
+
+def write_blendin(out, model, run, region, lons, lats, win, bl, bl_hours, elev, rname='conus'):
     y0, y1, x0, x1 = win
     step = region[4]
     d = os.path.join(out, 'cache', 'blendin', f'v={BLEND_V}', model, run)
     os.makedirs(d, exist_ok=True)
     cgrid = {'west': round(region[0] + x0 * step, 6), 'north': round(region[3] - y0 * step, 6), 'step': step, 'nx': x1 - x0, 'ny': y1 - y0}
     ce = np.full((y1 - y0, x1 - x0), 255, np.uint8) if elev is None else elev[y0:y1, x0:x1]
-    tiles.savez(os.path.join(d, 'conus.npz'), {'stamps': np.array([f'{v:%Y%m%d%H}' for v, _ in bl_hours]), 'runs': np.array([run] * len(bl_hours)), 'fields': np.array(BLEND_FIELDS), 'codes': bl, 'elev': ce, 'grid': json.dumps(cgrid), 'enc': json.dumps({k: list(build.ENC[k]) for k in BLEND_FIELDS + ('elevation',)}), 'model': model, 'run': run, 'aircorr': os.environ.get('AIR_CORRECTIONS', '0') == '1'})
-    return {'hours': len(bl_hours), 'key': f'cache/blendin/v={BLEND_V}/{model}/{run}/conus.npz'}
+    tiles.savez(os.path.join(d, f'{rname}.npz'), {'stamps': np.array([f'{v:%Y%m%d%H}' for v, _ in bl_hours]), 'runs': np.array([run] * len(bl_hours)), 'fields': np.array(BLEND_FIELDS), 'codes': bl, 'elev': ce, 'grid': json.dumps(cgrid), 'enc': json.dumps({k: list(build.ENC[k]) for k in BLEND_FIELDS + ('elevation',)}), 'model': model, 'run': run, 'aircorr': os.environ.get('AIR_CORRECTIONS', '0') == '1'})
+    return {'hours': len(bl_hours), 'key': f'cache/blendin/v={BLEND_V}/{model}/{run}/{rname}.npz'}
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
