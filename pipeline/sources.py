@@ -188,7 +188,7 @@ class GFS(Source):
         return out
 
 class IFS(Source):
-    MIRRORS = ('https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com', 'https://data.ecmwf.int/forecasts')
+    MIRRORS = ('https://storage.googleapis.com/ecmwf-open-data', 'https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com', 'https://data.ecmwf.int/forecasts')
     mirror = 0
     workers = 4
     inventory_tries = 2
@@ -198,8 +198,16 @@ class IFS(Source):
         m = self.MIRRORS[self.mirror if mirror is None else mirror]
         return f'{m}/{run:%Y%m%d}/{run:%H}z/ifs/0p1/oper/{run:%Y%m%d%H}0000-{fh}h-oper-fc-{part}.grib2'
 
-    def idx_url(self, run, fh, part='pl'):
-        return self.url(run, fh, part)[:-len('.grib2')] + '.index'
+    def idx_url(self, run, fh, part='pl', mirror=None):
+        return self.url(run, fh, part, mirror)[:-len('.grib2')] + '.index'
+
+    def landed(self, run, fh):
+        for k in range(len(self.MIRRORS)):
+            m = (IFS.mirror + k) % len(self.MIRRORS)
+            if grib.exists(self.idx_url(run, fh, mirror=m)):
+                IFS.mirror = m
+                return True
+        return False
 
     def _each_mirror(self, call):
         last = None
