@@ -15,14 +15,14 @@ import common
 UTC = timezone.utc
 UNIT_V = 1
 LEAD_MAX_H = 48
-DAYLIGHT_H = {'US': tuple(range(14, 24)), 'SH': (*range(20, 24), *range(0, 8))}
+DAYLIGHT_H = {'US': tuple(range(14, 24)), 'SH': (*range(20, 24), *range(0, 8)), 'EU': tuple(range(6, 17))}
 LEAD_STEP = {'hrrr': 1, 'gfs': 1, 'ecmwf': 3}
 JOB_ENV = {'ACC_CLASS': 'own', 'AIR_CORRECTIONS': '0'}
 READY_AFTER_H = LEAD_MAX_H + 12
 MONTHS = '2026-05:2026-11'
-PLAN_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'SH'), 'ecmwf': ('US', 'SH')}
-AREA_BOX = {'US': common.US_BOX, 'EU': common.EU_BOX, 'SH': (112.0, -49.0, 179.75, -18.5)}
-AREA_MONTHS = {'SH': '2026-10:2026-11'}
+PLAN_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'SH', 'EU'), 'ecmwf': ('US', 'SH', 'EU')}
+AREA_BOX = {'US': common.US_BOX, 'EU': (5.5, 43.5, 16.0, 48.5), 'SH': (112.0, -49.0, 179.75, -18.5)}
+AREA_MONTHS = {'SH': '2026-10:2026-11', 'EU': '2026-10:2026-11'}
 AREA_MARGIN = 1.0
 BUILD_TIMEOUT = 45 * 60
 

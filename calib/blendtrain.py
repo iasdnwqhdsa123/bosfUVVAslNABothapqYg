@@ -20,9 +20,9 @@ import blend
 UTC = timezone.utc
 REGION = 'conus'
 BASE = 'hrrr'
-REGIONS = {'conus': {'base': 'hrrr', 'members': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'box': None}, 'sh': {'base': 'ecmwf', 'members': ('ecmwf', 'gfs', 'icon'), 'box': (112.0, -49.0, 179.75, -18.5)}}
+REGIONS = {'conus': {'base': 'hrrr', 'members': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'box': None}, 'sh': {'base': 'ecmwf', 'members': ('ecmwf', 'icon'), 'box': (112.0, -49.0, 179.75, -18.5)}, 'alps': {'base': 'icond2', 'members': ('icond2', 'arome', 'ecmwf'), 'box': (5.5, 43.5, 16.0, 48.5)}}
 MEMBERS = ('hrrr', 'gfs', 'ecmwf', 'icon')
-MAX_AGE_H = {'gfs': 12, 'ecmwf': 22, 'icon': 12}
+MAX_AGE_H = {'gfs': 12, 'ecmwf': 22, 'icon': 12, 'icond2': 6, 'arome': 9}
 GRID_STEP = 0.125
 GROUPS = {'surface': ['t2', 'td2', 'wind'], 'cumulus': ['cubase', 'cu']}
 FIELDS = ('t2', 'td2', 'wind', 'cubase', 'cu')
@@ -32,7 +32,7 @@ LEAD_BINS = [0, 6, 12, 24, 48, 72]
 SOLAR_BINS = ['night', [0, 10], [10, 13], [13, 16], [16, 24]]
 N_MIN = 500
 SHRINK_N = 500
-OPS_DAYS_MIN = {'icon': 60}
+OPS_DAYS_MIN = {'icon': 60, 'arome': 60, 'icond2': 60}
 MIN_FIT = 200
 MIN_FEATURE = 0.02
 SRC_CODE = {'ops': 0, 'archive': 1, 'stcast': 2, 'hind': 3}
@@ -407,7 +407,7 @@ def counts_n(F, f: str, members, cells, nc, rows=None) -> dict:
             sel &= mask
         sel &= cells >= 0
         c = np.bincount(cells[sel], minlength=nc)[:nc]
-        need = OPS_DAYS_MIN.get(m)
+        need = OPS_DAYS_MIN.get(m) if m != F.get('_base', BASE) else None
         if need is not None and len(np.unique(F['day'][F[f'opsday_{m}']])) < need:
             c = np.zeros(nc, np.int64)
         out[m] = [int(x) for x in c]

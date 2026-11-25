@@ -26,7 +26,8 @@ SUN_MIN = 5.0
 BLEND_FIELDS = ('t2', 'td2', 'u_sfc', 'v_sfc', 'cubase', 'cucover', 'cuclass', 'wstar', 'zi', 'depth')
 BLEND_LEADS = frozenset([*range(0, 49), *range(51, 73, 3)])
 BLEND_BASE = 'hrrr'
-BLEND_REGIONS = {'conus': (BLEND_BASE, None), 'sh': ('ecmwf', (112.0, -49.0, 179.75, -18.5))}
+BLEND_REGIONS = {'conus': (BLEND_BASE, None), 'sh': ('ecmwf', (112.0, -49.0, 179.75, -18.5)), 'alps': ('icond2', (5.5, 43.5, 16.0, 48.5))}
+BLEND_MEMBERS = {'sh': ('icon',), 'alps': ('arome', 'ecmwf')}
 BLEND_V = 1
 PHYS_GLOBS = ('*.py', 'native/*.cpp', 'native/*.h')
 
@@ -264,7 +265,7 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
 def blend_windows(model, region):
     out = {}
     for rname, (base, box) in BLEND_REGIONS.items():
-        if model == base:
+        if model == base or (rname in BLEND_MEMBERS and model not in BLEND_MEMBERS[rname]):
             continue
         win = conus_window(region, box or build.REGIONS[base][:4])
         if win is not None:
