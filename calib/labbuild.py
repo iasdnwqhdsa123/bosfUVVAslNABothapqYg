@@ -36,7 +36,7 @@ def _verify():
         sys.path.append(common.PIPELINE)
     import verify
     return verify
-STATION_FIELDS = _verify().FIELDS + ('blapse', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'u_g300', 'v_g300', 'sun', 'ctop', 'cloud5', 'cloud10', 'ridge')
+STATION_FIELDS = _verify().FIELDS + ('blapse', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'u_g300', 'v_g300', 'sun', 'ctop', 'cloud5', 'cloud10', 'ridge') + _verify().SMOOTHED
 
 def src_of(model_id: str, region: str) -> str:
     base = common.base_model(model_id)
@@ -112,7 +112,7 @@ def unit_arrays(base: str, u: dict, model_id: str, bbox: list, gv: dict, cs: str
     verify = _verify()
     sts = stations()
     idx, iy, ix = station_cells(grid, sts)
-    r_nb = verify.near_cells(grid['step'])
+    r_nb, rs = (verify.near_cells(grid['step']), verify.smooth_cells(grid['step']))
     codes = np.full((len(hours), len(idx), len(STATION_FIELDS)), 255, np.uint8)
     for k, s in enumerate(hours):
         with np.load(os.path.join(base, '_hours', f'{s}.npz')) as h:
@@ -124,7 +124,7 @@ def unit_arrays(base: str, u: dict, model_id: str, bbox: list, gv: dict, cs: str
                     grids[f][k] = a
                     have.add(f)
             if len(idx):
-                codes[k] = verify.sample_hour(h, iy, ix, r_nb, STATION_FIELDS)
+                codes[k] = verify.sample_hour(h, iy, ix, r_nb, STATION_FIELDS, rs)
     fields = m.get('fields') or {}
     enc = {f: [fields[f].get('min'), fields[f].get('max'), fields[f].get('transform')] for f in sorted(fields) if f in common.FIELD_GROUP or f in STATION_FIELDS}
     for f in sorted(have - set(enc)):
@@ -134,6 +134,9 @@ def unit_arrays(base: str, u: dict, model_id: str, bbox: list, gv: dict, cs: str
     st_enc = {f: enc[f] for f in STATION_FIELDS if f in enc}
     if 'overdev' in st_enc:
         st_enc['overdev_nb'] = st_enc['overdev']
+    for f in verify.SMOOTHED:
+        if f[:-2] in st_enc:
+            st_enc[f] = st_enc[f[:-2]]
     has = (codes[:, :, STATION_FIELDS.index('t2')] != 255).any(axis=0) if len(idx) else np.zeros(0, bool)
     sv = hashlib.sha256(json.dumps(sts, separators=(',', ':')).encode()).hexdigest()[:12]
     area = common.gv_area(u['model'], u['box'])

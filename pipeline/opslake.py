@@ -18,7 +18,7 @@ import build
 import tiles
 import verify
 UTC = timezone.utc
-STATION_FIELDS = verify.FIELDS + ('blapse', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'u_g300', 'v_g300', 'sun', 'ctop', 'cloud5', 'cloud10', 'ridge')
+STATION_FIELDS = verify.FIELDS + ('blapse', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'u_g300', 'v_g300', 'sun', 'ctop', 'cloud5', 'cloud10', 'ridge') + verify.SMOOTHED
 STATION_LEADS = frozenset([*range(0, 49), *range(51, 121, 3), *range(126, 241, 6)])
 SLIM_FIELDS = ('wstar', 'zi', 'depth', 'cubase', 'cudepth', 'cucover', 'cuclass', 'cloudlow', 'cloudmid', 'cloudhigh', 'ctop', 'refc', 'u_blavg', 'v_blavg')
 SLIM_LEADS = range(0, 48)
@@ -124,7 +124,7 @@ def _read_hour(v):
     c = _CTX
     with np.load(os.path.join(c['hours_dir'], f'{v:%Y%m%d%H}.npz')) as h:
         elev = h['elevation'] if 'elevation' in h.files else None
-        st = verify.sample_hour(h, c['iy'], c['ix'], c['r_nb'], STATION_FIELDS) if v in c['st'] else None
+        st = verify.sample_hour(h, c['iy'], c['ix'], c['r_nb'], STATION_FIELDS, c['rs']) if v in c['st'] else None
         slim = None
         if v in c['slim']:
             keep, have = (c['keep'], h['t2'] != 255 if 't2' in h.files else None)
@@ -191,7 +191,7 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
     elev = None
     st_set, slim_set, bl_set = ({v: k for k, (v, _) in enumerate(x)} for x in (st_hours, slim_hours, bl_hours))
     todo = [v for v, _ in hours if v in st_set or v in slim_set or v in bl_set]
-    _CTX.update(hours_dir=hours_dir, model=model, lats=lats, lons=lons, keep=keep, iy=iy, ix=ix, r_nb=r_nb, wins=wins, st=set(st_set), slim=set(slim_set), bl=set(bl_set))
+    _CTX.update(hours_dir=hours_dir, model=model, lats=lats, lons=lons, keep=keep, iy=iy, ix=ix, r_nb=r_nb, wins=wins, rs=verify.smooth_cells(step), st=set(st_set), slim=set(slim_set), bl=set(bl_set))
     workers = max(1, min(workers or os.cpu_count() or 1, len(todo)))
     pool = mp.get_context('fork').Pool(workers) if workers > 1 else None
     try:
@@ -214,6 +214,9 @@ def write(hours_dir, run, out, model=None, build_id=None, published=False, day_h
         _CTX.clear()
     enc = {k: list(build.ENC[k]) for k in STATION_FIELDS if k in build.ENC}
     enc['overdev_nb'] = enc['overdev']
+    for k in verify.SMOOTHED:
+        if k[:-2] in enc:
+            enc[k] = enc[k[:-2]]
     if st_hours:
         has = (st_codes[:, :, STATION_FIELDS.index('t2')] != 255).any(axis=0)
         p = os.path.join(base, 'stations.npz')

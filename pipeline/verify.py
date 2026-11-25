@@ -103,11 +103,13 @@ def station_cells(model, stations, region=None):
             (idx.append(i), iy.append(y), ix.append(x))
     return (np.array(idx, np.int32), np.array(iy), np.array(ix))
 
-def sample_hour(h, iy, ix, r, fields=FIELDS):
+def sample_hour(h, iy, ix, r, fields=FIELDS, rs=0):
     codes = np.full((len(iy), len(fields)), 255, np.uint8)
     for j, name in enumerate(fields):
         if name in h.files:
             codes[:, j] = h[name][iy, ix]
+        elif name.endswith('_s') and name[:-2] in h.files:
+            codes[:, j] = box_mean_at(h[name[:-2]], iy, ix, rs)
     if 'overdev_nb' in fields and 'overdev' in h.files:
         from scipy.ndimage import maximum_filter
         od = h['overdev']
@@ -117,6 +119,27 @@ def sample_hour(h, iy, ix, r, fields=FIELDS):
 
 def near_cells(step):
     return int(round(NEAR_KM / (step * 111.0)))
+SMOOTH_KM = 20.0
+SMOOTHED = ('t2_s', 'td2_s', 'u_sfc_s', 'v_sfc_s')
+
+def smooth_cells(step):
+    return int(SMOOTH_KM // (step * 111.0))
+
+def box_mean_at(a, iy, ix, rs):
+    a = np.asarray(a)
+    iy, ix = (np.asarray(iy, np.int64), np.asarray(ix, np.int64))
+    if rs <= 0 or not len(iy):
+        return a[iy, ix]
+    ny, nx = a.shape
+    d = np.arange(-rs, rs + 1)
+    yy = iy[:, None, None] + d[None, :, None]
+    xx = ix[:, None, None] + d[None, None, :]
+    inside = (yy >= 0) & (yy < ny) & (xx >= 0) & (xx < nx)
+    b = a[np.clip(yy, 0, ny - 1), np.clip(xx, 0, nx - 1)].astype(np.float32)
+    ok = inside & (b != 255)
+    n = ok.sum(axis=(1, 2))
+    m = np.where(ok, b, 0).sum(axis=(1, 2)) / np.maximum(n, 1)
+    return np.where((a[iy, ix] == 255) | (n == 0), 255, np.round(m)).astype(np.uint8)
 
 def sample_hours(model, hours_dir, stations):
     import build
