@@ -3,6 +3,7 @@ import argparse
 import gzip
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -25,8 +26,10 @@ IEM_ROOT = 'raw/obs/iem'
 SAT_HOURS = (15, 18, 21)
 SAT_AREA = 'US'
 SAT_AFTER_D = 1
-SAT_V = 1
+SAT_V = 2
 SAT_BACK = 2
+SAT_GRID_V = 1
+SAT_GRID = {'us': {'box': common.US_BOX, 'hours': SAT_HOURS, 'ground': 'hrrr'}, 'sh': {'box': (112.0, -49.0, 179.75, -18.5), 'hours': (1, 4, 6), 'ground': 'ecmwf'}}
 
 def _n(counts: dict, k: str, v: int=1) -> None:
     counts[k] = counts.get(k, 0) + v
@@ -181,10 +184,112 @@ def sat_points(stations: list, day: str, hours=SAT_HOURS, area: str=SAT_AREA) ->
                 ids.append(str(st[0]))
     return (pts, ids)
 
+def grid_nodes(box, step: float=P.SAT_SAMPLE) -> tuple[list, np.ndarray, np.ndarray]:
+    import numpy as np
+    w, s_, e, n = box
+    la = np.arange((math.floor(s_ / step) + 0.5) * step, n, step)
+    lo = np.arange((math.floor(w / step) + 0.5) * step, e, step)
+    LA, LO = np.meshgrid(la, lo, indexing='ij')
+    LA, LO = (LA.ravel(), LO.ravel())
+    keep = (LA >= s_) & (LO >= w)
+    LA, LO = (np.round(LA[keep], 4), np.round(LO[keep], 4))
+    return ([P.cell_id(a, b) for a, b in zip(LA, LO)], LA, LO)
+
+def slim_keys(ops, day: str, counts: dict, models=P.MODELS) -> list:
+    out = []
+    if ops is None:
+        return out
+    d0 = date.fromisoformat(day)
+    for m in models:
+        for d in (d0 - timedelta(days=1), d0):
+            mk = ops.get(f'{OPS_ROOT}/{m}/grids/{d:%Y%m%d}.json')
+            if not mk:
+                continue
+            try:
+                out.append((json.loads(mk)['key'], m))
+            except (ValueError, KeyError, TypeError):
+                _n(counts, 'slim_unreadable')
+    return out
+
+def slim_load(ops, key: str, day: str, counts: dict):
+    import numpy as np
+    try:
+        blob = ops.get(key)
+        done = json.loads(ops.get(key[:-len('slim.npz')] + 'done.json') or b'{}')
+        z = np.load(io.BytesIO(blob), allow_pickle=False)
+        if not run_reaches(P._s(z['run']), day):
+            return None
+    except (ValueError, KeyError, OSError, TypeError):
+        _n(counts, 'slim_unreadable')
+        return None
+    return (P.sha256(blob), z, done)
+
+def grid_sat(lk, ops, day: str, counts: dict, cells=None, now=None) -> list:
+    import sattruth
+    res = []
+    keys = slim_keys(ops, day, counts)
+    if not keys:
+        return res
+    cells = cells or sattruth.cells_for
+    d0 = datetime.fromisoformat(day).replace(tzinfo=UTC)
+    nodes, seen_by = ({}, {})
+    for area, cfg in SAT_GRID.items():
+        nodes[area] = grid_nodes(cfg['box'])
+        gk = next((k for k, m in keys if m == cfg['ground']), None)
+        got = slim_load(ops, gk, day, counts) if gk else None
+        ground = P.slim_ground(got[1]) if got else None
+        del got
+        w, s_, e, n = cfg['box']
+        hours = cfg['hours']
+
+        def table(_new, _all, ground=ground, w=w, s_=s_, e=e, n=n, hours=hours):
+            tabs = []
+            for h in hours:
+                t = d0 + timedelta(hours=h)
+                src = next((x for x in sattruth.choose((s_ + n) / 2, ((w + e) / 2 + 180) % 360 - 180, t, now) if x['kind'] == 'geo'), None)
+                if src is None:
+                    _n(counts, 'grid_no_geo')
+                    continue
+                cs = cells(src, t, [w, s_, e, n], ground=ground)
+                _n(counts, 'grid_cells', len(cs))
+                tabs.append(P.sat_cell_obs(cs, int(t.timestamp()), src.get('sensor') or ''))
+            return P.concat(P.obs_schema('sat'), tabs)
+        batch = f'grid{area}'
+        inp = f'satgrid|v{SAT_GRID_V}|{area}|{P.SAT_SAMPLE}|' + '-'.join((str(h) for h in hours))
+        try:
+            res.append(P.write_unit(lk, 'obs', 'sat', day, batch, [inp], table))
+        except lakem.LakeError:
+            raise
+        except Exception:
+            _n(counts, 'grid_failed')
+            continue
+        seen = {}
+        for *_x, mk in P.markers(lk, 'obs', 'sat', day=day, batch=batch):
+            body = json.loads(lk.get(mk))
+            if body.get('part'):
+                seen[mk] = P.from_parquet(P.obs_schema('sat'), lk.get(body['part']), columns=['obs_id', 't_valid', 'status'])
+        if seen:
+            seen_by[area] = seen
+    for key, m in keys:
+        if not seen_by:
+            break
+        got = slim_load(ops, key, day, counts)
+        if got is None:
+            continue
+        _n(counts, 'slim_runs')
+        sha, z, done = got
+        for area, seen in seen_by.items():
+            ids, lat, lon = nodes[area]
+            rec = P.slim_at_points(z, done, ids, lat, lon)
+            if rec['obs_ids']:
+                res.append(P.sat_unit(lk, day, f'g{area}{m}'[:16], {(key, sha): rec}, seen))
+        del z, got
+    return res
+
 def sat_input(stations: list, hours=SAT_HOURS, area: str=SAT_AREA) -> str:
     return f'sat|v{SAT_V}|{area}|{catalog.stations_version(stations)}|' + '-'.join((str(h) for h in hours))
 
-def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: dict | None=None, raob_listing=None, elevs=None, truth=None, counts: dict | None=None, sat_due=None) -> list[dict]:
+def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: dict | None=None, raob_listing=None, elevs=None, truth=None, counts: dict | None=None, sat_due=None, cells=None) -> list[dict]:
     counts = counts if counts is not None else {}
     res = []
     recs = {**stcast_records(lk, snap, day, counts), **ops_records(ops, day, counts)}
@@ -207,9 +312,11 @@ def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: d
     if 'sat' in kinds and (sat_due is None or day in sat_due) and (date.fromisoformat(day) <= today - timedelta(days=SAT_AFTER_D)):
         pts, oids = sat_points(stations, day)
         if pts:
+            elev = {str(st[0]): float(st[3]) for st in stations if len(st) > 3 and st[3] is not None}
+            grounds = [elev.get(i) for i in oids]
 
             def sat_table(_new, _all):
-                rows = (truth or _truth)(pts)
+                rows = truth(pts) if truth else _truth(pts, grounds)
                 _n(counts, 'sat_points', len(rows))
                 return P.sat_obs(rows, oids)
             try:
@@ -226,14 +333,16 @@ def run_day(lk, ops, day: str, stations: list, today: date, kinds=KINDS, snap: d
             if seen:
                 for m, rs in sorted(models.items()):
                     res.append(P.sat_unit(lk, day, m, rs, seen))
+        if os.environ.get('SAT_GRID', '1') != '0':
+            res += grid_sat(lk, ops, day, counts, cells)
     if 'snap' in kinds and recs:
         import snap as S
         res.append(S.write_day(lk, day, 'all', recs))
     return res
 
-def _truth(points: list) -> list:
+def _truth(points: list, grounds=None) -> list:
     import sattruth
-    return sattruth.truth(points)
+    return sattruth.truth(points, grounds=grounds)
 
 def hindcast_span(today: date, back: int=BACK) -> str:
     import labingest
@@ -249,7 +358,7 @@ def days_due(today: date, back: int=BACK, span: str | None=None) -> list[str]:
         return [(d1 - timedelta(days=k)).isoformat() for k in range((d1 - d0).days + 1)]
     return [(today - timedelta(days=k)).isoformat() for k in range(1, back + 1)]
 
-def run(lk, ops, days: list[str], stations: list, today: date, kinds=KINDS, minutes: float=MINUTES, clock=time.monotonic, truth=None, sat_all: bool=False) -> dict:
+def run(lk, ops, days: list[str], stations: list, today: date, kinds=KINDS, minutes: float=MINUTES, clock=time.monotonic, truth=None, sat_all: bool=False, cells=None) -> dict:
     import labbuild
     t0 = clock()
     counts: dict = {}
@@ -265,7 +374,7 @@ def run(lk, ops, days: list[str], stations: list, today: date, kinds=KINDS, minu
         if clock() - t0 > minutes * 60:
             _n(counts, 'days_left', len(days) - days.index(d))
             break
-        res += run_day(lk, ops, d, stations, today, kinds, snap, listing, elevs, truth, counts, sat_due)
+        res += run_day(lk, ops, d, stations, today, kinds, snap, listing, elevs, truth, counts, sat_due, cells)
         _n(counts, 'days')
     return {'counts': counts, 'summary': P.summary(res) if res else 'pairs: nothing to do'}
 

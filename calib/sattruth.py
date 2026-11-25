@@ -22,6 +22,8 @@ GEO_ZEN_MAX = 70.0
 TOP_MAX_KM = 16.0
 PAD_KM = R_KM + TOP_MAX_KM * math.tan(math.radians(GEO_ZEN_MAX))
 LOW_TOP_M = 2500.0
+CU_TOP_AGL = 3500.0
+CU_HIDDEN = 0.3
 LOOKUP_KM = 12.0
 EARTH_KM = 6371.0
 J2000 = datetime(2000, 1, 1, 12, tzinfo=timezone.utc)
@@ -539,7 +541,7 @@ def pick(preps: list, product: str, u, t_valid: datetime):
 
 def _when(ts):
     return None if ts is None else datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-EMPTY = {'cloud_frac': math.nan, 'n_pix': 0, 'n_good': 0, 't_mask': None, 'dt_mask': None, 'mask_levels': None, 'water_frac': math.nan, 'low_water_frac': math.nan, 'ice_frac': math.nan, 'n_phase': 0, 't_phase': None, 'cth_mean': math.nan, 'cth_max': math.nan, 'n_height': 0, 't_height': None, 'cbh_mean': math.nan, 'n_base': 0, 't_base': None, 'sat_zen': math.nan, 'shift_km': math.nan, 'parallax': None}
+EMPTY = {'cloud_frac': math.nan, 'n_pix': 0, 'n_good': 0, 't_mask': None, 'dt_mask': None, 'mask_levels': None, 'water_frac': math.nan, 'low_water_frac': math.nan, 'ice_frac': math.nan, 'n_phase': 0, 't_phase': None, 'cth_mean': math.nan, 'cth_max': math.nan, 'n_height': 0, 't_height': None, 'cbh_mean': math.nan, 'n_base': 0, 't_base': None, 'cu_cover': math.nan, 'sat_zen': math.nan, 'shift_km': math.nan, 'parallax': None}
 
 def low_water(g, v, hts):
     water = g & ((v == 1) | (v == 2))
@@ -548,11 +550,17 @@ def low_water(g, v, hts):
     known = g & ~(water & ~known_h)
     return (low, known, water, water & known_h)
 
-def truth_at(points: list, layers: list, r_km: float=R_KM) -> list:
+def cu_water(g, v, hts, ground: float):
+    water = g & ((v == 1) | (v == 2))
+    known_h = np.isfinite(hts)
+    return (water & known_h & (hts - ground <= CU_TOP_AGL), g & ~(water & ~known_h))
+
+def truth_at(points: list, layers: list, r_km: float=R_KM, grounds=None) -> list:
     layers = [L for L in layers if L is not None]
     preps = [Prepared(L, L if L['product'] == 'height' else _same_scan(layers, L), r_km) for L in layers]
     rows = []
-    for lat, lon, tv in points:
+    for k_pt, (lat, lon, tv) in enumerate(points):
+        ground = grounds[k_pt] if grounds is not None else None
         tv = _utc(tv)
         row = {'lat': lat, 'lon': lon, 't_valid': tv.strftime('%Y-%m-%dT%H:%M:%SZ'), 'status': 'no_scan', 'sensor': None, 'blocked': [], **EMPTY}
         u = _unit(lat, lon)
@@ -582,6 +590,9 @@ def truth_at(points: list, layers: list, r_km: float=R_KM) -> list:
                 n, nk = (int(g.sum()), int(known.sum()))
                 cloud_seen |= bool((g & (v >= 1)).any())
                 row.update(n_phase=n, t_phase=when, water_frac=float(water.sum() / n) if n else math.nan, low_water_frac=float(low.sum() / nk) if nk and (not (water.any() and (not water_h.any()))) else math.nan, ice_frac=float((g & (v == 4)).sum() / n) if n else math.nan)
+                if ground is not None and math.isfinite(ground) and nk and (not (water.any() and (not water_h.any()))) and (row['ice_frac'] <= CU_HIDDEN):
+                    cu, _ = cu_water(g, v, P.h[idx], float(ground))
+                    row['cu_cover'] = float(cu.sum() / nk)
             elif product == 'height':
                 hv = g & np.isfinite(v)
                 row.update(n_height=int(hv.sum()), t_height=when, cth_mean=float(v[hv].mean()) if hv.any() else math.nan, cth_max=float(v[hv].max()) if hv.any() else math.nan)
@@ -605,7 +616,7 @@ def truth_at(points: list, layers: list, r_km: float=R_KM) -> list:
         rows.append(row)
     return rows
 
-def cells(layers: list, step: float=CELL_DEG) -> list:
+def cells(layers: list, step: float=CELL_DEG, ground=None) -> list:
     by = {L['product']: L for L in layers if L is not None}
     if 'mask' not in by:
         return []
@@ -633,7 +644,10 @@ def cells(layers: list, step: float=CELL_DEG) -> list:
         j = np.searchsorted(keys, k)
         hit = (j < n) & (keys[np.minimum(j, n - 1)] == k)
         return (ok, hit, j[hit], h[hit])
-    lw, ice, cth = (np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan))
+    lw, ice, cth, cuc = (np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan))
+    ky = np.floor_divide(keys + 50000, 100000)
+    kx = keys - ky * 100000
+    gc = None if ground is None else np.asarray(ground((ky + 0.5) * step, (kx + 0.5) * step), np.float64)
     with np.errstate(invalid='ignore', divide='ignore'):
         if 'phase' in by:
             P = by['phase']
@@ -642,16 +656,19 @@ def cells(layers: list, step: float=CELL_DEG) -> list:
             low, known, water, water_h = low_water(g, v, h)
             npx = cnt(g.astype(float), j)
             lw = cnt(low.astype(float), j) / cnt(known.astype(float), j)
-            lw[(cnt(water.astype(float), j) > 0) & (cnt(water_h.astype(float), j) == 0)] = np.nan
+            unknown = (cnt(water.astype(float), j) > 0) & (cnt(water_h.astype(float), j) == 0)
+            lw[unknown] = np.nan
             ice = cnt((g & (v == 4)).astype(float), j) / npx
+            if gc is not None:
+                cu, _ = cu_water(g, v, h, gc[j])
+                cuc = cnt(cu.astype(float), j) / cnt(known.astype(float), j)
+                cuc[unknown | ~(ice <= CU_HIDDEN) | ~np.isfinite(gc)] = np.nan
         if H is not None:
             ok, hit, j, h = onto(H)
             g = H['good'][ok][hit] & np.isfinite(h)
             cth = cnt(np.where(g, h, 0.0), j) / cnt(g.astype(float), j)
         cf = cloud / n_good
-    ky = np.floor_divide(keys + 50000, 100000)
-    kx = keys - ky * 100000
-    return [{'lat': round(float((ky[k] + 0.5) * step), 4), 'lon': round(float((kx[k] + 0.5) * step), 4), 't': _when(float(t[k])), 'n_pix': int(n_pix[k]), 'cloud_frac': float(cf[k]), 'low_water_frac': float(lw[k]), 'ice_frac': float(ice[k]), 'cth_mean': float(cth[k]), 'cu_cover': math.nan, 'sat_zen': round(float(zen[k]), 2)} for k in range(n)]
+    return [{'lat': round(float((ky[k] + 0.5) * step), 4), 'lon': round(float((kx[k] + 0.5) * step), 4), 't': _when(float(t[k])), 'n_pix': int(n_pix[k]), 'cloud_frac': float(cf[k]), 'low_water_frac': float(lw[k]), 'ice_frac': float(ice[k]), 'cth_mean': float(cth[k]), 'cu_cover': float(cuc[k]), 'sat_zen': round(float(zen[k]), 2)} for k in range(n)]
 
 def list_keys(bucket: str, prefix: str) -> list:
     keys, token = ([], None)
@@ -819,7 +836,7 @@ def read_any(src: dict, product: str, where, bbox):
     return read_laads(laads_open(where) if isinstance(where, str) and where.startswith('http') else where, product, bbox, src['sensor'])
 _RANK = {'ok': 3, 'no_pixels': 2, 'not_configured': 1, 'no_scan': 0}
 
-def truth(points: list, now: datetime | None=None, lister=None, reader=None, log=None) -> list:
+def truth(points: list, now: datetime | None=None, lister=None, reader=None, log=None, grounds=None) -> list:
     reader = reader or read_any
     say = log or (lambda m: None)
     kept, lkept = ({}, {})
@@ -886,7 +903,7 @@ def truth(points: list, now: datetime | None=None, lister=None, reader=None, log
                     layers.append(L)
                     if s['kind'] == 'geo':
                         break
-            got = truth_at(pts, layers)
+            got = truth_at(pts, layers, grounds=[grounds[i] for i in idx] if grounds is not None else None)
             del layers
             for i, r in zip(idx, got):
                 bl = sorted(blocked[i] | cut)
@@ -903,7 +920,7 @@ def truth(points: list, now: datetime | None=None, lister=None, reader=None, log
         todo = again
     return rows
 
-def cells_for(src: dict, t: datetime, bbox, lister=None, reader=None, log=None) -> list:
+def cells_for(src: dict, t: datetime, bbox, lister=None, reader=None, log=None, ground=None) -> list:
     reader = reader or read_any
     t = _utc(t)
     lat, lon = ((bbox[1] + bbox[3]) / 2, ((bbox[0] + bbox[2]) / 2 + 180) % 360 - 180)
@@ -926,4 +943,4 @@ def cells_for(src: dict, t: datetime, bbox, lister=None, reader=None, log=None) 
             if L is not None:
                 layers.append(L)
                 break
-    return cells(layers)
+    return cells(layers, ground=ground)

@@ -445,6 +445,42 @@ def sat_cell_obs(cells: list, t_valid: int, sensor: str='', step: float=SAT_SAMP
     cols['q_dt_mask'] = np.array([np.nan if w is None else w - int(t_valid) for w in when], np.float32)
     return table(obs_schema('sat'), cols, len(rows))
 
+def slim_at_points(z, done: dict | None, ids: list, lat, lon, src: str='ops') -> dict:
+    g = json.loads(_s(z['grid']))
+    lat, lon = (np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    c = z['codes']
+    x = np.round((lon - g['west']) / g['step']).astype(int)
+    y = np.round((g['north'] - lat) / g['step']).astype(int)
+    ok = (x >= 0) & (y >= 0) & (y < c.shape[2]) & (x < c.shape[3])
+    codes = np.ascontiguousarray(np.asarray(c[:, :, y[ok], x[ok]], np.uint8).transpose(0, 2, 1))
+    model, run = (_s(z['model']), _s(z['run']))
+    stamps = [str(s) for s in np.asarray(z['stamps'])]
+    enc = z['enc']
+    enc = json.loads(_s(enc)) if not isinstance(enc, dict) else enc
+    avail = _iso_ts((done or {}).get('published_t')) if (done or {}).get('published') else None
+    return {'model': model, 'run': run, 'build': str((done or {}).get('build') or ''), 'src': src, 'replay': False, 'missing_w': False, 'missing_blh_heat': False, 'review': False, 'avail_t': avail, 'stamps': stamps, 'runs': [run] * len(stamps), 'leads': [(_ts(s) - _ts(run)) // 3600 for s in stamps], 'obs_ids': [str(i) for i, k in zip(ids, ok) if k], 'codes': codes, 'fields': [str(f) for f in np.asarray(z['fields'])], 'enc': enc, 'stations_v': None, 'elev_st': np.full(int(ok.sum()), np.nan), 'lat': lat[ok], 'lon': lon[ok]}
+
+def slim_ground(z):
+    g = json.loads(_s(z['grid']))
+    enc = z['enc']
+    enc = json.loads(_s(enc)) if not isinstance(enc, dict) else enc
+    e = enc.get('elevation')
+    codes = np.asarray(z['elev'], np.uint8)
+    if not e:
+        return lambda la, lo: np.full(np.shape(la), np.nan)
+    lo_, hi_ = (float(e[0]), float(e[1]))
+    vals = np.where(codes == 255, np.nan, lo_ + codes.astype(np.float64) / 254 * (hi_ - lo_))
+
+    def at(la, lo):
+        la, lo = (np.asarray(la, np.float64), np.asarray(lo, np.float64))
+        x = np.round((lo - g['west']) / g['step']).astype(int)
+        y = np.round((g['north'] - la) / g['step']).astype(int)
+        ok = (x >= 0) & (y >= 0) & (y < vals.shape[0]) & (x < vals.shape[1])
+        out = np.full(la.shape, np.nan)
+        out[ok] = vals[y[ok], x[ok]]
+        return out
+    return at
+
 def record_at_points(grid: dict, ids: list, lat, lon) -> dict:
     lat, lon = (np.asarray(lat, np.float64), np.asarray(lon, np.float64))
     c = np.asarray(grid['codes'], np.uint8)
