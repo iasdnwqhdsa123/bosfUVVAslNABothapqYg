@@ -30,10 +30,14 @@ TOP_PAD = 200.0
 EDGE_S, CLIMB_PAD, ENGINE_ON = (300.0, 30.0, 500.0)
 BANDS = {'low': 0, 'layer': 1, 'above': 2}
 WIND_OF = {0: ('u_g300', 'v_g300'), 1: ('u_blavg', 'v_blavg'), 2: ('u_bltop', 'v_bltop')}
-AIR_FIELDS = ('wstar', 'zi', 'depth', 'cubase', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth_m200', 'dth_m500', 't2', 'heat', 'ridge', 'sink', 'conv', 'wblmax', 'elevation', 'u_blavg', 'v_blavg', 'u_g300', 'v_g300', 'u_g100', 'v_g100', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop')
-LIFT_FIELDS = ('ridge', 'sink', 'conv', 'wblmax')
+AIR_FIELDS = ('wstar', 'zi', 'depth', 'cubase', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth_m200', 'dth_m500', 't2', 'heat', 'ridge', 'sink', 'conv', 'wblmax', 'elevation', 'u_blavg', 'v_blavg', 'u_g300', 'v_g300', 'u_g100', 'v_g100', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', *common.GROUPS['aloft'])
+WIND_FT = (3000, 6000, 10000, 15000)
+WAVE_FT = (6000, 8000, 10000, 12000, 14000, 18000)
+LEVEL_REACH_FT = 2000.0
+FT = 0.3048
+LIFT_FIELDS = ('ridge', 'sink', 'conv', 'wblmax', 'wavemax')
 FAR_KM = 60.0
-NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month')
+NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at')
 NODE_TIMEOUT = 600
 
 def object_key(lk, r: dict) -> str:
@@ -86,6 +90,16 @@ def pieces(f: dict) -> list[list]:
             i += 1
     return out
 
+def at_height(vals: dict, levels, ft: float) -> float:
+    lv = [(f, vals[f]) for f in levels if math.isfinite(vals.get(f, float('nan')))]
+    if not lv or not math.isfinite(ft):
+        return float('nan')
+    for (f0, v0), (f1, v1) in zip(lv, lv[1:]):
+        if f0 <= ft <= f1:
+            return v0 + (v1 - v0) * (ft - f0) / (f1 - f0)
+    near = min(lv, key=lambda x: abs(x[0] - ft))
+    return near[1] if abs(near[0] - ft) <= LEVEL_REACH_FT else float('nan')
+
 def _speed_dir(u: float, v: float) -> tuple[float, float]:
     if not (math.isfinite(u) and math.isfinite(v)):
         return (float('nan'), float('nan'))
@@ -111,8 +125,13 @@ def judge(fx: list, B: dict, cls: str, model: str | None=None) -> dict | None:
     zi = at('zi')
     top = zi if math.isfinite(zi) else 0.0
     band = BANDS['low'] if agl < LOW_AGL else BANDS['above'] if agl > top + TOP_PAD else BANDS['layer']
+    alt_ft = float(np.mean([p[3] for p in fx])) / FT
+    ua = at_height({f: at(f'u_a{f}') for f in WIND_FT}, WIND_FT, alt_ft)
+    va_ = at_height({f: at(f'v_a{f}') for f in WIND_FT}, WIND_FT, alt_ft)
     ku, kv = WIND_OF[band]
     u, v = (at(ku), at(kv))
+    if band == BANDS['above'] and math.isfinite(ua) and math.isfinite(va_):
+        u, v = (ua, va_)
     if not (math.isfinite(u) and math.isfinite(v)):
         u, v = (at('u_blavg'), at('v_blavg'))
     if not (math.isfinite(u) and math.isfinite(v)):
@@ -142,6 +161,10 @@ def judge(fx: list, B: dict, cls: str, model: str | None=None) -> dict | None:
     out['ws_top'] = _speed_dir(at('u_bltop'), at('v_bltop'))[0]
     out.update({'along': wind_along, 'ground': float(np.mean(gr)), 'relief_line': max(gr) - min(gr), 'rise': rise, 'upslope': rise * wind_along if math.isfinite(rise) else float('nan')})
     out['zr'] = agl / zi if math.isfinite(zi) and zi > 0 else float('nan')
+    out['alt'] = alt_ft * FT
+    out['wv_at'] = at_height({f: at(f'wv{f}') for f in WAVE_FT}, WAVE_FT, alt_ft)
+    out['wavemax'] = along('wavemax')[1]
+    out['ws_at'] = math.hypot(ua, va_) if math.isfinite(ua) and math.isfinite(va_) else float('nan')
     tt = datetime.fromtimestamp(t, timezone.utc)
     out['solar_h'] = ((tt.hour + tt.minute / 60 + mid[1] / 15) % 24 + 24) % 24
     out['month'] = tt.month
@@ -223,8 +246,11 @@ def load_all(lk, counts=None) -> dict:
         c = unpack(lk.get(k))
         if counts is not None:
             counts['units'] = counts.get('units', 0) + 1
-        if not len(c.get('netto', [])):
+        n = len(c.get('netto', []))
+        if not n:
             continue
+        for name in NUM:
+            c.setdefault(name, np.full(n, np.nan))
         for name, v in c.items():
             cols.setdefault(name, []).append(v)
     return {k: np.concatenate(v) for k, v in cols.items() if len(v) == len(cols.get('netto', []))} if cols else {}

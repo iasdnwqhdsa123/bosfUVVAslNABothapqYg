@@ -16,12 +16,12 @@ SCHEMA = 'air-head/1'
 MIN_PIECES = 3000
 GAIN_MIN = 0.01
 REGION_MIN, REGION_SLACK = (500, 0.01)
-FIT_BANDS = (0, 1)
-AIR = ('ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'nlow', 'blapse', 'dth200', 'dth500', 'ws_bl', 'ws_300', 'wd_300', 'ws_top', 'agl', 'zr', 'band', 'step', 'solar_h', 'lat')
-PHYS = ('ridge_g', 'sink', 'conv', 'line_km', 'wblmax')
+FIT_BANDS = (0, 1, 2)
+AIR = ('ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'nlow', 'blapse', 'dth200', 'dth500', 'ws_bl', 'ws_300', 'wd_300', 'ws_top', 'ws_at', 'agl', 'zr', 'band', 'step', 'solar_h', 'lat')
+PHYS = ('ridge_g', 'sink', 'conv', 'line_km', 'wblmax', 'wv_at', 'wavemax')
 COARSE = AIR + PHYS
 FINE = ('ridge_site',)
-MONO = {'ridge_site': 1, 'ridge_g': 1, 'sink': -1, 'conv': 1, 'line_km': -1, 'wblmax': 1}
+MONO = {'ridge_site': 1, 'ridge_g': 1, 'sink': -1, 'conv': 1, 'line_km': -1, 'wblmax': 1, 'wv_at': 1}
 FINE_BINS = {'ridge_site': [round(0.1 * i, 2) for i in range(41)]}
 CLAMP = (-6.0, 6.0)
 TREE = dict(loss='absolute_error', max_iter=150, learning_rate=0.08, max_leaf_nodes=8, min_samples_leaf=100, l2_regularization=1.0, random_state=0)
@@ -35,7 +35,8 @@ def frame(cols: dict) -> tuple[dict, np.ndarray]:
     return (T, m)
 
 def X(T: dict, names) -> np.ndarray:
-    return np.column_stack([np.asarray(T[n], np.float64) for n in names])
+    n = len(T['netto']) if 'netto' in T else len(next(iter(T.values())))
+    return np.column_stack([np.asarray(T[k], np.float64) if k in T else np.full(n, np.nan) for k in names])
 
 def model(names, constrained: bool=True):
     from sklearn.ensemble import HistGradientBoostingRegressor
@@ -48,8 +49,8 @@ def model(names, constrained: bool=True):
     return HistGradientBoostingRegressor(monotonic_cst=mono, interaction_cst=cst, **TREE)
 
 def layers(T: dict) -> np.ndarray:
-    z = lambda k: np.nan_to_num(np.asarray(T[k], np.float64), nan=0.0)
-    return np.maximum(np.maximum(z('ridge_site'), z('ridge_g')), 0) - np.maximum(z('sink'), 0) + np.maximum(z('conv'), 0)
+    z = lambda k: np.nan_to_num(np.asarray(T[k], np.float64), nan=0.0) if k in T else np.zeros(len(T['netto']))
+    return np.maximum(np.maximum(z('ridge_site'), z('ridge_g')), 0) - np.maximum(z('sink'), 0) + np.maximum(z('conv'), 0) + z('wv_at')
 
 def folds(days, k: int=5, seed: int=0) -> list[set]:
     d = np.array(sorted(set(days)))
@@ -159,7 +160,7 @@ def report_md(month: str, r: dict) -> str:
     if 'mae' in r:
         mae = r['mae']
         L += ['', 'Mean absolute error of the netto (m/s), held out by date:', '', '| | the layers as they are | the air alone | every input, no constraint | the head |', '| --- | --- | --- | --- | --- |', f"| all | {mae['layers']:.3f} | {mae['air']:.3f} | {mae['full']:.3f} | {mae['head']:.3f} |"]
-        band = {'0': 'low (ridge band)', '1': 'in the thermal layer', '0.0': 'low (ridge band)', '1.0': 'in the thermal layer'}
+        band = {'0.0': 'low (ridge band)', '1.0': 'in the thermal layer', '2.0': 'above the layer (wave band)'}
         for name, label in (('bands', band), ('regions', {})):
             for g, v in sorted(r[name].items()):
                 L.append(f"| {label.get(g, g)} ({v['n']}) | {v['layers']:.3f} | {v['air']:.3f} | {v['full']:.3f} | {v['head']:.3f} |")

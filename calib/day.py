@@ -21,9 +21,9 @@ FIELDS = ['wstar', 'depth', 'cubase', 'cudepth', 'twidth', 'blapse', 'zi', 'dens
 PAD_LON, PAD_LAT = (1.5, 1.2)
 BUILD_TIMEOUT, EVAL_TIMEOUT = (25 * 60, 15 * 60)
 GRID_FIELDS = os.environ.get('CALIB_GRID_FIELDS', 'all')
-SAVE_ALSO = ('elevation', 'conv', 'wblmax', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'dth_m200', 'dth_m500', 'heat', 'snowd', 'soilm')
+SAVE_ALSO = ('elevation', 'conv', 'wblmax', 'u_sfc', 'v_sfc', 'u_bltop', 'v_bltop', 'u_g100', 'v_g100', 'dth_m200', 'dth_m500', 'heat', 'snowd', 'soilm', *common.GROUPS['aloft'])
 GRID_HOURS = os.environ.get('CALIB_GRID_HOURS', 'all')
-DUMP_FIELDS = FIELDS + [f for f in SAVE_ALSO if f not in FIELDS]
+DUMP_FIELDS = FIELDS + [f for f in SAVE_ALSO if f not in FIELDS and f not in common.GROUPS['aloft']]
 
 def boxes(flights: list[dict]) -> list[dict]:
     q = lambda v, up: (math.ceil if up else math.floor)(v / 0.03) * 0.03
