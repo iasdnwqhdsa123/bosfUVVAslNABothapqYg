@@ -354,7 +354,10 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
         return done('ok', tried=True)
     try:
         wd = tempfile.mkdtemp(prefix='u-', dir=work)
-        if u['kind'] == catalog.STCAST:
+        if u['kind'] == catalog.STCAST and u.get('model') in _om_models():
+            import omruns
+            arrays = omruns.unit_arrays(u, _gv6(gv), cs, stations(), hard_at=hard_at, clock=clock)
+        elif u['kind'] == catalog.STCAST:
             arrays = _hindcast(u, gv, cs, steps, wd, hard_at, clock)
             if arrays is None:
                 return done('retry', 'hardstop')
@@ -396,6 +399,10 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
     finally:
         if wd:
             shutil.rmtree(wd, ignore_errors=True)
+
+def _om_models() -> tuple:
+    import omruns
+    return tuple(omruns.MODELS)
 
 def _hindcast(u: dict, gv: dict, cs: str, steps: Steps, wd: str, hard_at, clock) -> dict | None:
     import stationcast

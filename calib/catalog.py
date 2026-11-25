@@ -20,7 +20,8 @@ STATION_LISTS = 'derived/stations/'
 KINDS = ('flight', 'collector')
 STCAST = 'stcast'
 STCAST_RUN_H = (0, 12)
-STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU', 'SH'), 'ecmwf': ('US', 'EU', 'SH')}
+STCAST_RUN_H_OF = {'arome': (3, 15)}
+STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU', 'SH'), 'ecmwf': ('US', 'EU', 'SH'), 'icon': ('US', 'SH'), 'icond2': ('EU',), 'arome': ('EU',)}
 STCAST_CONSUMERS = ('pairs',)
 
 def stcast_consumers(area_gv: dict | None) -> tuple:
@@ -44,7 +45,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 VERIFY = os.path.join(common.PIPELINE, 'verify.py')
 STATIONS = os.path.join(common.PIPELINE, 'verify_stations.json')
 OPSLAKE = os.path.join(common.PIPELINE, 'opslake.py')
-RUNNER_FILES = ('day.py', 'common.py', 'track.py', 'collector.py', 'labbuild.py', 'catalog.py', 'stationcast.py')
+RUNNER_FILES = ('day.py', 'common.py', 'track.py', 'collector.py', 'labbuild.py', 'catalog.py', 'stationcast.py', 'omruns.py')
 
 class UnitError(ValueError):
     pass
@@ -64,7 +65,7 @@ def check_unit(u) -> dict:
     except ValueError:
         raise UnitError('unit') from None
     if kind == STCAST:
-        if not ok or init == 'own' or macro not in common.MACRO or (key != common.day_key(d, macro)) or (init[:8] != d.replace('-', '')) or (int(init[8:]) not in STCAST_RUN_H) or (macro not in STCAST_AREAS.get(model, ())) or (box != macro):
+        if not ok or init == 'own' or macro not in common.MACRO or (key != common.day_key(d, macro)) or (init[:8] != d.replace('-', '')) or (int(init[8:]) not in STCAST_RUN_H_OF.get(model, STCAST_RUN_H)) or (macro not in STCAST_AREAS.get(model, ())) or (box != macro):
             raise UnitError('unit')
         return {'kind': kind, 'daykey': key, 'model': model, 'init': init, 'box': box}
     if not ok or kind not in KINDS or macro not in common.MACRO or (key != common.day_key(d, macro)) or (model not in common.MODEL_MACRO) or common.is_lead(model) or (box not in common.REGION_MACRO) or (common.macro_of(box) != macro):

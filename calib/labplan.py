@@ -12,6 +12,7 @@ import build_eu
 import catalog
 import common
 import stationcast
+import omruns
 CHUNK_S = 40 * 60
 SETUP_S = 4 * 60
 MIN_SAMPLES = 5
@@ -20,7 +21,7 @@ OM_PAR = 6
 EARLY_OLD = 6
 MAX_TRIES = catalog.MAX_TRIES
 AREAS = ('US', 'EU', 'SH')
-DEFAULT_S = {('own', 'hrrr'): 300, ('own', 'gfs'): 90, ('own', 'ecmwf'): 120, ('own', 'icon'): 150, ('own', 'icond2'): 330, ('own', 'arome'): 240, ('lead', 'hrrr'): 300, ('lead', 'gfs'): 90, ('lead', 'ecmwf'): 150, (catalog.STCAST, 'hrrr'): 1200, (catalog.STCAST, 'gfs'): 200, (catalog.STCAST, 'ecmwf'): 600}
+DEFAULT_S = {('own', 'hrrr'): 300, ('own', 'gfs'): 90, ('own', 'ecmwf'): 120, ('own', 'icon'): 150, ('own', 'icond2'): 330, ('own', 'arome'): 240, ('lead', 'hrrr'): 300, ('lead', 'gfs'): 90, ('lead', 'ecmwf'): 150, (catalog.STCAST, 'hrrr'): 1200, (catalog.STCAST, 'gfs'): 200, (catalog.STCAST, 'ecmwf'): 600, (catalog.STCAST, 'icon'): 60, (catalog.STCAST, 'icond2'): 20, (catalog.STCAST, 'arome'): 20}
 FALLBACK_S = 200
 OM_MODELS = ('icon', 'icond2', 'arome')
 EXTRA_FIRST = {'ecmwf': common.EU_START, 'icon': common.ICON_FIRST}
@@ -405,6 +406,8 @@ def main(argv: list[str]) -> int:
             st = stationcast.units(store.name, counts=st_bad)
         except ValueError:
             print("labplan: CALIB_STCAST_MONTHS doesn't read (YYYY-MM:YYYY-MM): no station hindcast planned")
+        if omruns.enabled():
+            st = (st or []) + omruns.units(store.name, counts=st_bad)
     p = plan(list(snap['raw'].values()), snap['rows'], pin_of(before), now, par, a.sweep, a.wave, store.name, on_change, paused, stcast=st)
     if st_bad.get('bad_unit'):
         p['counts']['bad_unit'] = p['counts'].get('bad_unit', 0) + st_bad['bad_unit']

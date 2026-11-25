@@ -33,6 +33,7 @@ SOLAR_BINS = ['night', [0, 10], [10, 13], [13, 16], [16, 24]]
 N_MIN = 500
 SHRINK_N = 500
 OPS_DAYS_MIN = {'icon': 60, 'arome': 60, 'icond2': 60}
+ARCHIVED_RUNS = ('icon', 'icond2', 'arome')
 MIN_FIT = 200
 MIN_FEATURE = 0.02
 SRC_CODE = {'ops': 0, 'archive': 1, 'stcast': 2, 'hind': 3}
@@ -129,7 +130,8 @@ def assemble(snap: dict, pairs: dict, obs: dict, static: dict | None=None, membe
         F[f'regime_{m}'] = np.where(pres, reg, -1)
         su, sinv = np.unique(np.asarray(snap.get(f'src_{m}', [''] * n), dtype=object).astype(str), return_inverse=True)
         F[f'src_{m}'] = np.array([SRC_CODE.get(x, np.nan) for x in su], np.float64)[sinv.reshape(-1)] if n else np.zeros(0)
-        F[f'opsday_{m}'] = pres & (np.asarray(snap.get(f'src_{m}', [''] * n), dtype=object).astype(str) == 'ops')
+        src = np.asarray(snap.get(f'src_{m}', [''] * n), dtype=object).astype(str)
+        F[f'opsday_{m}'] = pres & ((src == 'ops') | (src == 'stcast') & (m in ARCHIVED_RUNS))
         t = pairs.get(m)
         for v in ('t2', 'td2', 'wind', 'cubase', 'cu', 'ws', 'wd', 'cuclass', 'elev', 'replay', 'zi', 'depth', 'wstar'):
             F[f'{v}_{m}'] = np.full(n, np.nan)

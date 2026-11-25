@@ -24,6 +24,7 @@ concurrency:
 env:
   CONTRAILS: "0"
   CALIB_STCAST: ${{ vars.CALIB_STCAST || 'on' }}
+  CALIB_OMRUNS: ${{ vars.CALIB_OMRUNS || '1' }}
   PAUSE_FILE: lab.paused
   WAIT_S: "600"
   WAIT_FOR_S: "2700"
@@ -78,6 +79,7 @@ jobs:
       - id: plan
         if: steps.check.outputs.ready == 'yes'
         env:
+          OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
           SWEEP: ${{ steps.args.outputs.sweep }}
           WAVE: ${{ steps.args.outputs.wave }}
@@ -135,6 +137,7 @@ jobs:
       - run: pip install -q -r calib/requirements.txt -r pipeline/requirements.txt
       - name: Chunk
         env:
+          OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
           STARTED: ${{ steps.start.outputs.started }}
         run: |
           mkdir -p /tmp/logs
@@ -188,6 +191,7 @@ jobs:
         id: next
         if: steps.check.outputs.ready == 'yes'
         env:
+          OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
           SWEEP: ${{ needs.plan.outputs.sweep }}
           WAVE: ${{ needs.plan.outputs.wave }}
