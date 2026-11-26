@@ -549,3 +549,15 @@ jobs:
           if [ "$n" -gt 0 ]; then echo "a run is waiting already: it goes next"; exit 0; fi
           for i in 1 2 3 4 5; do gh workflow run "$self" -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f days="${DAYS:-$DAYS_PER_RUN}" -f new_days="${NEW:-on}" -f chain=on -f after_failure=yes && break; [ "$i" = 5 ] && exit 1; sleep $((30 << (i - 1))); done
           echo "next run asked for, after this one's failure"
+  watch:
+    needs: [gate, merge]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Lab watch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3 4 5; do gh workflow run lab-watch.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" && break; [ "$i" = 5 ] && exit 1; sleep $((30 << (i - 1))); done
+          echo "Lab watch asked for"
