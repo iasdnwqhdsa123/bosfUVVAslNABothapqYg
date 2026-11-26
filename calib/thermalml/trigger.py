@@ -1,9 +1,20 @@
 from __future__ import annotations
 import math
 from . import learn as lab
-TRIGGER_V = 't2'
+TRIGGER_V = 't3'
 TRIG = {'hour_bin': 2, 'kappa': 1.0, 'ridge': 1.0, 'slot_cap': 120, 'boot': 400, 'seed': 1}
 SLOT_H = 30 / 3600
+SWEEP_MS = {'glider': 35.0, 'hg': 16.0, 'pg': 11.0}
+
+def sweep_weights(sig: dict | None=None) -> list:
+    by = (sig or {}).get('by_type') or {}
+    s0 = (by.get('glider') or {}).get('m') or (sig or {}).get('m')
+    out = []
+    for t in lab.ex.TYPES:
+        st = (by.get(t) or {}).get('m')
+        ratio = st / s0 if st and s0 else 1.0
+        out.append(round(min(1.0, SWEEP_MS.get(t, SWEEP_MS['glider']) / SWEEP_MS['glider'] * ratio), 4))
+    return out
 SPACING = {'near_m': 20000.0, 'edges_m': [0, 250, 500, 1000, 2000, 4000, 8000, 16000]}
 
 def bins() -> list[int]:
@@ -20,14 +31,17 @@ def source_climbs(d: lab.Day) -> dict:
             out.setdefault(s, []).extend(d.thermals[t]['climbs'])
     return {s: sorted(cl, key=lambda i: (d.climbs[i]['t0'], i)) for s, cl in out.items()}
 
-def rows_of(d: lab.Day, cnt=None) -> dict:
+def rows_of(d: lab.Day, cnt=None, w=None) -> dict:
     import numpy as np
     cnt = cnt if cnt is not None else {}
     out = {}
     c = d.cols
     if len(c.get('h', [])):
         keep = d.row_ok & (c['part'] == 0)
-        h, i, j, cov = (c[k][keep].astype(np.int64) for k in ('h', 'i', 'j', 'cov'))
+        h, i, j = (c[k][keep].astype(np.int64) for k in ('h', 'i', 'j'))
+        wy = np.asarray(w if w is not None else sweep_weights(), dtype=float)
+        y = c['y'][keep].astype(np.int64) if 'y' in c else np.zeros(len(h), dtype=np.int64)
+        cov = c['cov'][keep].astype(float) * wy[np.clip(y, 0, len(wy) - 1)]
         if len(h):
             key = np.stack([h, i, j], axis=1)
             u, inv = np.unique(key, axis=0, return_inverse=True)
@@ -81,11 +95,12 @@ def key_hours(d: lab.Day) -> dict:
             best[k] = max(sorted(a), key=lambda x: a[x])
     return best
 
-def table(days: list, cnt=None) -> list:
+def table(days: list, cnt=None, w=None) -> list:
     out = []
+    w = w if w is not None else sweep_weights(sigma(days))
     for di, d in enumerate(days):
         cond = getattr(d, 'cond', None) or {}
-        for (I, J, hb), (E, N) in sorted(rows_of(d, cnt).items()):
+        for (I, J, hb), (E, N) in sorted(rows_of(d, cnt, w).items()):
             if E > 0:
                 out.append((di, I, J, hb, E, N, cond.get((I, J, hb))))
     return out
@@ -165,7 +180,7 @@ def surface(rows) -> dict:
     return {'beta': b.tolist(), 'theta': th, 'mean': mean, 'bins': eh, 'terms': terms}
 
 def sigma(days: list) -> dict:
-    h2, who = ([], set())
+    h2, who, by = ([], set(), {})
     for d in days:
         for g in d.join.get('glides', []):
             if g.get('same') or g.get('L') is None or g.get('d') is None:
@@ -175,10 +190,18 @@ def sigma(days: list) -> dict:
             L, D = (float(g['L']), float(g['d']))
             if D <= 0 or L < D:
                 continue
-            h2.append(max(0.0, (L / 2) ** 2 - (D / 2) ** 2))
-            who.add(d.acday(d.climbs[g['climb']]))
-    ok = lab.acdays(who) >= lab.K and h2
-    return {'m': lab.r(math.sqrt(sum(h2) / len(h2)), 0) if ok else None, 'n': len(h2) if ok else 0, 'acdays': lab.acdays(who) if ok else 0}
+            v = max(0.0, (L / 2) ** 2 - (D / 2) ** 2)
+            c = d.climbs[g['climb']]
+            h2.append(v)
+            who.add(d.acday(c))
+            b = by.setdefault(c.get('y'), ([], set()))
+            b[0].append(v)
+            b[1].add(d.acday(c))
+
+    def one(xs, ws):
+        ok = lab.acdays(ws) >= lab.K and xs
+        return {'m': lab.r(math.sqrt(sum(xs) / len(xs)), 0) if ok else None, 'n': len(xs) if ok else 0, 'acdays': lab.acdays(ws) if ok else 0}
+    return {**one(h2, who), 'by_type': {t: one(*by[t]) for t in sorted((k for k in by if isinstance(k, str)))}}
 
 def dist_summary(xs: list, who: set) -> dict | None:
     import numpy as np
