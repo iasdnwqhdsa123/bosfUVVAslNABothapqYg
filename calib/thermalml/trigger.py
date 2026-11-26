@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 from . import learn as lab
-TRIGGER_V = 't3'
+TRIGGER_V = 't4'
 TRIG = {'hour_bin': 2, 'kappa': 1.0, 'ridge': 1.0, 'slot_cap': 120, 'boot': 400, 'seed': 1}
 SLOT_H = 30 / 3600
 SWEEP_MS = {'glider': 35.0, 'hg': 16.0, 'pg': 11.0}
@@ -125,13 +125,14 @@ def fit(X, E, N, prior=None, ridge=None):
         if np.abs(step).max() < 1e-12:
             break
     return b
-COND_TERMS = ('cu', 'weak', 'unknown', 'log_wstar', 'wind')
+COND_TERMS = ('cu', 'weak', 'unknown', 'log_wstar', 'wind', 'snow', 'wet')
+SNOW_M = 0.05
 
 def cond_terms(c) -> list:
     if not c or c.get('regime') is None:
-        return [0.0, 0.0, 1.0, 0.0, 0.0]
-    w, ws = (c.get('wstar'), c.get('wind'))
-    return [1.0 if c['regime'] == 'cu' else 0.0, 1.0 if c['regime'] == 'weak' else 0.0, 0.0, math.log(max(float(w), 0.3) / 1.5) if w is not None else 0.0, (float(ws) - 5.0) / 5.0 if ws is not None else 0.0]
+        return [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    w, ws, sn, so = (c.get('wstar'), c.get('wind'), c.get('snow'), c.get('soil'))
+    return [1.0 if c['regime'] == 'cu' else 0.0, 1.0 if c['regime'] == 'weak' else 0.0, 0.0, math.log(max(float(w), 0.3) / 1.5) if w is not None else 0.0, (float(ws) - 5.0) / 5.0 if ws is not None else 0.0, 1.0 if sn is not None and float(sn) >= SNOW_M else 0.0, float(so) - 0.5 if so is not None else 0.0]
 
 def terms_of(rows) -> list:
     named = [f'bin {b}' for b in bins()]

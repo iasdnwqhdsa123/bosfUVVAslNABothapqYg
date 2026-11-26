@@ -9,9 +9,9 @@ import zipfile
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
-COND_V = 'c1'
+COND_V = 'c2'
 MODELS = ('hrrr', 'icond2', 'icon', 'gfs')
-FIELDS = ('wstar', 'zi', 'depth', 'cucover', 'u_blavg', 'v_blavg')
+FIELDS = ('wstar', 'zi', 'depth', 'cucover', 'u_blavg', 'v_blavg', 'snowd', 'soilm')
 CU_COVER = 0.05
 BLUE_W = 1.0
 REGIMES = ('cu', 'blue', 'weak')
@@ -117,7 +117,7 @@ def describe(v: dict | None) -> dict | None:
     if reg is None:
         return None
     clean = lambda x: round(x, 3) if math.isfinite(x) else None
-    return {'regime': reg, 'wstar': clean(w), 'zi': clean(v.get('zi', nan)), 'depth': clean(v.get('depth', nan)), 'cucover': clean(v.get('cucover', nan)), 'wind': clean(ws), 'wind_from': clean(wd)}
+    return {'regime': reg, 'wstar': clean(w), 'zi': clean(v.get('zi', nan)), 'depth': clean(v.get('depth', nan)), 'cucover': clean(v.get('cucover', nan)), 'wind': clean(ws), 'wind_from': clean(wd), 'snow': clean(v.get('snowd', nan)), 'soil': clean(v.get('soilm', nan))}
 
 def at_points(ops, points: dict, counts: dict | None=None) -> dict:
     counts = counts if counts is not None else {}

@@ -20,7 +20,7 @@ import verify
 UTC = timezone.utc
 STATION_FIELDS = verify.FIELDS + ('blapse', 'u_blavg', 'v_blavg', 'u_bltop', 'v_bltop', 'u_g300', 'v_g300', 'sun', 'ctop', 'cloud5', 'cloud10', 'ridge') + verify.SMOOTHED
 STATION_LEADS = frozenset([*range(0, 49), *range(51, 121, 3), *range(126, 241, 6)])
-SLIM_FIELDS = ('wstar', 'zi', 'depth', 'cubase', 'cudepth', 'cucover', 'cuclass', 'cloudlow', 'cloudmid', 'cloudhigh', 'ctop', 'refc', 'u_blavg', 'v_blavg')
+SLIM_FIELDS = ('wstar', 'zi', 'depth', 'cubase', 'cudepth', 'cucover', 'cuclass', 'cloudlow', 'cloudmid', 'cloudhigh', 'ctop', 'refc', 'u_blavg', 'v_blavg', 'snowd', 'soilm')
 SLIM_LEADS = range(0, 48)
 SUN_MIN = 5.0
 BLEND_FIELDS = ('t2', 'td2', 'u_sfc', 'v_sfc', 'cubase', 'cucover', 'cuclass', 'wstar', 'zi', 'depth')

@@ -288,11 +288,17 @@ def score_month(lk, ops, month: str, now: datetime, counts: dict | None=None, re
             sc = V.summarise(sub, sts, bad)
             regimes.append({'regime': name, 'pairs': sc['pairs'], 'side_by_side': sc['side_by_side']})
     keep = lambda t: ~np.isin(t['st'], list(bad))
-    out = {'schema': f'score/{SV}', 'month': month, 'generated': f'{now:%Y-%m-%dT%H:%MZ}', **main, 'regimes': regimes, 'gap': gap(_subset(ops_t, keep), _subset(re_t, keep)) if re_t else [], 'missing_runs': missing_runs(ops, month, now, counts), 'counts': kind_counts(lk, month) if lk is not None else {}, 'window': window_scores(read or (lambda what, kind, d: P.read_kind(lk, what, kind, [d], purpose='review')), month)}
+    out = {'schema': f'score/{SV}', 'month': month, 'generated': f'{now:%Y-%m-%dT%H:%MZ}', **main, 'regimes': regimes, 'gap': gap(_subset(ops_t, keep), _subset(re_t, keep)) if re_t else [], 'missing_runs': missing_runs(ops, month, now, counts), 'counts': kind_counts(lk, month) if lk is not None else {}, 'window': window_scores((rd := (read or (lambda what, kind, d: P.read_kind(lk, what, kind, [d], purpose='review')))), month), 'window_call': window_scores(rd, month, by_call=True)}
     _n(counts, 'pairs_scored', main['pairs'])
     return out
+CALL_BINS = ((0.0, 1.3, 'weak'), (1.3, 2.0, 'moderate'), (2.0, float('inf'), 'strong'))
 
-def window_scores(read, month: str) -> list:
+def call_of(wsmax: float) -> str | None:
+    if not math.isfinite(wsmax):
+        return None
+    return next((name for lo, hi, name in CALL_BINS if lo <= wsmax < hi))
+
+def window_scores(read, month: str, by_call: bool=False) -> list:
     by = {}
     for d in month_days(month):
         pt, ot = (read('pairs', 'window', d), read('obs', 'window', d))
@@ -306,7 +312,8 @@ def window_scores(read, month: str) -> list:
             lead = '0-24 h' if int(pt['lead_h'][j]) < 24 else '24-48 h' if int(pt['lead_h'][j]) < 48 else None
             if lead is None:
                 continue
-            s = by.setdefault((str(pt['model'][j]), lead), {'on': [], 'off': [], 'missed': 0, 'false': 0, 'n': 0})
+            call = (call_of(float(pt['f_wsmax'][j])) if 'f_wsmax' in pt else None) or 'unknown'
+            s = by.setdefault((str(pt['model'][j]), lead) + ((call,) if by_call else ()), {'on': [], 'off': [], 'missed': 0, 'false': 0, 'n': 0})
             s['n'] += 1
             ff, fl = (float(pt['f_first'][j]), float(pt['f_last'][j]))
             of, ol, on = (float(ot['o_first'][i]), float(ot['o_last'][i]), float(ot['o_n'][i]))
@@ -319,8 +326,9 @@ def window_scores(read, month: str) -> list:
             if on == 0 and math.isfinite(ff):
                 s['false'] += 1
     out = []
-    for (m, lead), s in sorted(by.items()):
-        row = {'model': m, 'lead': lead, 'n': s['n'], 'missed': s['missed'], 'false': s['false']}
+    for key, s in sorted(by.items()):
+        m, lead = key[:2]
+        row = {'model': m, 'lead': lead, 'n': s['n'], 'missed': s['missed'], 'false': s['false'], **({'call': key[2]} if by_call else {})}
         for k in ('on', 'off'):
             e = np.array(s[k], np.float64)
             row[k] = {'n': int(len(e)), 'mae': float(np.mean(np.abs(e))) if len(e) else None, 'bias': float(np.mean(e)) if len(e) else None}
@@ -387,6 +395,11 @@ def report_md(sc: dict) -> str:
         f = lambda v: '' if v['mae'] is None else f"{v['mae']:.2f} ({v['bias']:+.2f})"
         for r in sc['window']:
             lines.append(f"| {r['model']} | {r['lead']} | {r['n']:,} | {r['on']['n']:,} | {f(r['on'])} | {r['off']['n']:,} | {f(r['off'])} | {r['missed']:,} | {r['false']:,} |")
+    if sc.get('window_call'):
+        lines += ['', "## The soaring window by the forecast's own call", '', "The same, split by the day's strongest forecast W* in the cell (weak under 1.3 m/s, moderate to 2, strong from 2): people fly the days the forecast promised, so the cell-days flown lean to its good calls, and a weak call's few cell-days are the days the gliders went anyway.", '', '| Model | Lead | Call | Cell-days | Onset h | End h | Missed | False |', '|---|---|---|---|---|---|---|---|']
+        f = lambda v: '' if v['mae'] is None else f"{v['mae']:.2f} ({v['bias']:+.2f})"
+        for r in sc['window_call']:
+            lines.append(f"| {r['model']} | {r['lead']} | {r['call']} | {r['n']:,} | {f(r['on'])} | {f(r['off'])} | {r['missed']:,} | {r['false']:,} |")
     lines += ['', '## Runs missing', '']
     miss = sc['missing_runs']
     if miss is None:
