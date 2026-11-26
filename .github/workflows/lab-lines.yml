@@ -124,3 +124,9 @@ jobs:
           set -- run
           [ "$AGAIN" = "yes" ] && set -- "$@" --again
           python3 calib/airfit.py "$@"
+      - name: The sink between thermals' fit
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          python3 calib/sinkfit.py "$@"
