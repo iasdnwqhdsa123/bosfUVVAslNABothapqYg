@@ -159,3 +159,9 @@ jobs:
           set -- run
           [ "$AGAIN" = "yes" ] && set -- "$@" --again
           OMP_NUM_THREADS=2 python3 calib/windfit.py "$@"
+      - name: The wind's cost on the thermals' fit
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          OMP_NUM_THREADS=2 python3 calib/breakfit.py "$@"

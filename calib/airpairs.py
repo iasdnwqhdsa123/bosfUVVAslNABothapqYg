@@ -18,6 +18,7 @@ import common
 import lake as lakem
 import linecheck as lc
 import track
+import breakpairs
 import windpairs
 PREFIX = 'derived/air/p3/'
 VERSION = 3
@@ -339,9 +340,9 @@ def run(lk, minutes: float=55, read_unit=None, read_items=None, boxes=None, cloc
         if clock() > t_end:
             counts['left'] = counts.get('left', 0) + 1
             continue
-        key, wkey = (object_key(lk, r), windpairs.object_key(lk, r))
-        need_air, need_wind = (not lk.exists(key), not lk.exists(wkey))
-        if not need_air and (not need_wind):
+        key, wkey, bkey = (object_key(lk, r), windpairs.object_key(lk, r), breakpairs.object_key(lk, r))
+        need_air, need_wind, need_break = (not lk.exists(key), not lk.exists(wkey), not lk.exists(bkey))
+        if not need_air and (not need_wind) and (not need_break):
             counts['done_before'] = counts.get('done_before', 0) + 1
             continue
         parts = (raw.get(r['day']) or {}).get('parts') or []
@@ -360,6 +361,11 @@ def run(lk, minutes: float=55, read_unit=None, read_items=None, boxes=None, cloc
             lk.put(wkey, windpairs.pack(windpairs.columns(wr, model, step)), strict=False)
             counts['wind_units'] = counts.get('wind_units', 0) + 1
             counts['wind_rows'] = counts.get('wind_rows', 0) + len(wr)
+        if need_break:
+            br = breakpairs.unit_rows(box_from_unit(z), flights)
+            lk.put(bkey, breakpairs.pack(breakpairs.columns(br, model, step)), strict=False)
+            counts['break_units'] = counts.get('break_units', 0) + 1
+            counts['break_rows'] = counts.get('break_rows', 0) + len(br)
         if not need_air:
             continue
         ps = unit_pieces(z, flights, model, cls_of, ridge, log)
