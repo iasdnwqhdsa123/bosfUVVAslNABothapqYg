@@ -22,6 +22,9 @@ FIELDS = ('t2', 'td2', 'wind', 'cubase', 'cu')
 SHADOW = 'shadow/'
 MODELS_ROOT = 'derived/models/'
 SCORES = 'derived/shadow/'
+REGION_MODELS = {'conus': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'sh': ('ecmwf', 'icon', 'gfs'), 'alps': ('icond2', 'arome', 'ecmwf', 'icon')}
+CONVECTIVE = ('cubase', 'cu')
+RUN_BACK_H = 12
 
 def shadow_key(name: str, bid: str) -> str:
     if name not in NAMES or not re.fullmatch('[A-Za-z0-9._-]{1,80}', bid or ''):
@@ -122,14 +125,28 @@ def obs_values(obs: dict) -> dict:
 def _index(t: dict) -> dict:
     return {(str(a), int(b)): i for i, (a, b) in enumerate(zip(t['obs_id'], t['t_valid']))}
 
-def shadow_rows(blend_recs: list, base_recs: list, obs_by_day, lead_edges, solar_bins) -> dict:
+def newest_before(recs: list, back_h: int=RUN_BACK_H):
+    runs = sorted((r for r, _ in recs))
+    by = dict(recs)
+
+    def pick(run):
+        t = datetime.strptime(run, '%Y%m%d%H')
+        best = None
+        for r in runs:
+            dt = (t - datetime.strptime(r, '%Y%m%d%H')).total_seconds() / 3600
+            if 0 <= dt <= back_h:
+                best = r
+        return by.get(best) if best else None
+    return pick
+
+def shadow_rows(blend_recs: list, base_recs: list, obs_by_day, lead_edges, solar_bins, pick=None) -> dict:
     import blendtrain as BT
     import blend as B
     import build
-    base_of = dict(base_recs)
+    pick = pick or dict(base_recs).get
     cols = {f: {k: [] for k in ('day', 'area', 'lead_bin', 'sun', 'blend', 'base')} for f in FIELDS}
     for run, rec in blend_recs:
-        brec = base_of.get(run)
+        brec = pick(run)
         if brec is None:
             continue
         days = sorted({f'{s[:4]}-{s[4:6]}-{s[6:8]}' for s in rec['stamps']})
@@ -208,6 +225,39 @@ def score(name: str, bid: str, b: dict, oof: dict, rows: dict, lead_edges, solar
     iso = lambda d: date.fromordinal(date(1970, 1, 1).toordinal() + d).isoformat()
     return {'schema': SCHEMA, 'name': name, 'id': bid, 'days': len(days), 'first': iso(days[0]) if days else None, 'last': iso(days[-1]) if days else None, 'base': base_of(b, reg), 'fields': fields, 'made_at': (now or datetime.now(UTC)).strftime('%Y-%m-%dT%H:%M:%SZ')}
 
+def scoreboard(by_model: dict, b: dict, region: str, seed: int | None=None) -> dict:
+    import split
+    seed = split.SEED if seed is None else seed
+    fields = _region(b, region).get('fields') or {}
+    comps = []
+    for m, rows in sorted(by_model.items()):
+        for f in FIELDS:
+            r = rows.get(f) or {}
+            if not len(r.get('day', [])):
+                continue
+            day, area = (np.asarray(r['day'], np.int64), np.asarray(r['area'], np.int64))
+            week = split.week_of(day)
+            c = {'name': f'{f}|metar|{m}', 'changed': bool((fields.get(f) or {}).get('pass')), 'new': np.asarray(r['blend'], np.float64), 'base': np.asarray(r['base'], np.float64), 'blocks': split.blocks_of(week, area), 'week': week}
+            if f in CONVECTIVE:
+                c['soarable'] = np.asarray(r['sun'], np.int64) != 0
+            comps.append(c)
+    return _plain(split.launch_verdict(comps, seed=seed))
+
+def latest_scoreboard(lk, name: str='blend') -> dict | None:
+    best = None
+    for k in lk.list(f'{SCORES}{name}/'):
+        m = re.fullmatch(f'{SCORES}{name}/([A-Za-z0-9._-]{{1,80}})/score/(\\d{{8}}T\\d{{6,8}}Z)\\.json\\.lenc', k)
+        if m and (best is None or m.group(2) > best[0]):
+            best = (m.group(2), m.group(1))
+    if best is None:
+        return None
+    got = newest_score(lk, name, best[1])
+    if not got:
+        return None
+    sc = got[1]
+    boards = {r: v['scoreboard'] for r, v in (sc.get('regions') or {}).items() if v.get('scoreboard')}
+    return {'id': best[1], 'made_at': sc.get('made_at'), 'regions': boards} if boards else None
+
 def _plain(x):
     if isinstance(x, dict):
         return {str(k): _plain(v) for k, v in x.items()}
@@ -269,6 +319,13 @@ def run(lk, ops, name: str='blend', bid: str | None=None, now: datetime | None=N
             base_recs = _records(ops, '', base_of(b, r), counts) if shadow else []
             rows = shadow_rows(shadow, base_recs, obs_by_day, lead_edges, solar_bins) if shadow else {}
             by_region[r] = score(name, i, b, oof, rows, lead_edges, solar_bins, now, reg=r)
+            if shadow:
+                by_model = {}
+                for m in REGION_MODELS.get(r, ()):
+                    recs = base_recs if m == base_of(b, r) else _records(ops, '', m, counts)
+                    if recs:
+                        by_model[m] = shadow_rows(shadow, recs, obs_by_day, lead_edges, solar_bins, pick=newest_before(recs))
+                by_region[r]['scoreboard'] = scoreboard(by_model, b, r)
             runs += len(shadow)
         if not runs:
             counts['no_shadow_runs'] = counts.get('no_shadow_runs', 0) + 1
@@ -276,7 +333,7 @@ def run(lk, ops, name: str='blend', bid: str | None=None, now: datetime | None=N
         main_r = 'conus' if 'conus' in by_region else sorted(by_region)[0]
         sc = dict(by_region[main_r])
         sc['region'] = main_r
-        sc['regions'] = {r: {k: v[k] for k in ('days', 'first', 'last', 'base', 'fields')} for r, v in by_region.items()}
+        sc['regions'] = {r: {k: v[k] for k in ('days', 'first', 'last', 'base', 'fields', 'scoreboard') if k in v} for r, v in by_region.items()}
         written.append(write_score(lk, sc, now))
         counts['scored'] = counts.get('scored', 0) + 1
         counts['shadow_runs'] = counts.get('shadow_runs', 0) + runs

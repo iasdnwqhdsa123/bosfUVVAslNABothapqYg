@@ -288,7 +288,7 @@ def score_month(lk, ops, month: str, now: datetime, counts: dict | None=None, re
             sc = V.summarise(sub, sts, bad)
             regimes.append({'regime': name, 'pairs': sc['pairs'], 'side_by_side': sc['side_by_side']})
     keep = lambda t: ~np.isin(t['st'], list(bad))
-    out = {'schema': f'score/{SV}', 'month': month, 'generated': f'{now:%Y-%m-%dT%H:%MZ}', **main, 'regimes': regimes, 'gap': gap(_subset(ops_t, keep), _subset(re_t, keep)) if re_t else [], 'missing_runs': missing_runs(ops, month, now, counts), 'counts': kind_counts(lk, month) if lk is not None else {}, 'window': window_scores((rd := (read or (lambda what, kind, d: P.read_kind(lk, what, kind, [d], purpose='review')))), month), 'window_call': window_scores(rd, month, by_call=True)}
+    out = {'schema': f'score/{SV}', 'month': month, 'generated': f'{now:%Y-%m-%dT%H:%MZ}', **main, 'regimes': regimes, 'gap': gap(_subset(ops_t, keep), _subset(re_t, keep)) if re_t else [], 'missing_runs': missing_runs(ops, month, now, counts), 'counts': kind_counts(lk, month) if lk is not None else {}, 'window': window_scores((rd := (read or (lambda what, kind, d: P.read_kind(lk, what, kind, [d], purpose='review')))), month), 'window_call': window_scores(rd, month, by_call=True), 'scoreboard': _scoreboard(lk)}
     _n(counts, 'pairs_scored', main['pairs'])
     return out
 CALL_BINS = ((0.0, 1.3, 'weak'), (1.3, 2.0, 'moderate'), (2.0, float('inf'), 'strong'))
@@ -297,6 +297,12 @@ def call_of(wsmax: float) -> str | None:
     if not math.isfinite(wsmax):
         return None
     return next((name for lo, hi, name in CALL_BINS if lo <= wsmax < hi))
+
+def _scoreboard(lk) -> dict | None:
+    if lk is None:
+        return None
+    import shadowscore
+    return shadowscore.latest_scoreboard(lk)
 
 def window_scores(read, month: str, by_call: bool=False) -> list:
     by = {}
@@ -400,6 +406,17 @@ def report_md(sc: dict) -> str:
         f = lambda v: '' if v['mae'] is None else f"{v['mae']:.2f} ({v['bias']:+.2f})"
         for r in sc['window_call']:
             lines.append(f"| {r['model']} | {r['lead']} | {r['call']} | {r['n']:,} | {f(r['on'])} | {f(r['off'])} | {r['missed']:,} | {r['false']:,} |")
+    if sc.get('scoreboard'):
+        b = sc['scoreboard']
+        lines += ['', '## The launch scoreboard', '', f"The blend in shadow (bundle {b['id']}, scored {b.get('made_at')}) against each model, one at a time (ARCHITECTURE.md decision 8): won, the pooled interval under 0; consistent, 7 of the last 8 weeks better; lost, the interval wholly over +2 %. A field the blend takes from its base is listed, not counted."]
+        for r, v in sorted(b['regions'].items()):
+            lines += ['', f"**{r}: {('launch' if v.get('launch') else 'not yet')}**, {v.get('won', 0)} of {v.get('counted', 0)} counted won (lost: {', '.join((n.replace('|', ' · ') for n in v.get('lost') or [])) or 'none'}; by chance alone ~{v.get('chance_lost') or 0:.1f}).", '', '| Field, truth, model | Counted | Diff | 95 % | Weeks won | Won | Lost |', '|---|---|---|---|---|---|---|']
+            for x in v.get('rows') or []:
+                if not x.get('counted'):
+                    lines.append(f"| {x['name'].replace('|', ' · ')} | no | | | | | |")
+                    continue
+                d = lambda y: '' if y is None else f'{y:+.3f}'
+                lines.append(f"| {x['name'].replace('|', ' · ')} | yes | {d(x.get('diff'))} | {d(x.get('lo'))} to {d(x.get('hi'))} | {x.get('weeks_won', 0)} of {x.get('weeks', 0)} | {('yes' if x.get('won') else 'no')} | {('yes' if x.get('lost') else 'no')} |")
     lines += ['', '## Runs missing', '']
     miss = sc['missing_runs']
     if miss is None:
