@@ -18,8 +18,8 @@ import common
 import lake as lakem
 import linecheck as lc
 import track
-PREFIX = 'derived/air/p2/'
-VERSION = 2
+PREFIX = 'derived/air/p3/'
+VERSION = 3
 OFF_MIN = 5
 WIN = 3
 LEG_S = (10.0, 40.0)
@@ -38,7 +38,8 @@ LEVEL_REACH_FT = 2000.0
 FT = 0.3048
 LIFT_FIELDS = ('ridge', 'sink', 'conv', 'wblmax', 'wavemax')
 FAR_KM = 60.0
-NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off')
+DRIFT_MIN_S, DRIFT_DT, DRIFT_DZ, DRIFT_MAX = (180.0, 1800.0, 600.0, 40.0)
+NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off', 'wsrc', 'fc_u', 'fc_v')
 NODE_TIMEOUT = 600
 
 def object_key(lk, r: dict) -> str:
@@ -91,6 +92,40 @@ def pieces(f: dict) -> list[list]:
             i += 1
     return out
 
+def drift_winds(f: dict) -> list[tuple]:
+    tr = [p for p in f.get('track') or [] if p[3] is not None]
+    if len(tr) < 2:
+        return []
+    ts = [p[0] for p in tr]
+    import bisect
+    out = []
+    for c in track._climbs_sorted(f):
+        if c['_t1'] - c['_t0'] < DRIFT_MIN_S or c.get('engon'):
+            continue
+        a, b = (bisect.bisect_left(ts, c['_t0']), bisect.bisect_right(ts, c['_t1']) - 1)
+        if b - a < 3:
+            continue
+        p, q = (tr[a], tr[b])
+        dt = q[0] - p[0]
+        if dt < DRIFT_MIN_S:
+            continue
+        lat = math.radians((p[2] + q[2]) / 2)
+        u = (q[1] - p[1]) * 111320.0 * math.cos(lat) / dt
+        v = (q[2] - p[2]) * 110540.0 / dt
+        if math.hypot(u, v) > DRIFT_MAX:
+            continue
+        out.append(((p[0] + q[0]) / 2, float(np.mean([x[3] for x in tr[a:b + 1]])), u, v))
+    return out
+
+def own_wind(winds: list, t: float, z: float):
+    best = None
+    for tw, zw, u, v in winds:
+        if abs(tw - t) <= DRIFT_DT and abs(zw - z) <= DRIFT_DZ:
+            d = abs(tw - t) / DRIFT_DT + abs(zw - z) / DRIFT_DZ
+            if best is None or d < best[0]:
+                best = (d, u, v)
+    return None if best is None else (best[1], best[2])
+
 def at_height(vals: dict, levels, ft: float) -> float:
     lv = [(f, vals[f]) for f in levels if math.isfinite(vals.get(f, float('nan')))]
     if not lv or not math.isfinite(ft):
@@ -106,7 +141,7 @@ def _speed_dir(u: float, v: float) -> tuple[float, float]:
         return (float('nan'), float('nan'))
     return (math.hypot(u, v), (math.degrees(math.atan2(-u, -v)) + 360) % 360)
 
-def judge(fx: list, B: dict, cls: str, model: str | None=None) -> dict | None:
+def judge(fx: list, B: dict, cls: str, model: str | None=None, winds=None) -> dict | None:
     import ridgecheck as rc
     t = (fx[0][0] + fx[-1][0]) / 2
     h = lc.hour(B, t)
@@ -137,6 +172,10 @@ def judge(fx: list, B: dict, cls: str, model: str | None=None) -> dict | None:
         u, v = (at('u_blavg'), at('v_blavg'))
     if not (math.isfinite(u) and math.isfinite(v)):
         return None
+    fc_u, fc_v = (u, v)
+    ow = own_wind(winds or [], t, float(np.mean([p[3] for p in fx])))
+    if ow is not None:
+        u, v = ow
     n, va = rc.netto([list(p[:4]) for p in fx], u, v, cls)
     hdg = track.bearing(fx[0][1:3], fx[-1][1:3])
     dist = track.dist_km(fx[0][1:3], fx[-1][1:3]) * 1000
@@ -144,7 +183,7 @@ def judge(fx: list, B: dict, cls: str, model: str | None=None) -> dict | None:
     c, s = (math.cos(math.radians(hdg)), math.sin(math.radians(hdg)))
     wind_along = u * s + v * c
     rise = (gr[-1] - gr[0]) / dist if dist > 1 else float('nan')
-    out = {'t0': fx[0][0], 't1': fx[-1][0], 'lon': mid[1], 'lat': mid[2], 'netto': round(n, 3), 'va': round(va, 2), 'agl': round(agl, 1), 'km': round(dist / 1000, 3), 'hdg': round(hdg), 'band': band}
+    out = {'t0': fx[0][0], 't1': fx[-1][0], 'lon': mid[1], 'lat': mid[2], 'netto': round(n, 3), 'va': round(va, 2), 'agl': round(agl, 1), 'km': round(dist / 1000, 3), 'hdg': round(hdg), 'band': band, 'wsrc': 1 if ow is not None else 0, 'fc_u': round(fc_u, 2), 'fc_v': round(fc_v, 2)}
     out.update({'ws': at('wstar'), 'zi': zi, 'depth': at('depth'), 'sun': at('sun'), 'cloud': at('cloud'), 'cloudlow': at('cloudlow'), 'twidth': at('twidth'), 'blapse': at('blapse'), 'nlow': at('nlow'), 'dth200': at('dth_m200'), 'dth500': at('dth_m500'), 't2': at('t2'), 'heat': at('heat')})
     cb = at('cubase')
     out['cb_agl'] = cb if math.isfinite(cb) else float('nan')
@@ -217,11 +256,12 @@ def unit_pieces(z: dict, flights: list, model: str, cls_of: dict, ridge=site_rid
         cls = cls_of.get(f.get('ac')) or '15m'
         try:
             ps = pieces(f)
+            winds = drift_winds(f)
         except Exception:
             continue
         for fx in ps:
             try:
-                j = judge(fx, B, cls, model)
+                j = judge(fx, B, cls, model, winds)
             except Exception:
                 j = None
             if j is not None:

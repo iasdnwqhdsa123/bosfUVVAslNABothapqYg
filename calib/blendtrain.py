@@ -20,7 +20,7 @@ import blend
 UTC = timezone.utc
 REGION = 'conus'
 BASE = 'hrrr'
-REGIONS = {'conus': {'base': 'hrrr', 'members': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'box': None}, 'sh': {'base': 'ecmwf', 'members': ('ecmwf', 'icon'), 'box': (112.0, -49.0, 179.75, -18.5)}, 'alps': {'base': 'icond2', 'members': ('icond2', 'arome', 'ecmwf'), 'box': (5.5, 43.5, 16.0, 48.5)}}
+REGIONS = {'conus': {'base': 'hrrr', 'members': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'box': None}, 'sh': {'base': 'ecmwf', 'members': ('ecmwf', 'icon'), 'box': (112.0, -49.0, 179.75, -18.5), 'min_stations': 8}, 'alps': {'base': 'icond2', 'members': ('icond2', 'arome', 'ecmwf'), 'box': (5.5, 43.5, 16.0, 48.5)}}
 MEMBERS = ('hrrr', 'gfs', 'ecmwf', 'icon')
 MAX_AGE_H = {'gfs': 12, 'ecmwf': 22, 'icon': 12, 'icond2': 6, 'arome': 9}
 GRID_STEP = 0.125
@@ -706,14 +706,16 @@ def _verdict(F, f, parts, gate_cmp, cells, b, members, wt, seed):
     region_cells = np.array([f'{a}|lead {LEAD_BINS[i]}-{LEAD_BINS[i + 1]}' for a, i in zip(ar, lb)], dtype=object)
     sun_names = ['night'] + [f'solar {x[0]}-{x[1]}' for x in b['solar'][1:]]
     tod = np.array([sun_names[s] for s in sun], dtype=object)
-    v = split.ship_verdict(L['blend'], L['base'], blocks, {'region': region_cells, 'time of day': tod}, seed=seed)
+    st = np.array([f'{a:.3f},{o:.3f}' for a, o in zip(_f(F['lat'])[rows], _f(F['lon'])[rows])], dtype=object)
+    mst = REGIONS.get(F.get('_region'), {}).get('min_stations', 0) if isinstance(F.get('_region'), str) else 0
+    v = split.ship_verdict(L['blend'], L['base'], blocks, {'region': region_cells, 'time of day': tod}, seed=seed, units=st, min_units=mst)
     mean = lambda a: float(np.nanmean(a)) if np.isfinite(a).any() else None
     worse = [list(map(str, c)) for c in v['conditions']['cells']['worse']]
     cv = {'loss': 'brier' if f == 'cu' else 'mae', 'rows': int(len(rows)), 'mae_blend': mean(L['blend']), 'mae_best_raw': mean(L['base']), 'mae_best_debiased': mean(L['deb']), 'mae_equal_debiased': mean(L['eq']), 'ci95': [v['overall'].get('lo'), v['overall'].get('hi')], 'diff': v['overall'].get('diff'), 'bins_failed': worse, 'pass': bool(v['ship']), 'base_choice': [p['choice'] for p in parts], 'n_min_folds': [p['n_min'] for p in parts], 'verdict': v}
     bm = F.get('_base', BASE)
     ops = _f(F[f'src_{bm}'])[rows] == SRC_CODE['ops'] if f'src_{bm}' in F else np.zeros(len(rows), bool)
     if ops.any():
-        vo = split.ship_verdict(L['blend'][ops], L['base'][ops], blocks[ops], {'region': region_cells[ops], 'time of day': tod[ops]}, seed=seed)
+        vo = split.ship_verdict(L['blend'][ops], L['base'][ops], blocks[ops], {'region': region_cells[ops], 'time of day': tod[ops]}, seed=seed, units=st[ops], min_units=mst)
         cv['ops'] = {'rows': int(ops.sum()), 'mae_blend': mean(L['blend'][ops]), 'mae_best_raw': mean(L['base'][ops]), 'mae_best_debiased': mean(L['deb'][ops]), 'mae_equal_debiased': mean(L['eq'][ops]), 'pass': bool(vo['ship']), 'verdict': vo}
     else:
         cv['ops'] = {'rows': 0}

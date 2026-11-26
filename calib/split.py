@@ -243,7 +243,7 @@ def paired_bootstrap(new, base, blocks, *, w=None, relative: bool=True, n: int=R
 REQUIRED_CELLS = ('region', 'time of day')
 COVER_TOL = 0.0
 
-def ship_verdict(new, base, blocks, cells: dict | None=None, *, w=None, gain: float=GAIN, level: float=LEVEL, n: int=RESAMPLES, seed: int=SEED, margin: dict | None=None, min_rows: int=MIN_ROWS, min_blocks: int=MIN_BLOCKS, required=REQUIRED_CELLS, cover_tol: float=COVER_TOL) -> dict:
+def ship_verdict(new, base, blocks, cells: dict | None=None, *, w=None, gain: float=GAIN, level: float=LEVEL, n: int=RESAMPLES, seed: int=SEED, margin: dict | None=None, min_rows: int=MIN_ROWS, min_blocks: int=MIN_BLOCKS, required=REQUIRED_CELLS, cover_tol: float=COVER_TOL, units=None, min_units: int=0) -> dict:
     margin = {**MARGIN, **(margin or {})}
     fa = np.isfinite(np.asarray(new, dtype=float))
     fb = np.isfinite(np.asarray(base, dtype=float))
@@ -259,7 +259,13 @@ def ship_verdict(new, base, blocks, cells: dict | None=None, *, w=None, gain: fl
     if not cond_cov['ok']:
         cond_cov['why'] = "rows with one forecast's loss and not the other's"
     overall = paired_bootstrap(new, base, blocks, w=w, n=n, level=level, seed=seed)
-    enough = overall['rows'] >= min_rows and overall['blocks'] >= min_blocks
+    un = np.asarray(units, dtype=object) if units is not None else None
+    if un is not None and len(un) != len(keep):
+        raise ValueError('the units differ in length from the rows')
+    n_units = lambda sel: len(set(un[keep][sel].tolist())) if un is not None else None
+    if un is not None:
+        overall['units'] = n_units(np.ones(int(keep.sum()), bool))
+    enough = overall['rows'] >= min_rows and overall['blocks'] >= min_blocks and (un is None or overall['units'] >= min_units)
     d, hi = (overall['diff'], overall['hi'])
     cond = {'gain': {'ok': bool(np.isfinite(d) and d <= -gain), 'diff': d, 'need': -gain}, 'interval': {'ok': bool(enough and np.isfinite(hi) and (hi < 0)), 'lo': overall['lo'], 'hi': hi, 'level': level, **({} if enough else {'why': 'too few rows or blocks'})}}
     a, b, g, ww, _ = _paired(new, base, blocks, w)
@@ -280,9 +286,10 @@ def ship_verdict(new, base, blocks, cells: dict | None=None, *, w=None, gain: fl
             label = c.item() if hasattr(c, 'item') else c
             cs = int.from_bytes(hashlib.blake2b(f'{seed}|{name}|{label!r}'.encode(), digest_size=4).digest(), 'big')
             r = paired_bootstrap(a[sel], b[sel], g[sel], w=ww[sel], n=n, level=level, seed=cs)
-            thin = r['rows'] < min_rows or r['blocks'] < min_blocks
+            nu = n_units(sel)
+            thin = r['rows'] < min_rows or r['blocks'] < min_blocks or (nu is not None and nu < min_units)
             bad = bool(not thin and np.isfinite(r['lo']) and (r['lo'] > m))
-            rows.append({'cell': label, 'diff': r['diff'], 'lo': r['lo'], 'hi': r['hi'], 'rows': r['rows'], 'blocks': r['blocks'], 'thin': thin, 'worse': bad})
+            rows.append({'cell': label, 'diff': r['diff'], 'lo': r['lo'], 'hi': r['hi'], 'rows': r['rows'], 'blocks': r['blocks'], **({'units': nu} if nu is not None else {}), 'thin': thin, 'worse': bad})
             if bad:
                 worse.append((name, label))
         groups[name] = {'margin': m, 'cells': rows}

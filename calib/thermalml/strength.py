@@ -1,7 +1,34 @@
 from __future__ import annotations
 from . import learn as lab
-STRENGTH_V = 's2'
-STRENGTH = {'cell_deg': 0.1, 'hour_bin': 2, 'band_m': 500, 'q': 0.8}
+STRENGTH_V = 's3'
+STRENGTH = {'cell_deg': 0.1, 'hour_bin': 2, 'band_m': 500, 'q': 0.8, 'shrink': 5}
+
+def _key(d, la, lo, lt, z, y):
+    import math
+    cd = STRENGTH['cell_deg']
+    return (d.sd, (math.floor(la / cd), math.floor(lo / cd)), lab.hour_bin(lt, STRENGTH['hour_bin']), int(z // STRENGTH['band_m']) * STRENGTH['band_m'], y)
+
+def failed_samples(d: lab.Day):
+    for i, f in enumerate(d.failed):
+        if d.failed_ok[i]:
+            yield (_key(d, f['la0'], f['lo0'], f['lt'], (f['z0'] + f['zt']) / 2, str(f.get('y') or 'glider')), d.acday(f))
+
+def offsets(samples: list) -> dict:
+    by_key = {}
+    for k, v, w in samples:
+        a = by_key.setdefault(k, {})
+        a.setdefault(w, []).append(v)
+    dev = {}
+    for k, per in by_key.items():
+        if len(per) < 2:
+            continue
+        tot, n = (sum((sum(x) for x in per.values())), sum((len(x) for x in per.values())))
+        for w, xs in per.items():
+            others = (tot - sum(xs)) / (n - len(xs))
+            a = dev.setdefault(w, [0.0, 0])
+            a[0] += sum((x - others for x in xs))
+            a[1] += len(xs)
+    return {w: s / (n + STRENGTH['shrink']) for w, (s, n) in dev.items()}
 
 def samples(d: lab.Day):
     import math
@@ -30,24 +57,37 @@ def samples(d: lab.Day):
 
 def learn(days: list) -> dict:
     import numpy as np
-    acc = {}
+    acc, rs, ars, fails = ({}, [], [], {})
     for d in days:
         for key, v, air, who, i in samples(d):
-            a = acc.setdefault(key, ([], [], set(), set(), set()))
+            a = acc.setdefault(key, ([], [], set(), set(), set(), [], []))
             if v is not None:
                 a[0].append(v)
                 a[2].add(who)
+                a[5].append(who)
+                rs.append((key, v, who))
             if air is not None:
                 a[1].append(air)
                 a[3].add(who)
+                a[6].append(who)
+                ars.append((key, air, who))
             a[4].add((d.sd, i))
+        for key, who in failed_samples(d):
+            f = fails.setdefault(key, [0, set()])
+            f[0] += 1
+            f[1].add(who)
+    off_r, off_a = (offsets(rs), offsets(ars))
     rows, dropped = ([], 0)
     cd = STRENGTH['cell_deg']
-    for (sd, (ci, cj), hb, band, y), (vs, airs, wv, wa, cl) in sorted(acc.items()):
-        vs = vs if lab.acdays(wv) >= lab.K else []
-        airs = airs if lab.acdays(wa) >= lab.K else []
+    q = STRENGTH['q']
+    mean_q = lambda xs: (lab.r(float(np.mean(xs)), 2), lab.r(float(np.quantile(xs, q)), 2)) if xs else (None, None)
+    for (sd, (ci, cj), hb, band, y), (vs, airs, wv, wa, cl, wvs, was) in sorted(acc.items()):
+        vs, wvs = (vs, wvs) if lab.acdays(wv) >= lab.K else ([], [])
+        airs, was = (airs, was) if lab.acdays(wa) >= lab.K else ([], [])
         if not vs and (not airs):
             dropped += 1
             continue
-        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, len(cl), lab.r(float(np.mean(vs)), 2) if vs else None, lab.r(float(np.quantile(vs, STRENGTH['q'])), 2) if vs else None, lab.r(float(np.mean(airs)), 2) if airs else None, lab.r(float(np.quantile(airs, STRENGTH['q'])), 2) if airs else None])
-    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q'], 'rows': rows, 'below_k': dropped}
+        f = fails.get((sd, (ci, cj), hb, band, y))
+        nf = f[0] if f and lab.acdays(f[1]) >= lab.K else 0
+        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, len(cl), *mean_q(vs), *mean_q(airs), *mean_q([v - off_r.get(w, 0.0) for v, w in zip(vs, wvs)]), *mean_q([v - off_a.get(w, 0.0) for v, w in zip(airs, was)]), nf, lab.r(len(cl) / (len(cl) + nf), 3) if y != 'air' else None])
+    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q', 'rate_adj_mean', 'rate_adj_q', 'air_adj_mean', 'air_adj_q', 'failed', 'found'], 'rows': rows, 'below_k': dropped, 'offsets': {'rate': len(off_r), 'air': len(off_a)}}
