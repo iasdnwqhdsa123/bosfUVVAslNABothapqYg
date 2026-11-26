@@ -450,7 +450,7 @@ def _eval_box(base: str, B: dict, out: str, model: str, bi: int, info: dict, log
         env['CALIB_CORRECTIONS'] = corrections
     else:
         env.pop('CALIB_CORRECTIONS', None)
-    left = _lead_left(model, EVAL_TIMEOUT)
+    left = _step_left(EVAL_TIMEOUT)
     ok = left > 30 and _run(['node', '--max-old-space-size=4000', os.path.join(common.HERE, 'evaluate.js'), base, fin, fout], common.HERE, left, logf, env)
     if not ok or not os.path.exists(fout):
         info['error'] = 'evaluate'
@@ -504,10 +504,16 @@ def build_command(day: str, B: dict, out: str, model: str, workers: int, work: s
 LEAD_DEADLINE = None
 LEAD_HARD = None
 
-def _lead_left(model: str, limit: float) -> float:
-    if not common.is_lead(model) or LEAD_HARD is None:
+class HardStop(Exception):
+    pass
+
+def _step_left(limit: float) -> float:
+    if LEAD_HARD is None:
         return limit
     return min(limit, LEAD_HARD - time.time())
+
+def _near_stop() -> bool:
+    return LEAD_HARD is not None and LEAD_HARD - time.time() < 90
 
 def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, workers: int, grids: str | None=None, corrections: str | None=None) -> bool:
     logf = common.PRIVATE_LOG or os.path.join(work, 'day.log')
@@ -527,9 +533,13 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
             common.note(f"{day} {model} box {B['region']}: outside the model's domain, not built")
             continue
         common.note(f"{day} {model} box {B['region']} {cmd[6]} flights {len(B['flights'])}")
-        left = _lead_left(model, BUILD_TIMEOUT)
+        left = _step_left(BUILD_TIMEOUT)
+        if left <= 60 and (not common.is_lead(model)):
+            raise HardStop()
         built = left > 60 and _run(cmd, common.PIPELINE, left, logf)
-        if not built and left < BUILD_TIMEOUT and (_lead_left(model, BUILD_TIMEOUT) < 90):
+        if not built and left < BUILD_TIMEOUT and _near_stop():
+            if not common.is_lead(model):
+                raise HardStop()
             common.note(f"{day} {model}: the shard's hard stop; left for a later run")
             shutil.rmtree(out, ignore_errors=True)
             del res['boxes'][n0:]
@@ -552,7 +562,9 @@ def _run_model(res: dict, day: str, flights: list[dict], work: str, model: str, 
                 common.note(f'{day} {model} box {bi}: grids not saved: {e!r}')
                 shutil.rmtree(os.path.join(grids, key, f'{model}-box{bi}'), ignore_errors=True)
         ev = _eval_box(base, B, out, model, bi, info, logf, corrections)
-        if not ev and common.is_lead(model) and (LEAD_HARD is not None) and (LEAD_HARD - time.time() < 90):
+        if not ev and _near_stop():
+            if not common.is_lead(model):
+                raise HardStop()
             common.note(f"{day} {model}: the shard's hard stop while scoring; left for a later run")
             shutil.rmtree(out, ignore_errors=True)
             del res['boxes'][n0:]
@@ -627,6 +639,9 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
             shutil.copytree(gdir, base)
             if _eval_box(base, B, out, model, bi, info, logf, corrections):
                 info['ok'] = True
+            elif _near_stop():
+                shutil.rmtree(out, ignore_errors=True)
+                raise HardStop()
             res['boxes'].append(info)
             shutil.rmtree(out, ignore_errors=True)
     _categorize(res)

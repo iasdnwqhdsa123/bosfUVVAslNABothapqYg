@@ -367,6 +367,11 @@ def build(a) -> int:
                 status['built'].append(d)
                 okb = sum((b.get('ok', False) for b in runmod.own(res)))
                 common.log(f"day {i + 1}/{len(mine)} ({j['src']}): {len(inp['flights'])} flights, {len(short)} short, {len(obs)} stations, {okb}/{len(res['boxes'])} boxes built")
+        except dayrun.HardStop:
+            status['left'] = [x['day'] for x in mine[i:]]
+            common.log(f"the shard's hard stop after {i} days")
+            shutil.rmtree(work, ignore_errors=True)
+            break
         except Exception as e:
             common.note(f'{d}: build failed: {e!r}')
             status['errors'].append(d)
