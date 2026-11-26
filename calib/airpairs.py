@@ -40,7 +40,7 @@ FT = 0.3048
 LIFT_FIELDS = ('ridge', 'sink', 'conv', 'wblmax', 'wavemax')
 FAR_KM = 60.0
 DRIFT_MIN_S, DRIFT_DT, DRIFT_DZ, DRIFT_MAX = (180.0, 1800.0, 600.0, 40.0)
-NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off', 'wsrc', 'fc_u', 'fc_v', 'pre')
+NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off', 'wsrc', 'fc_u', 'fc_v', 'pre', 'wtrap', 'wlam', 'ws_wl')
 NODE_TIMEOUT = 600
 
 def object_key(lk, r: dict) -> str:
@@ -211,6 +211,9 @@ def judge(fx: list, B: dict, cls: str, model: str | None=None, winds=None) -> di
     out['wv_at'] = at_height({f: at(f'wv{f}') for f in WAVE_FT}, WAVE_FT, alt_ft)
     out['wavemax'] = along('wavemax')[1]
     out['ws_at'] = math.hypot(ua, va_) if math.isfinite(ua) and math.isfinite(va_) else float('nan')
+    out['wtrap'] = along('wtrap')[1]
+    out['wlam'] = at('wlam')
+    out['ws_wl'] = _speed_dir(at('u_wl'), at('v_wl'))[0]
     tt = datetime.fromtimestamp(t, timezone.utc)
     out['solar_h'] = ((tt.hour + tt.minute / 60 + mid[1] / 15) % 24 + 24) % 24
     out['month'] = tt.month
