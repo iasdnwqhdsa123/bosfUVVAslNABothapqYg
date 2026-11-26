@@ -22,6 +22,7 @@ concurrency:
   group: lab
   cancel-in-progress: false
 env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
   CONTRAILS: "0"
   CALIB_STCAST: ${{ vars.CALIB_STCAST || 'on' }}
   CALIB_OMRUNS: ${{ vars.CALIB_OMRUNS || '1' }}
@@ -131,7 +132,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done

@@ -10,6 +10,7 @@ concurrency:
   group: calib-verify
   cancel-in-progress: false
 env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
   WAIT_MINUTES: "100"
   KEEP: "3"
 jobs:

@@ -11,6 +11,7 @@ concurrency:
   group: calib-ridge
   cancel-in-progress: false
 env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
   WINDNINJA_SHA: 38fc7ca2650f9665cf62e00984880705fe3ddd55  # firelab/windninja, 3 Nov 2026
 jobs:
   check:

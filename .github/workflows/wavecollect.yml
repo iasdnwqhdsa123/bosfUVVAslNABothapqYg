@@ -18,6 +18,8 @@ permissions:
 concurrency:
   group: calib-wave
   cancel-in-progress: false
+env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
 jobs:
   collect:
     runs-on: ubuntu-24.04

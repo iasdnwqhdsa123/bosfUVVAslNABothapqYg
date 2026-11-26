@@ -17,6 +17,8 @@ permissions:
 concurrency:
   group: lab-lines
   cancel-in-progress: false
+env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
 jobs:
   pairs:
     runs-on: ubuntu-24.04
@@ -72,7 +74,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: steps.on.outputs.go == 'true'
         with:
           node-version: "22"
@@ -136,7 +138,7 @@ jobs:
           set -- run
           [ "$AGAIN" = "yes" ] && set -- "$@" --again
           python3 calib/classfit.py "$@"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
         with:
           node-version: "22"

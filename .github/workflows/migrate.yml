@@ -17,6 +17,7 @@ concurrency:
   group: calib-migrate
   cancel-in-progress: false
 env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
   GRID_SHARDS: "6"
 jobs:
   plan:
@@ -82,7 +83,7 @@ jobs:
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: needs.plan.outputs.what == 'verify'
         with:
           node-version: "22"

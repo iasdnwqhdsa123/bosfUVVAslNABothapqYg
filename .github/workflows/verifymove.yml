@@ -16,6 +16,8 @@ permissions:
 concurrency:
   group: calib-verify
   cancel-in-progress: false
+env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
 jobs:
   plan:
     runs-on: ubuntu-24.04

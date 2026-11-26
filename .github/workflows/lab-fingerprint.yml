@@ -32,6 +32,7 @@ concurrency:
   group: lab
   cancel-in-progress: false
 env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
   CONTRAILS: "0"
   RECHECK_PARTS: "6"
   WAIT_S: "600"

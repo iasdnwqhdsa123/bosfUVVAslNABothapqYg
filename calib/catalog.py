@@ -293,7 +293,23 @@ def _parts(listing: list[str]) -> dict[str, list[str]]:
         if m:
             by.setdefault(m.group(1), []).append((int(m.group(2)), k))
     return {n: [k for _, k in sorted(v)] for n, v in by.items()}
-RAW_V = 2
+BAD_READS, BAD_HOURS = (3, 2)
+BAD_FOR_GOOD = ('decrypt', 'notlenc', 'decode', 'missing')
+
+def _read_fail(e: Exception) -> str:
+    import lake as lakem
+    if isinstance(e, (FileNotFoundError, lakem.LakeMissing)):
+        return 'missing'
+    if isinstance(e, lakem.LakeError):
+        m = str(e)
+        return 'decrypt' if 'decrypt' in m else 'notlenc' if 'not a lenc' in m else 'nokey' if 'no key' in m else 'store'
+    if isinstance(e, (ValueError, EOFError, OSError)):
+        return 'decode'
+    return type(e).__name__
+
+def _left_out(b: dict) -> bool:
+    return b.get('why') in BAD_FOR_GOOD and int(b.get('n') or 0) >= BAD_READS and (float(b.get('last') or 0) - float(b.get('first') or 0) >= BAD_HOURS * 3600)
+RAW_V = 3
 
 def raw_version() -> str:
     return f'{RAW_V}-' + common._version_of([os.path.join(_HERE, f) for f in ('catalog.py', 'day.py', 'common.py')])
@@ -316,53 +332,70 @@ def raw_days(lake, listing: list[str] | None=None, t: float | None=None, write: 
     listing = lake.list(RAW_WEGLIDE) if listing is None else listing
     parts = _parts(listing)
     idx_keys = sorted((k for k in lake.list(RAW_INDEX) if k.endswith('.lenc')))
-    index, rv = ({}, raw_version())
+    index, rv, bad = ({}, raw_version(), {})
     changed = False
     if idx_keys:
         try:
             got = decode(lake.get(idx_keys[-1]))
             index = got.get('names') or {} if got.get('rv') == rv else {}
+            bad = {k: dict(v) for k, v in (got.get('bad') or {}).items() if isinstance(v, dict)}
             changed = got.get('rv') != rv
         except Exception:
             index, changed = ({}, True)
-    n = {'raw_parts': sum((len(v) for v in parts.values())), 'raw_read': 0, 'raw_unreadable': 0, 'raw_other': 0}
+    now = time.time() if t is None else t
+    listed = {k for keys in parts.values() for k in keys}
+    if any((k not in listed for k in bad)):
+        bad = {k: v for k, v in bad.items() if k in listed}
+        changed = True
+    n = {'raw_parts': sum((len(v) for v in parts.values())), 'raw_read': 0, 'raw_unreadable': 0, 'raw_other': 0, 'raw_left_out': 0, 'raw_why': {}}
     for name, keys in sorted(parts.items()):
         known = index.get(name)
         if known is not None and known.get('parts') == keys:
             continue
         changed = True
-        recs, shas, bad = ([], [], False)
+        recs, shas, use, failing = ([], [], [], False)
         for k in keys:
             try:
                 blob = lake.store.get(k)
-                recs.append(decode(lake.get(k)))
-                shas.append(hashlib.sha256(blob).hexdigest())
-                n['raw_read'] += 1
-            except Exception:
-                bad = True
-        if bad:
+                if blob is None:
+                    raise FileNotFoundError('missing')
+                rec = decode(lake.get(k))
+            except Exception as e:
+                why = _read_fail(e)
+                n['raw_why'][why] = n['raw_why'].get(why, 0) + 1
+                b = bad.setdefault(k, {'first': now, 'n': 0})
+                b.update(n=int(b.get('n') or 0) + 1, why=why, last=now)
+                if not _left_out(b):
+                    failing = True
+                continue
+            recs.append(rec)
+            shas.append(hashlib.sha256(blob).hexdigest())
+            use.append(k)
+            n['raw_read'] += 1
+        if failing or not recs:
             n['raw_unreadable'] += 1
             index.pop(name, None)
-            changed = True
             continue
         key = day_key_of(recs, name, lake)
         if not key:
             index[name] = {'parts': keys, 'day': None}
             continue
         items = unite(recs)
-        index[name] = {'parts': keys, 'day': key, 'raw_sha256': hashlib.sha256(''.join(shas).encode()).hexdigest(), **_counts(items), 'boxes': day_boxes(items)}
+        index[name] = {'parts': keys, 'day': key, 'raw_sha256': hashlib.sha256(''.join(shas).encode()).hexdigest(), **_counts(items), 'boxes': day_boxes(items), **({'use': use} if use != keys else {})}
     for name in [nm for nm in index if nm not in parts]:
         index.pop(name)
         changed = True
     if changed and write:
-        _put_timed(lake, RAW_INDEX, encode({'v': 1, 'rv': rv, 'names': index}), t)
+        _put_timed(lake, RAW_INDEX, encode({'v': 1, 'rv': rv, 'names': index, 'bad': bad}), t)
     days = []
     for name in sorted(index):
         e = index[name]
         if not e.get('day'):
             n['raw_other'] += 1
             continue
-        days.append({**{k: e.get(k) for k in RAW_FIELDS}, 'parts': e['parts'], 'boxes': e.get('boxes') or {}})
+        use = e.get('use') or e['parts']
+        n['raw_left_out'] += len(e['parts']) - len(use)
+        days.append({**{k: e.get(k) for k in RAW_FIELDS}, 'parts': use, 'boxes': e.get('boxes') or {}})
     days.sort(key=lambda d: d['day'])
     n['raw_days'] = len(days)
     return (days, n)
@@ -490,7 +523,7 @@ def snapshot(chunks, raw: list[dict], unit_listing: list[str], plans=(), began=N
 def summary(snap: dict) -> str:
     c = snap.get('counts') or {}
     by = ', '.join((f'{k} {v}' for k, v in sorted((c.get('by_status') or {}).items())))
-    return f"catalog: {c.get('units', 0)} units ({by or 'none'}), {c.get('missing', 0)} missing, {c.get('orphans', 0)} orphan(s), {c.get('adopted', 0)} adopted, {c.get('superseded', 0)} superseded, {c.get('rows_unreadable', 0)} rows object(s) unreadable, {c.get('unknown_status', 0)} row(s) of an unknown status; {c.get('raw_days', 0)} raw days of {c.get('raw_parts', 0)} part(s), {c.get('raw_read', 0)} read, {c.get('raw_unreadable', 0)} unreadable, {c.get('raw_other', 0)} not days"
+    return f"catalog: {c.get('units', 0)} units ({by or 'none'}), {c.get('missing', 0)} missing, {c.get('orphans', 0)} orphan(s), {c.get('adopted', 0)} adopted, {c.get('superseded', 0)} superseded, {c.get('rows_unreadable', 0)} rows object(s) unreadable, {c.get('unknown_status', 0)} row(s) of an unknown status; {c.get('raw_days', 0)} raw days of {c.get('raw_parts', 0)} part(s), {c.get('raw_read', 0)} read, {c.get('raw_unreadable', 0)} unreadable" + (' (' + ', '.join((f'{k} {v}' for k, v in sorted((c.get('raw_why') or {}).items()))) + ')' if c.get('raw_why') else '') + (f", {c['raw_left_out']} part(s) left out (unreadable for good)" if c.get('raw_left_out') else '') + f", {c.get('raw_other', 0)} not days"
 
 def usable(snap: dict, current_gv: dict | None=None, consumers=None) -> list[dict]:
     out = []
