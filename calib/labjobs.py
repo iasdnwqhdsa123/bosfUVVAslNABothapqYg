@@ -469,6 +469,9 @@ def relay(lk, what: str='none', sweep: str | None=None, then: str='none', here: 
     w = wanted(lk, now)
     if w:
         return (resolve(lk, 'start', w['sweep']), 'the sweep a relay was asked for under a day ago')
+    r = resolve(lk, 'watch')
+    if r:
+        return (r, "the chain had stopped (Lab watch's rule)")
     return (None, 'nothing waiting')
 
 def main(argv=None) -> int:
