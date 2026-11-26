@@ -14,7 +14,8 @@ def ops_from_env(env):
 
 def main(argv=None, env=None) -> int:
     ap = argparse.ArgumentParser(prog='thermalml')
-    ap.add_argument('stage', choices=[*STAGES, 'all', 'learn'], nargs='?', default='all')
+    ap.add_argument('stage', choices=[*STAGES, 'all', 'learn', 'head-fetch'], nargs='?', default='all')
+    ap.add_argument('--out', help="head-fetch: the folder the thermals' strength head's reports go into")
     ap.add_argument('--local', help='a folder as the lake (tests, a restored copy)')
     ap.add_argument('--days', help='these solar days only (made again: a check that the rule still gives the same)')
     ap.add_argument('--max', type=int, default=None, help='solar days made a stage at most')
@@ -29,6 +30,15 @@ def main(argv=None, env=None) -> int:
         print('thermalml: no lake: nothing done')
         return 0
     days = [d for d in (a.days or '').split(',') if d] or None
+    if a.stage == 'head-fetch':
+        from . import head
+        if not a.out:
+            print('thermalml head-fetch: --out is the folder')
+            return 2
+        n = {}
+        head.fetch(lk, a.out, n)
+        print('thermalml head-fetch: ' + (', '.join((f'{k} {v}' for k, v in sorted(n.items()))) or 'nothing to fetch'))
+        return 0
     if a.stage == 'learn':
         from . import learn
         if not guard.allowed(e):

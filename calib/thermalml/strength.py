@@ -1,12 +1,29 @@
 from __future__ import annotations
 from . import learn as lab
-STRENGTH_V = 's4'
+STRENGTH_V = 's5'
 STRENGTH = {'cell_deg': 0.1, 'hour_bin': 2, 'band_m': 500, 'q': 0.8, 'shrink': 5}
 
 def _key(d, la, lo, lt, z, y):
     import math
     cd = STRENGTH['cell_deg']
     return (d.sd, (math.floor(la / cd), math.floor(lo / cd)), lab.hour_bin(lt, STRENGTH['hour_bin']), int(z // STRENGTH['band_m']) * STRENGTH['band_m'], y)
+COND_COLS = ('model', 'regime', 'wstar', 'zi', 'depth', 'cucover', 'wind')
+
+def cond_points(d) -> dict:
+    import math
+    from datetime import datetime, timezone
+    cd, w = (STRENGTH['cell_deg'], STRENGTH['hour_bin'])
+    t0 = datetime.fromisoformat(d.sd).replace(tzinfo=timezone.utc).timestamp()
+    out = {}
+    for i, c in enumerate(d.climbs):
+        if not d.climb_ok[i]:
+            continue
+        cell = (math.floor(c['la0'] / cd), math.floor(c['lo0'] / cd))
+        hb = lab.hour_bin(c['lt'], w)
+        if (cell, hb) not in out:
+            la, lo = ((cell[0] + 0.5) * cd, (cell[1] + 0.5) * cd)
+            out[cell, hb] = (round(la, 4), round(lo, 4), int((t0 + (hb + w / 2) * 3600 - lo * 240.0) // 3600))
+    return out
 
 def failed_samples(d: lab.Day):
     for i, f in enumerate(d.failed):
@@ -68,6 +85,7 @@ def samples(d: lab.Day):
 def learn(days: list) -> dict:
     import numpy as np
     acc, rs, ars, fails, glides = ({}, [], [], {}, {})
+    conds = {d.sd: getattr(d, 'cond_s', None) or {} for d in days}
     for d in days:
         for key, v, air, who, i in samples(d):
             a = acc.setdefault(key, ([], [], set(), set(), set(), [], []))
@@ -109,5 +127,6 @@ def learn(days: list) -> dict:
             dropped += 1
             continue
         nc = len(cl) if vs or airs else 0
-        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, nc, *mean_q(vs), *mean_q(airs), *mean_q([v - off_r.get(w, 0.0) for v, w in zip(vs, wvs)]), *mean_q([v - off_a.get(w, 0.0) for v, w in zip(airs, was)]), nf, lab.r(nc / (nc + nf), 3) if y != 'air' and nc + nf else None, len(gs), lab.r(float(np.mean(gs)), 2) if gs else None])
-    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q', 'rate_adj_mean', 'rate_adj_q', 'air_adj_mean', 'air_adj_q', 'failed', 'found', 'glides', 'glide_netto'], 'rows': rows, 'below_k': dropped, 'offsets': {'rate': len(off_r), 'air': len(off_a)}}
+        cond = conds.get(sd, {}).get(((ci, cj), hb)) or {}
+        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, nc, *mean_q(vs), *mean_q(airs), *mean_q([v - off_r.get(w, 0.0) for v, w in zip(vs, wvs)]), *mean_q([v - off_a.get(w, 0.0) for v, w in zip(airs, was)]), nf, lab.r(nc / (nc + nf), 3) if y != 'air' and nc + nf else None, len(gs), lab.r(float(np.mean(gs)), 2) if gs else None, *(cond.get(k) for k in COND_COLS)])
+    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q', 'rate_adj_mean', 'rate_adj_q', 'air_adj_mean', 'air_adj_q', 'failed', 'found', 'glides', 'glide_netto', *COND_COLS], 'rows': rows, 'below_k': dropped, 'offsets': {'rate': len(off_r), 'air': len(off_a)}}

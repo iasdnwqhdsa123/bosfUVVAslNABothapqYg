@@ -833,7 +833,7 @@ def compactions(lake, kind: str, pv: str=PV) -> dict:
     return out
 PART_DATE = ('part_date', 'str')
 
-def _read(lake, what: str, kind: str, days: list, pv: str, need) -> dict:
+def _read(lake, what: str, kind: str, days: list, pv: str, need, batch=None, rows=None) -> dict:
     sch = schema_of(what, kind)
     sch2 = sch + (PART_DATE,)
     key = union_key(what)
@@ -849,23 +849,28 @@ def _read(lake, what: str, kind: str, days: list, pv: str, need) -> dict:
             if body.get('part'):
                 t = from_parquet(sch2, lake.get(body['part']), need2)
                 sel = np.array([x in want for x in t[PART_DATE[0]]], bool)
+                if rows is not None and n_rows(t):
+                    sel &= np.asarray(rows(t), bool)
                 parts.append({c: v[sel] for c, v in t.items()})
     for d in days:
-        for _, _, _, mk in markers(lake, what, kind, pv, d):
-            if mk in covered:
+        for _, b, _, mk in markers(lake, what, kind, pv, d):
+            if mk in covered or (batch is not None and (not batch(b))):
                 continue
             body = json.loads(lake.get(mk))
             if body.get('part'):
                 t = from_parquet(sch, lake.get(body['part']), need)
+                if rows is not None and n_rows(t):
+                    sel = np.asarray(rows(t), bool)
+                    t = {c: v[sel] for c, v in t.items()}
                 t[PART_DATE[0]] = np.array([d] * n_rows(t), dtype=object)
                 parts.append(t)
     return _union(sch2, parts, key)
 
-def read_kind(lake, what: str, kind: str, days, pv: str=PV, purpose: str='train', columns=None, env=None) -> dict:
+def read_kind(lake, what: str, kind: str, days, pv: str=PV, purpose: str='train', columns=None, env=None, batch=None, rows=None) -> dict:
     if purpose not in ('train', 'review'):
         raise ValueError('pairs: purpose')
     need = None if columns is None else sorted(set(columns) | set(union_key(what)) | {'review'})
-    t = _read(lake, what, kind, days, pv, need)
+    t = _read(lake, what, kind, days, pv, need, batch, rows)
     t.pop(PART_DATE[0], None)
     if purpose == 'train':
         t = train_rows(t, env)

@@ -18,6 +18,7 @@ import common
 import lake as lakem
 import linecheck as lc
 import track
+import windpairs
 PREFIX = 'derived/air/p3/'
 VERSION = 3
 OFF_MIN = 5
@@ -335,8 +336,9 @@ def run(lk, minutes: float=55, read_unit=None, read_items=None, boxes=None, cloc
         if clock() > t_end:
             counts['left'] = counts.get('left', 0) + 1
             continue
-        key = object_key(lk, r)
-        if lk.exists(key):
+        key, wkey = (object_key(lk, r), windpairs.object_key(lk, r))
+        need_air, need_wind = (not lk.exists(key), not lk.exists(wkey))
+        if not need_air and (not need_wind):
             counts['done_before'] = counts.get('done_before', 0) + 1
             continue
         parts = (raw.get(r['day']) or {}).get('parts') or []
@@ -349,8 +351,16 @@ def run(lk, minutes: float=55, read_unit=None, read_items=None, boxes=None, cloc
         Bx = next((b for b in boxes(items) if b.get('region') == r.get('box')), None)
         flights = [f for f in (Bx or {}).get('flights') or [] if (f.get('kind') or 'flight') == 'flight']
         meta = z.get('meta') or {}
-        ps = unit_pieces(z, flights, str(r.get('model') or ''), cls_of, ridge, log)
-        cols = columns(ps, str(r.get('model') or ''), float((meta.get('grid') or {}).get('step') or np.nan))
+        model, step = (str(r.get('model') or ''), float((meta.get('grid') or {}).get('step') or np.nan))
+        if need_wind:
+            wr = windpairs.unit_rows(box_from_unit(z), flights)
+            lk.put(wkey, windpairs.pack(windpairs.columns(wr, model, step)), strict=False)
+            counts['wind_units'] = counts.get('wind_units', 0) + 1
+            counts['wind_rows'] = counts.get('wind_rows', 0) + len(wr)
+        if not need_air:
+            continue
+        ps = unit_pieces(z, flights, model, cls_of, ridge, log)
+        cols = columns(ps, model, step)
         lk.put(key, pack(cols), strict=False)
         counts['units'] = counts.get('units', 0) + 1
         counts['pieces'] = counts.get('pieces', 0) + len(ps)

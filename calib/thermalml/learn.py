@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import math
+import os
 from collections import Counter
 from . import events as ev
 from . import exposure as ex
@@ -110,13 +111,20 @@ def load(lk, days=None, env=None, n=None) -> list[Day]:
     return out
 
 def attach_conditions(days: list[Day], ops, n=None) -> None:
-    from . import conditions, trigger
+    from . import conditions, strength, trigger
     n = n if n is not None else {}
     for d in days:
         hrs = trigger.key_hours(d)
         pts = {k: (*centre(k[0], k[1]), h) for k, h in hrs.items()}
+        pts.update({('s',) + k: v for k, v in (strength.cond_points(d) if hasattr(d, 'climb_ok') else {}).items()})
         got = conditions.at_points(ops, pts, n) if ops is not None else {}
-        d.cond = {k: v for k, v in got.items() if v}
+        have = {k: pts[k][:2] for k, v in got.items() if v}
+        if have:
+            from . import ims
+            for k, sh in ims.snow(have, d.sd, n, cache=os.environ.get('IMS_CACHE') or None).items():
+                got[k] = {**got[k], 'ims': sh}
+        d.cond = {k: v for k, v in got.items() if v and k[0] != 's'}
+        d.cond_s = {k[1:]: v for k, v in got.items() if v and k[0] == 's'}
     n['days_with_conditions'] = sum((1 for d in days if getattr(d, 'cond', None)))
 
 def digest(days: list[Day]) -> str:
@@ -194,4 +202,11 @@ def run(lk, days=None, env=None, held: int=7, baseline=None, baseline_v: str | N
         body = {'v': 1, 'learner': name, 'rule': vers[name], 'reads': dict(READS), 'k': K, 'first': first, 'through': through, 'days': len(ds), **outs[name]}
         objects.put(lk, objects.learned_key(name, version(vers[name]), first, through, opt if name == 'report' else dg), objects.dumps(body), n)
     n['days'] = len(ds)
+    if (env if env is not None else os.environ).get('THERMALML_HEAD', '1') != '0':
+        from datetime import datetime, timezone
+        from . import head
+        try:
+            head.month_fit(lk, outs['strength'], datetime.now(timezone.utc).date(), n)
+        except Exception as e:
+            n['head'] = f'failed ({type(e).__name__})'
     return n

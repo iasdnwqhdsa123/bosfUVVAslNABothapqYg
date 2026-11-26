@@ -86,7 +86,7 @@ jobs:
     needs: [pairs, air]
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.fit != 'none') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
@@ -146,3 +146,16 @@ jobs:
           set -- run
           [ "$AGAIN" = "yes" ] && set -- "$@" --again
           python3 calib/ridgefit.py "$@"
+      - name: The cumulus head's fit
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        timeout-minutes: 40
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          OMP_NUM_THREADS=2 python3 calib/cufit.py "$@"
+      - name: The wind head's fit
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          OMP_NUM_THREADS=2 python3 calib/windfit.py "$@"
