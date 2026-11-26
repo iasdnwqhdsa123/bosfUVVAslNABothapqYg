@@ -1,6 +1,6 @@
 from __future__ import annotations
 from . import learn as lab
-STRENGTH_V = 's3'
+STRENGTH_V = 's4'
 STRENGTH = {'cell_deg': 0.1, 'hour_bin': 2, 'band_m': 500, 'q': 0.8, 'shrink': 5}
 
 def _key(d, la, lo, lt, z, y):
@@ -12,6 +12,16 @@ def failed_samples(d: lab.Day):
     for i, f in enumerate(d.failed):
         if d.failed_ok[i]:
             yield (_key(d, f['la0'], f['lo0'], f['lt'], (f['z0'] + f['zt']) / 2, str(f.get('y') or 'glider')), d.acday(f))
+
+def glide_samples(d: lab.Day):
+    for g in d.join.get('glides', []):
+        i, p = (g.get('climb'), g.get('prev'))
+        if g.get('nm') is None or i is None or p is None or (not (d.climb_ok[i] and d.climb_ok[p])):
+            continue
+        a, b = (d.climbs[p], d.climbs[i])
+        la, lo = ((a.get('la', a['la0']) + b['la0']) / 2, (a.get('lo', a['lo0']) + b['lo0']) / 2)
+        lt = (b['lt'] - (g.get('t') or 0) / 7200.0) % 24
+        yield (_key(d, la, lo, lt, (a['zt'] + b['z0']) / 2, str(b.get('y') or 'glider')), float(g['nm']), d.acday(b))
 
 def offsets(samples: list) -> dict:
     by_key = {}
@@ -57,7 +67,7 @@ def samples(d: lab.Day):
 
 def learn(days: list) -> dict:
     import numpy as np
-    acc, rs, ars, fails = ({}, [], [], {})
+    acc, rs, ars, fails, glides = ({}, [], [], {}, {})
     for d in days:
         for key, v, air, who, i in samples(d):
             a = acc.setdefault(key, ([], [], set(), set(), set(), [], []))
@@ -76,18 +86,28 @@ def learn(days: list) -> dict:
             f = fails.setdefault(key, [0, set()])
             f[0] += 1
             f[1].add(who)
+        for key, nm, who in glide_samples(d):
+            g = glides.setdefault(key, [[], set()])
+            g[0].append(nm)
+            g[1].add(who)
     off_r, off_a = (offsets(rs), offsets(ars))
     rows, dropped = ([], 0)
     cd = STRENGTH['cell_deg']
     q = STRENGTH['q']
     mean_q = lambda xs: (lab.r(float(np.mean(xs)), 2), lab.r(float(np.quantile(xs, q)), 2)) if xs else (None, None)
-    for (sd, (ci, cj), hb, band, y), (vs, airs, wv, wa, cl, wvs, was) in sorted(acc.items()):
+    empty = ([], [], set(), set(), set(), [], [])
+    for key in sorted(set(acc) | set(fails) | set(glides)):
+        sd, (ci, cj), hb, band, y = key
+        vs, airs, wv, wa, cl, wvs, was = acc.get(key, empty)
         vs, wvs = (vs, wvs) if lab.acdays(wv) >= lab.K else ([], [])
         airs, was = (airs, was) if lab.acdays(wa) >= lab.K else ([], [])
-        if not vs and (not airs):
+        f = fails.get(key)
+        nf = f[0] if f and lab.acdays(f[1]) >= lab.K else 0
+        g = glides.get(key)
+        gs = g[0] if g and lab.acdays(g[1]) >= lab.K else []
+        if not vs and (not airs) and (not nf) and (not gs):
             dropped += 1
             continue
-        f = fails.get((sd, (ci, cj), hb, band, y))
-        nf = f[0] if f and lab.acdays(f[1]) >= lab.K else 0
-        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, len(cl), *mean_q(vs), *mean_q(airs), *mean_q([v - off_r.get(w, 0.0) for v, w in zip(vs, wvs)]), *mean_q([v - off_a.get(w, 0.0) for v, w in zip(airs, was)]), nf, lab.r(len(cl) / (len(cl) + nf), 3) if y != 'air' else None])
-    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q', 'rate_adj_mean', 'rate_adj_q', 'air_adj_mean', 'air_adj_q', 'failed', 'found'], 'rows': rows, 'below_k': dropped, 'offsets': {'rate': len(off_r), 'air': len(off_a)}}
+        nc = len(cl) if vs or airs else 0
+        rows.append([sd, round((ci + 0.5) * cd, 3), round((cj + 0.5) * cd, 3), hb, band, y, nc, *mean_q(vs), *mean_q(airs), *mean_q([v - off_r.get(w, 0.0) for v, w in zip(vs, wvs)]), *mean_q([v - off_a.get(w, 0.0) for v, w in zip(airs, was)]), nf, lab.r(nc / (nc + nf), 3) if y != 'air' and nc + nf else None, len(gs), lab.r(float(np.mean(gs)), 2) if gs else None])
+    return {'params': STRENGTH, 'cols': ['sd', 'la', 'lo', 'hour_bin', 'band_m', 'y', 'climbs', 'rate_mean', 'rate_q', 'air_mean', 'air_q', 'rate_adj_mean', 'rate_adj_q', 'air_adj_mean', 'air_adj_q', 'failed', 'found', 'glides', 'glide_netto'], 'rows': rows, 'below_k': dropped, 'offsets': {'rate': len(off_r), 'air': len(off_a)}}

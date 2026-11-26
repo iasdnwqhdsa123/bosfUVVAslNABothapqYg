@@ -29,6 +29,8 @@ TREE = dict(loss='absolute_error', max_iter=150, learning_rate=0.08, max_leaf_no
 
 def frame(cols: dict) -> tuple[dict, np.ndarray]:
     m = np.isin(cols['band'], FIT_BANDS) & np.isfinite(cols['netto'])
+    if 'pre' in cols and len(cols['pre']) == len(m):
+        m &= ~(np.asarray(cols['pre'], np.float64) == 1)
     T = {k: v[m] if isinstance(v, np.ndarray) and len(v) == len(m) else v for k, v in cols.items()}
     T['line_km'] = np.where(np.isfinite(T['line_km']), T['line_km'], airpairs.FAR_KM)
     if 'off' in T:

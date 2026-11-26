@@ -316,6 +316,13 @@ def launch_verdict(comparisons: list, *, level: float=LEVEL, n: int=RESAMPLES, s
         w = None
         if c.get('soarable') is not None:
             w = np.where(np.asarray(c['soarable'], bool), 1.0, SOARABLE_W)
+        if c.get('day') is not None:
+            dy = np.asarray(c['day'])
+            ok = np.isfinite(new) & np.isfinite(base)
+            _, inv, cnt = np.unique(dy, return_inverse=True, return_counts=True)
+            per_day = np.bincount(inv.reshape(-1), weights=ok.astype(float), minlength=len(cnt))
+            wd = 1.0 / np.maximum(per_day[inv.reshape(-1)], 1.0)
+            w = wd if w is None else w * wd
         cs = int.from_bytes(hashlib.blake2b(f'{seed}|launch|{name!r}'.encode(), digest_size=4).digest(), 'big')
         pooled = paired_bootstrap(new, base, c['blocks'], w=w, n=n, level=level, seed=cs)
         wk = np.asarray(c['week'])

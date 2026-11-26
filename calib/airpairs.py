@@ -39,7 +39,7 @@ FT = 0.3048
 LIFT_FIELDS = ('ridge', 'sink', 'conv', 'wblmax', 'wavemax')
 FAR_KM = 60.0
 DRIFT_MIN_S, DRIFT_DT, DRIFT_DZ, DRIFT_MAX = (180.0, 1800.0, 600.0, 40.0)
-NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off', 'wsrc', 'fc_u', 'fc_v')
+NUM = ('t0', 't1', 'lon', 'lat', 'netto', 'va', 'agl', 'km', 'hdg', 'ws', 'zi', 'depth', 'cb_agl', 'sun', 'cloud', 'cloudlow', 'twidth', 'blapse', 'nlow', 'dth200', 'dth500', 't2', 'heat', 'ridge_g', 'ridge_gmax', 'sink', 'sinkmax', 'conv', 'convmax', 'wblmax', 'line_km', 'ws_bl', 'wd_bl', 'ws_300', 'wd_300', 'ws_100', 'ws_sfc', 'ws_top', 'along', 'ground', 'relief_line', 'rise', 'upslope', 'ridge_site', 'zr', 'solar_h', 'month', 'alt', 'wv_at', 'wavemax', 'ws_at', 'off', 'wsrc', 'fc_u', 'fc_v', 'pre')
 NODE_TIMEOUT = 600
 
 def object_key(lk, r: dict) -> str:
@@ -62,11 +62,13 @@ def box_from_unit(z: dict) -> dict | None:
 def _turn(a: float, b: float) -> float:
     return abs((a - b + 180) % 360 - 180)
 
-def pieces(f: dict) -> list[list]:
+def pieces(f: dict, pre: list | None=None) -> list[list]:
     tr = [p for p in f.get('track') or [] if p[4] is not None and p[3] is not None]
     if len(tr) < WIN + 2:
         return []
-    climbs = [(c['_t0'] - CLIMB_PAD, c['_t1'] + CLIMB_PAD) for c in track._climbs_sorted(f)]
+    cs = track._climbs_sorted(f)
+    climbs = [(c['_t0'], c['_t1'] + CLIMB_PAD) for c in cs]
+    before = [(c['_t0'] - CLIMB_PAD, c['_t0']) for c in cs]
     t_off, t_land = (tr[0][0] + EDGE_S, tr[-1][0] - EDGE_S)
 
     def leg_ok(i):
@@ -82,11 +84,14 @@ def pieces(f: dict) -> list[list]:
             return False
         return track.dist_km(a[1:3], b[1:3]) * 1000 / dt >= MIN_VG
     ok = [leg_ok(i) for i in range(len(tr) - 1)]
+    near = [any((lo < tr[i + 1][0] and tr[i][0] < hi for lo, hi in before)) for i in range(len(tr) - 1)]
     hd = [track.bearing(tr[i][1:3], tr[i + 1][1:3]) for i in range(len(tr) - 1)]
     out, i = ([], 0)
     while i + WIN <= len(ok):
         if all(ok[i:i + WIN]) and all((_turn(hd[j], hd[j - 1]) < TURN_MAX for j in range(i + 1, i + WIN))):
             out.append([list(p) for p in tr[i:i + WIN + 1]])
+            if pre is not None:
+                pre.append(1 if any(near[i:i + WIN]) else 0)
             i += WIN
         else:
             i += 1
@@ -255,16 +260,18 @@ def unit_pieces(z: dict, flights: list, model: str, cls_of: dict, ridge=site_rid
             continue
         cls = cls_of.get(f.get('ac')) or '15m'
         try:
-            ps = pieces(f)
+            flags = []
+            ps = pieces(f, flags)
             winds = drift_winds(f)
         except Exception:
             continue
-        for fx in ps:
+        for fx, pre in zip(ps, flags):
             try:
                 j = judge(fx, B, cls, model, winds)
             except Exception:
                 j = None
             if j is not None:
+                j['pre'] = pre
                 j['region'], j['cls'], j['_f'] = (f.get('region'), cls, fi)
                 out.append(j)
     offsets(out)
