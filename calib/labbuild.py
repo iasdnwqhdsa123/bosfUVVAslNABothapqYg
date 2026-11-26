@@ -357,13 +357,14 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
         return done('ok', tried=True)
     try:
         wd = tempfile.mkdtemp(prefix='u-', dir=work)
-        if u['kind'] == catalog.STCAST and u.get('model') in _om_models():
-            import omruns
-            arrays = omruns.unit_arrays(u, _gv6(gv), cs, stations(), hard_at=hard_at, clock=clock)
-        elif u['kind'] == catalog.STCAST:
-            arrays = _hindcast(u, gv, cs, steps, wd, hard_at, clock)
-            if arrays is None:
-                return done('retry', 'hardstop')
+        if u['kind'] == catalog.STCAST:
+            if u.get('model') in _om_models():
+                import omruns
+                arrays = omruns.unit_arrays(u, _gv6(gv), cs, stations(), hard_at=hard_at, clock=clock)
+            else:
+                arrays = _hindcast(u, gv, cs, steps, wd, hard_at, clock)
+                if arrays is None:
+                    return done('retry', 'hardstop')
             row['bbox'] = json.loads(str(arrays['meta']))['bbox']
             catalog.keep_stations(lk, stations(), str(arrays['stations_v']))
             return _put(arrays)
@@ -392,7 +393,7 @@ def run_unit(lk, entry: dict, cs: str, gv_by_area: dict, steps: Steps, work: str
         arrays['score'] = np.array(json.dumps(score_of(B, model_id), sort_keys=True, separators=(',', ':')))
         return _put(arrays)
     except UnitError as e:
-        if near_stop() and str(e) in ('timeout', 'evaluate', 'build'):
+        if near_stop() and str(e) in ('timeout', 'evaluate', 'build', 'time'):
             return done('retry', 'hardstop')
         return done('error', str(e), tried=True)
     except lakem.LakeError:
