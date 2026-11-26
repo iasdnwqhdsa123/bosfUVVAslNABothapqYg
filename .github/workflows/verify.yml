@@ -15,7 +15,7 @@ env:
   KEEP: "3"
 jobs:
   gate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     outputs:
       go: ${{ steps.when.outputs.go }}
@@ -30,7 +30,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Between forecast runs?
         id: when
         env:
@@ -47,7 +47,7 @@ jobs:
   obs:
     needs: gate
     if: needs.gate.outputs.go == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 340
     env:
       KEY: obs
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
       - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
@@ -95,7 +95,7 @@ jobs:
   sample:
     needs: gate
     if: needs.gate.outputs.go == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 340
     strategy:
       fail-fast: false
@@ -110,7 +110,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
       - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
@@ -150,7 +150,7 @@ jobs:
   score:
     needs: [gate, obs, sample]
     if: always() && needs.gate.outputs.go == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -159,7 +159,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
       - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done

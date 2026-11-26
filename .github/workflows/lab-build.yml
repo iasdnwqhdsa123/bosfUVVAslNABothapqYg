@@ -31,7 +31,7 @@ env:
   WAIT_FOR_S: "2700"
 jobs:
   plan:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       ready: ${{ steps.check.outputs.ready }}
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.check.outputs.ready == 'yes'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -103,7 +103,7 @@ jobs:
   build:
     needs: plan
     if: needs.plan.outputs.ready == 'yes' && needs.plan.outputs.chunks != '' && needs.plan.outputs.chunks != '[]'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     timeout-minutes: 90
@@ -127,14 +127,14 @@ jobs:
           ref: ${{ needs.plan.outputs.code_sha }}
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
             pipeline/requirements.txt
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
       - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Chunk
         env:
@@ -164,7 +164,7 @@ jobs:
     if: >-
       ${{ always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.ready == 'yes'
       && (needs.plan.outputs.why == '' || needs.plan.outputs.why == 'noroom' || needs.plan.outputs.why == 'nostamps') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -181,7 +181,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.check.outputs.ready == 'yes'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt

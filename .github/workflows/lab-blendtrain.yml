@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   train:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 350
     env:
       COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN || '1' }}
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.on.outputs.go == 'true'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt

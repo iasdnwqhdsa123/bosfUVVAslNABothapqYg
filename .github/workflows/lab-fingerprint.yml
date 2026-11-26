@@ -39,7 +39,7 @@ env:
   WAIT_FOR_S: "1800"
 jobs:
   gate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 50
     outputs:
       ready: ${{ steps.check.outputs.ready }}
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.check.outputs.ready == 'yes'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -122,7 +122,7 @@ jobs:
   stamps:
     needs: gate
     if: needs.gate.outputs.ready == 'yes' && needs.gate.outputs.need == 'yes' && needs.gate.outputs.defer == 'no'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -134,7 +134,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -175,7 +175,7 @@ jobs:
   recheck:
     needs: [gate, stamps]
     if: needs.gate.outputs.ready == 'yes' && needs.gate.outputs.need == 'yes' && needs.gate.outputs.defer == 'no'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -195,7 +195,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -237,7 +237,7 @@ jobs:
   write:
     needs: [gate, stamps, recheck]
     if: needs.gate.outputs.ready == 'yes' && needs.gate.outputs.need == 'yes' && needs.gate.outputs.defer == 'no'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -249,7 +249,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -270,7 +270,7 @@ jobs:
   relay:
     needs: [gate, write]
     if: ${{ always() && !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.ready == 'yes' && needs.gate.outputs.defer != 'yes' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -284,7 +284,7 @@ jobs:
           ref: ${{ github.ref_name }}
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -330,7 +330,7 @@ jobs:
   again:
     needs: gate
     if: needs.gate.outputs.ready == 'yes' && needs.gate.outputs.defer == 'yes'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Hand on

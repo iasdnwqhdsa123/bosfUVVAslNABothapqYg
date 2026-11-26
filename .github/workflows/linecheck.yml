@@ -14,7 +14,7 @@ env:
   NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 300
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -23,10 +23,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
       - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Restore the data and the grids
         run: |

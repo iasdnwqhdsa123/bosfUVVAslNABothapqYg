@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   backfill:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 360
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.on.outputs.go == 'true'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: calib/requirements.txt
       - name: Python packages

@@ -56,7 +56,7 @@ env:
   CALIB_COLLECTOR_3D: "64"
 jobs:
   gate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.g.outputs.run }}
@@ -67,7 +67,7 @@ jobs:
           sparse-checkout: calib
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - id: g
         run: |
           if [ -f calib/paused ]; then echo "paused"; echo "run=no" >> "$GITHUB_OUTPUT"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
@@ -112,7 +112,7 @@ jobs:
   keep_grids:
     needs: gate
     if: needs.gate.outputs.run == 'no' && needs.gate.outputs.stale != '' && needs.gate.outputs.stale != '[]'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -125,7 +125,7 @@ jobs:
           sparse-checkout: calib
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Fetch it as it is
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -141,7 +141,7 @@ jobs:
   plan:
     needs: gate
     if: needs.gate.outputs.run == 'yes'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -155,7 +155,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -258,7 +258,7 @@ jobs:
   build:
     needs: plan
     if: needs.plan.outputs.shards != '' && needs.plan.outputs.shards != '[]'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -273,12 +273,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
       - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - uses: actions/download-artifact@v8
         with:
@@ -313,7 +313,7 @@ jobs:
   merge:
     needs: [gate, plan, build]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
@@ -329,7 +329,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: calib/requirements.txt
       - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
@@ -416,7 +416,7 @@ jobs:
   grids:
     needs: [plan, build, merge]
     if: ${{ !cancelled() && needs.merge.result == 'success' && needs.merge.outputs.months != '' && needs.merge.outputs.months != '[]' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -432,7 +432,7 @@ jobs:
           sparse-checkout: calib
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Fetch the bundle
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -501,7 +501,7 @@ jobs:
   tidy_data:
     needs: [merge]
     if: ${{ !cancelled() && needs.merge.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     continue-on-error: true
     env:
@@ -513,7 +513,7 @@ jobs:
           sparse-checkout: calib
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: The newest data
         run: python3 calib/state.py fetch calib-data /tmp/data --id /tmp/base
       - name: Older copies checked
@@ -523,7 +523,7 @@ jobs:
   relay:
     needs: [gate, plan, merge]
     if: ${{ always() && !cancelled() && needs.gate.outputs.run == 'yes' && needs.plan.outputs.chain != 'off' && inputs.after_failure != 'yes' && (needs.plan.result == 'failure' || needs.merge.result == 'failure') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - name: Next run, once
@@ -553,7 +553,7 @@ jobs:
   watch:
     needs: [gate, merge]
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Lab watch

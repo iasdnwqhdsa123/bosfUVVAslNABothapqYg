@@ -21,7 +21,7 @@ env:
   GRID_SHARDS: "6"
 jobs:
   plan:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       what: ${{ steps.what.outputs.what }}
@@ -65,7 +65,7 @@ jobs:
   migrate:
     needs: plan
     if: needs.plan.outputs.ready == 'yes'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: ${{ needs.plan.outputs.what == 'verify' && 350 || 90 }}
     strategy:
       fail-fast: false
@@ -78,7 +78,7 @@ jobs:
           filter: blob:none
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -86,7 +86,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: needs.plan.outputs.what == 'verify'
         with:
-          node-version: "22"
+          node-version: "26"
       - run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Migrate (${{ needs.plan.outputs.what }}, ${{ matrix.part }})
         env:

@@ -21,7 +21,7 @@ env:
   NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
 jobs:
   pairs:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 75
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.on.outputs.go == 'true'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -51,7 +51,7 @@ jobs:
         if: steps.on.outputs.go == 'true'
         run: python3 calib/convpairs.py --minutes 55
   air:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 75
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.on.outputs.go == 'true'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -77,7 +77,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.on.outputs.go == 'true'
         with:
-          node-version: "22"
+          node-version: "26"
       - name: Python packages
         if: steps.on.outputs.go == 'true'
         run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
@@ -87,7 +87,7 @@ jobs:
   fit:
     needs: [pairs, air]
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.fit != 'none') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -106,7 +106,7 @@ jobs:
       - uses: actions/setup-python@v7
         if: steps.on.outputs.go == 'true'
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
         with:
-          node-version: "22"
+          node-version: "26"
       - name: The ridge lift's fit
         if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
         run: |
