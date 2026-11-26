@@ -130,3 +130,19 @@ jobs:
           set -- run
           [ "$AGAIN" = "yes" ] && set -- "$@" --again
           python3 calib/sinkfit.py "$@"
+      - name: The cloud classes' fit
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          python3 calib/classfit.py "$@"
+      - uses: actions/setup-node@v5
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        with:
+          node-version: "22"
+      - name: The ridge lift's fit
+        if: ${{ !cancelled() && steps.on.outputs.go == 'true' }}
+        run: |
+          set -- run
+          [ "$AGAIN" = "yes" ] && set -- "$@" --again
+          python3 calib/ridgefit.py "$@"

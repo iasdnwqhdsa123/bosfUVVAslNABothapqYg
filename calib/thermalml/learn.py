@@ -170,7 +170,7 @@ def r(x, nd=3):
 
 def run(lk, days=None, env=None, held: int=7, baseline=None, baseline_v: str | None=None, n=None, ops=None) -> dict:
     from . import cycle, movement, report, strength, trigger
-    if baseline is not None and (not (isinstance(baseline_v, str) and baseline_v)):
+    if baseline is not None and baseline != 'site' and (not (isinstance(baseline_v, str) and baseline_v)):
         raise ValueError('thermalml: a baseline needs its version')
     n = n if n is not None else {}
     ds = load(lk, days, env, n)
@@ -179,6 +179,10 @@ def run(lk, days=None, env=None, held: int=7, baseline=None, baseline_v: str | N
         return n
     kept = prepare(ds)
     attach_conditions(ds, ops, n)
+    if baseline == 'site':
+        from . import baseline as bl
+        baseline, _ = bl.make(ds, held, cnt=n)
+        baseline_v = bl.BASELINE_V if baseline is not None else None
     first, through, dg = (ds[0].sd, ds[-1].sd, digest(ds))
     outs = {'trigger': trigger.learn(ds), 'cycle': cycle.learn(ds), 'movement': movement.learn(ds), 'strength': strength.learn(ds)}
     vers = {'trigger': trigger.TRIGGER_V, 'cycle': cycle.CYCLE_V, 'movement': movement.MOVEMENT_V, 'strength': strength.STRENGTH_V}

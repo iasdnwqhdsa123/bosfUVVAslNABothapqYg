@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write  # (the land cover's Actions cache, shared with Train: older copies deleted)
 concurrency:
   group: lab-thermal
   cancel-in-progress: false
 jobs:
   learn:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 100
     env:
       LAKE_S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       LAKE_S3_BUCKET: ${{ secrets.LAKE_S3_BUCKET || 'lake' }}
@@ -25,6 +26,7 @@ jobs:
       OPS_RO_KEY: ${{ secrets.OPS_RO_KEY }}
       OPS_RO_SECRET: ${{ secrets.OPS_RO_SECRET }}
       COLLECTOR_TRAIN: ${{ vars.COLLECTOR_TRAIN || '1' }}
+      TRIGGER_COVER_CACHE: /tmp/cover
     steps:
       - name: Set up?
         id: on
@@ -48,7 +50,39 @@ jobs:
         if: steps.on.outputs.go == 'true'
         working-directory: calib
         run: python3 -m thermalml all --max 30
+      - uses: actions/setup-node@v5
+        if: steps.on.outputs.go == 'true'
+        with:
+          node-version: "22"
+      - name: Restore the land cover
+        if: steps.on.outputs.go == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/cover
+          key: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-${{ github.run_id }}
+          restore-keys: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-
       - name: Learn (in shadow)
         if: steps.on.outputs.go == 'true'
         working-directory: calib
-        run: python3 -m thermalml learn
+        run: |
+          mkdir -p /tmp/cover
+          python3 -m thermalml learn
+      - name: Keep the land cover
+        if: ${{ always() && steps.on.outputs.go == 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/cover
+          key: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-${{ github.run_id }}
+      - name: Drop older land cover copies
+        if: ${{ always() && steps.on.outputs.go == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mine="$(gh api "repos/${{ github.repository }}/actions/caches?key=trigger-cover-" --jq '[.actions_caches[] | select(.key | endswith("-${{ github.run_id }}"))] | length')"
+          [ "${mine:-0}" -gt 0 ] || { echo "this run's copy isn't saved: the older ones kept"; exit 0; }
+          gh api --paginate "repos/${{ github.repository }}/actions/caches?key=trigger-cover-&per_page=100" --jq '.actions_caches[] | "\(.id) \(.key)"' |
+            while read -r id key; do
+              case "$key" in *-"${{ github.run_id }}") ;; *) gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" > /dev/null && echo "deleted $key" ;; esac
+            done

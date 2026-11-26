@@ -35,7 +35,7 @@ def main(argv=None, env=None) -> int:
             print(f'thermalml learn: {guard.SWITCH} is not 1: nothing learned')
             return 0
         try:
-            n = learn.run(lk, days=days, env=e, held=a.held, ops=ops_from_env(e))
+            n = learn.run(lk, days=days, env=e, held=a.held, ops=ops_from_env(e), baseline=None if e.get('THERMALML_BASELINE') == '0' else 'site')
         except guard.Refused:
             print('thermalml learn: refused: an object holds a feed that is not admitted')
             return 1
