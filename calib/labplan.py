@@ -18,6 +18,7 @@ SETUP_S = 4 * 60
 MIN_SAMPLES = 5
 MIN_S = 5.0
 OM_PAR = 6
+STCAST_OM_PAR = 1
 EARLY_OLD = 6
 MAX_TRIES = catalog.MAX_TRIES
 FAILS_SHOWN = 6
@@ -191,17 +192,28 @@ def chunks(units: list[dict], table: dict, budget: float=CHUNK_S - SETUP_S) -> l
             out.append(cur)
     return sorted(out, key=lambda c: place[c[0]['name']])
 
-def wave(cs: list[list[dict]], par: int, om_par: int=OM_PAR) -> list[list[dict]]:
-    out, om = ([], 0)
+def wave(cs: list[list[dict]], par: int, om_par: int=OM_PAR, stcast_om_par: int=STCAST_OM_PAR) -> list[list[dict]]:
+    out, om, st = ([], 0, 0)
     for c in cs:
         if len(out) >= max(0, par):
             break
         if om_sourced(c[0]):
             if om >= om_par:
                 continue
+            if is_stcast(c[0]):
+                if st >= stcast_om_par:
+                    continue
+                st += 1
             om += 1
         out.append(c)
-    return out
+    for c in cs:
+        if len(out) >= max(0, par) or om >= om_par:
+            break
+        if is_stcast(c[0]) and om_sourced(c[0]) and (not any((c is x for x in out))):
+            out.append(c)
+            om += 1
+    place = {id(c): i for i, c in enumerate(cs)}
+    return sorted(out, key=lambda c: place[id(c)])
 
 def changed_groups(old: dict, new: dict, consumers=None) -> dict[str, set]:
     consumers = tuple(common.CONSUMERS) if consumers is None else tuple(consumers)
@@ -250,6 +262,8 @@ def plan(raw: list[dict], rows: dict[str, dict], prev_pin: dict | None, now: dic
             if fails:
                 counts['fails'] = fails
             counts['stcast'], counts['stcast_todo'] = (c2['units'], len(t2))
+            counts['stcast_om'] = sum((1 for u in stcast if om_sourced(u)))
+            counts['stcast_om_todo'] = sum((1 for u in t2 if om_sourced(u)))
             if hold_st:
                 counts['stcast_held'] = len(t2)
         return (todo, counts)
@@ -324,7 +338,7 @@ def read_stamps(lake, cs: str) -> dict | None:
 def log_line(p: dict) -> str:
     c = p.get('counts') or {}
     why = 'paused' if p.get('paused') else 'no room (par 0)' if p.get('par', 0) <= 0 else 'no stamps' if not p.get('cs') else "held for the new code's stamps" if p.get('held') else ''
-    return f"plan: wave {p['wave']}, {p['decision']}, par {p['par']}: {c.get('planned', 0)} units in {c.get('chunks', 0)} chunks{(' (' + why + ')' if why else '')}; {p.get('left', 0)} left; of {c.get('units', 0)}: {c.get('current', 0)} current, {c.get('missing', 0)} missing, {c.get('stale', 0)} stale, {c.get('tried', 0)} tried, {c.get('failed', 0)} failed, {c.get('nocover', 0)} not covered, {c.get('no_stamps', 0)} without stamps; {c.get('bad_unit', 0)} refused by the unit check, {c.get('no_lead_run', 0)} leads without a run hour" + (f"; station hindcast: {c['stcast']} units, {c.get('stcast_todo', 0)} to do" if 'stcast' in c else '') + (" (held for the new code's stamps)" if c.get('stcast_held') else '') + ('; failing: ' + ', '.join((f'{k} {v}' for k, v in sorted(c['fails'].items(), key=lambda x: (-x[1], x[0]))[:FAILS_SHOWN])) if c.get('fails') else '')
+    return f"plan: wave {p['wave']}, {p['decision']}, par {p['par']}: {c.get('planned', 0)} units in {c.get('chunks', 0)} chunks{(' (' + why + ')' if why else '')}; {p.get('left', 0)} left; of {c.get('units', 0)}: {c.get('current', 0)} current, {c.get('missing', 0)} missing, {c.get('stale', 0)} stale, {c.get('tried', 0)} tried, {c.get('failed', 0)} failed, {c.get('nocover', 0)} not covered, {c.get('no_stamps', 0)} without stamps; {c.get('bad_unit', 0)} refused by the unit check, {c.get('no_lead_run', 0)} leads without a run hour" + (f"; station hindcast: {c['stcast']} units, {c.get('stcast_todo', 0)} to do" if 'stcast' in c else '') + (f" (Open-Meteo's runs among them: {c['stcast_om']}, {c.get('stcast_om_todo', 0)} to do)" if c.get('stcast_om') else '') + (" (held for the new code's stamps)" if c.get('stcast_held') else '') + ('; failing: ' + ', '.join((f'{k} {v}' for k, v in sorted(c['fails'].items(), key=lambda x: (-x[1], x[0]))[:FAILS_SHOWN])) if c.get('fails') else '')
 
 def _output(**kv) -> None:
     path = os.environ.get('GITHUB_OUTPUT')
