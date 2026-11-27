@@ -7,7 +7,7 @@ import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 ARCHIVE_DAYS = 31
-RUN_BY = {'hrrr': 12, 'gfs': 6, 'ecmwf': 0, 'icon': 6, 'icond2': 6, 'arome': 6}
+RUN_BY = {'hrrr': 12, 'gfs': 6, 'ecmwf': 0, 'icon': 6, 'icond2': 6, 'arome': 6, 'hrdps': 6}
 LATE_H = 3
 QUARTER_FIELDS = ('ceil', 'vis', 'refc', 'rain', 'ptype', 'u_sfc', 'v_sfc', 'gust', 't2', 'td2', 'ctop')
 QUARTER = re.compile('^q_(%s)\\.pack$' % '|'.join(QUARTER_FIELDS))

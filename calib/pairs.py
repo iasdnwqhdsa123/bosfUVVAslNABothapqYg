@@ -106,7 +106,7 @@ def _iso_ts(s: str | None) -> int | None:
         return int(datetime.fromisoformat(str(s).replace('Z', '+00:00')).timestamp())
     except ValueError:
         return None
-SLOTS = {'01:15': {'hrrr': 23, 'arome': 21}, '02:00': {'hrrr': 0, 'ecmwf': 18, 'icond2': 0}, '02:30': {'hrrr': 1}, '03:30': {'hrrr': 2}, '03:55': {'icond2': 3, 'hrrr': 3, 'icon': 0}, '05:30': {'gfs': 0, 'hrrr': 4, 'arome': 3}, '06:30': {'hrrr': 5}, '08:00': {'hrrr': 6, 'icond2': 6}, '08:30': {'hrrr': 7}, '09:40': {'ecmwf': 0, 'icon': 6, 'hrrr': 8}, '10:30': {'hrrr': 9, 'icond2': 9}, '11:30': {'gfs': 6, 'hrrr': 10}, '12:30': {'hrrr': 11}, '13:30': {'icond2': 12, 'arome': 9}, '14:00': {'hrrr': 12, 'ecmwf': 6}, '14:30': {'hrrr': 13}, '15:40': {'hrrr': 14, 'icon': 12}, '16:30': {'icond2': 15, 'hrrr': 15}, '17:30': {'gfs': 12, 'hrrr': 16}, '18:30': {'hrrr': 17, 'arome': 15}, '19:30': {'icond2': 18}, '20:00': {'hrrr': 18}, '20:30': {'hrrr': 19}, '21:40': {'icon': 18, 'ecmwf': 12, 'hrrr': 20}, '22:30': {'icond2': 21, 'hrrr': 21}, '23:20': {'gfs': 18, 'hrrr': 22}}
+SLOTS = {'01:15': {'hrrr': 23, 'arome': 21}, '02:00': {'hrrr': 0, 'ecmwf': 18, 'icond2': 0}, '02:30': {'hrrr': 1}, '03:30': {'hrrr': 2, 'hrdps': 0}, '03:55': {'icond2': 3, 'hrrr': 3, 'icon': 0}, '05:30': {'gfs': 0, 'hrrr': 4, 'arome': 3}, '06:30': {'hrrr': 5}, '08:00': {'hrrr': 6, 'icond2': 6}, '08:30': {'hrrr': 7}, '09:40': {'ecmwf': 0, 'icon': 6, 'hrrr': 8, 'hrdps': 6}, '10:30': {'hrrr': 9, 'icond2': 9}, '11:30': {'gfs': 6, 'hrrr': 10}, '12:30': {'hrrr': 11}, '13:30': {'icond2': 12, 'arome': 9}, '14:00': {'hrrr': 12, 'ecmwf': 6}, '14:30': {'hrrr': 13}, '15:40': {'hrrr': 14, 'icon': 12, 'hrdps': 12}, '16:30': {'icond2': 15, 'hrrr': 15}, '17:30': {'gfs': 12, 'hrrr': 16}, '18:30': {'hrrr': 17, 'arome': 15}, '19:30': {'icond2': 18}, '20:00': {'hrrr': 18}, '20:30': {'hrrr': 19}, '21:40': {'icon': 18, 'ecmwf': 12, 'hrrr': 20, 'hrdps': 18}, '22:30': {'icond2': 21, 'hrrr': 21}, '23:20': {'gfs': 18, 'hrrr': 22}}
 OVERDUE_S = 3600
 BUILD_MIN = 45
 
@@ -122,6 +122,8 @@ def avail_after(model: str, hour: int) -> timedelta:
         t = {0: '4:20', 6: '3:41', 12: '4:01'}.get(hour, '3:34')
     elif model == 'gfs':
         t = '5:18'
+    elif model == 'hrdps':
+        t = '3:21'
     else:
         t = '9:35' if hour % 12 == 0 else '8:28'
     return hm(t)

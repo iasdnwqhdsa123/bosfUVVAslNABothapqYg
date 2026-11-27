@@ -70,6 +70,49 @@ class Grid:
             raise ValueError(f"region {region} is outside the files' grid")
         return (i_n, j_w, i_n - i_s + 1, j_e - j_w + 1)
 
+class RotatedGrid:
+
+    def __init__(self, o_lat_p, lon_0, rlat0, rlon0, step, ny, nx):
+        self.o_lat_p, self.lon_0, self.rlat0, self.rlon0, self.step, self.ny, self.nx = (o_lat_p, lon_0, rlat0, rlon0, step, ny, nx)
+        self._index = {}
+
+    def rotate(self, lat, lon):
+        import numpy as np
+        lam, phi, pp = (np.radians(np.asarray(lon) - self.lon_0), np.radians(lat), np.radians(self.o_lat_p))
+        rlon = np.degrees(np.arctan2(np.cos(phi) * np.sin(lam), np.sin(pp) * np.cos(phi) * np.cos(lam) + np.cos(pp) * np.sin(phi)))
+        rlat = np.degrees(np.arcsin(np.clip(np.sin(pp) * np.sin(phi) - np.cos(pp) * np.cos(phi) * np.cos(lam), -1, 1)))
+        return (rlat, (rlon + 180.0) % 360.0 - 180.0)
+
+    def index(self, region):
+        import numpy as np
+        key = tuple(region[:5])
+        if key not in self._index:
+            w, s, e, n, step = key
+            lats = n - step * np.arange(int(round((n - s) / step)) + 1)
+            lons = w + step * np.arange(int(round((e - w) / step)) + 1)
+            rlat, rlon = self.rotate(*np.meshgrid(lats, lons, indexing='ij'))
+            i = np.rint((rlat - self.rlat0) / self.step).astype(np.int32)
+            j = np.rint((rlon - self.rlon0) / self.step).astype(np.int32)
+            inside = (i >= 0) & (i < self.ny) & (j >= 0) & (j < self.nx)
+            self._index[key] = (np.where(inside, i, 0), np.where(inside, j, 0), inside)
+        return self._index[key]
+
+    def read(self, c, region, boxes=None):
+        import numpy as np
+        ii, jj, inside = self.index(region)
+        out = np.full(ii.shape, np.nan, np.float32)
+        for y0, y1, x0, x1 in boxes or [(0, ii.shape[0], 0, ii.shape[1])]:
+            ok = inside[y0:y1, x0:x1]
+            if not ok.any():
+                continue
+            bi, bj = (ii[y0:y1, x0:x1][ok], jj[y0:y1, x0:x1][ok])
+            i0, i1, j0, j1 = (int(bi.min()), int(bi.max()) + 1, int(bj.min()), int(bj.max()) + 1)
+            a = np.asarray(c.read_array((slice(i0, i1), slice(j0, j1))), np.float32)
+            sub = out[y0:y1, x0:x1]
+            sub[ok] = a[bi - i0, bj - j0]
+            out[y0:y1, x0:x1] = sub
+        return out
+
 class Hour:
 
     def __init__(self, readers, grid: Grid, arrays=None):
@@ -98,6 +141,8 @@ class Hour:
     def read(self, name, region, boxes=None):
         import numpy as np
         c = self.names[name]
+        if hasattr(self.grid, 'read'):
+            return self.grid.read(c, region, boxes)
         i_n, j_w, ny, nx = self.grid.window(region)
         out = np.full((ny, nx), np.nan, np.float32)
         for y0, y1, x0, x1 in boxes or [(0, ny, 0, nx)]:
@@ -156,13 +201,22 @@ def _ptype(get):
     return np.where(np.isfinite(get('precipitation')), code, np.nan).astype(np.float32)
 RECIPES = {'td2': (('temperature_2m', 'relative_humidity_2m'), _td2), 'ps': (('temperature_2m', 'HSURF') + tuple((f'{k}_{p}hPa' for p in PS_NEEDS for k in ('geopotential_height', 'temperature'))), _ps), 'zs': (('HSURF',), _zs), 'lsm': (('HSURF',), _lsm), 'ice': (('HSURF', 'soil_temperature_0cm'), _ice), 'sw': (('direct_radiation', 'diffuse_radiation'), lambda get: get('direct_radiation') + get('diffuse_radiation')), 'shf': (('sensible_heat_flux',), lambda get: -get('sensible_heat_flux')), 'lhf': (('latent_heat_flux',), lambda get: -get('latent_heat_flux')), 'ptype': (('precipitation', 'snowfall_water_equivalent', 'weather_code'), _ptype)}
 
+def _wind(key):
+    import numpy as np
+    for comp, sign in (('wind_u_component_', np.sin), ('wind_v_component_', np.cos)):
+        if key.startswith(comp):
+            sp, dr = (f'wind_speed_{key[len(comp):]}', f'wind_direction_{key[len(comp):]}')
+            return ((sp, dr), lambda get, sp=sp, dr=dr, f=sign: -get(sp) * f(np.radians(get(dr))))
+    return None
+
 class Field:
 
     def __init__(self, hour: Hour, key: str):
         self.hour, self.key = (hour, key)
+        self.recipe = RECIPES.get(key) or (None if hour.has(key) else _wind(key))
 
     def needs(self):
-        return RECIPES[self.key][0] if self.key in RECIPES else (self.key,)
+        return self.recipe[0] if self.recipe else (self.key,)
 
     def available(self):
         return all((self.hour.has(n) for n in self.needs()))
@@ -175,8 +229,8 @@ class Field:
                 memo[name] = _to_si(self.hour.read(name, region, boxes), self.hour.unit(name))
             return memo[name]
         get.has = self.hour.has
-        if self.key in RECIPES:
-            return RECIPES[self.key][1](get)
+        if self.recipe:
+            return self.recipe[1](get)
         return get(self.key)
 _STATIC: dict = {}
 
