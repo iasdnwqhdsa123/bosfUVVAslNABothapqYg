@@ -110,10 +110,11 @@ jobs:
           cache: pip
           cache-dependency-path: |
             calib/requirements.txt
+            calib/requirements-pairs.txt
             pipeline/requirements.txt
       - name: Python packages
         if: steps.on.outputs.go == 'true'
-        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
+        run: for i in 1 2 3; do pip install -q -r calib/requirements.txt -r calib/requirements-pairs.txt -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
       - name: Fit
         if: steps.on.outputs.go == 'true'
         run: |
