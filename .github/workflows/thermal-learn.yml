@@ -70,14 +70,14 @@ jobs:
           mkdir -p /tmp/cover
           python3 -m thermalml learn
       - name: Keep the land cover
-        if: ${{ always() && steps.on.outputs.go == 'true' }}
+        if: ${{ always() && steps.on.outputs.go == 'true' && github.event_name != 'workflow_run' }}
         continue-on-error: true
         uses: actions/cache/save@v6
         with:
           path: /tmp/cover
           key: trigger-cover-${{ hashFiles('calib/trigger_eval.js') }}-${{ github.run_id }}
       - name: Drop older land cover copies
-        if: ${{ always() && steps.on.outputs.go == 'true' }}
+        if: ${{ always() && steps.on.outputs.go == 'true' && github.event_name != 'workflow_run' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

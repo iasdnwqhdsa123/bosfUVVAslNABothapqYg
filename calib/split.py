@@ -309,7 +309,7 @@ def launch_verdict(comparisons: list, *, level: float=LEVEL, n: int=RESAMPLES, s
     for c in comparisons:
         name = c.get('name')
         if not c.get('changed', True):
-            rows.append({'name': name, 'counted': False, 'why': 'the blend takes it from its base: a tie by construction'})
+            rows.append({'name': name, 'counted': False, 'incomplete': True, 'why': "the blend takes it from its base: not the blend's yet, so no launch"})
             continue
         counted += 1
         new, base = (np.asarray(c['new'], float), np.asarray(c['base'], float))
@@ -339,7 +339,8 @@ def launch_verdict(comparisons: list, *, level: float=LEVEL, n: int=RESAMPLES, s
     good = sum((1 for r in rows if r.get('counted') and r['won'] and r['consistent']))
     lost = [r['name'] for r in rows if r.get('counted') and r['lost']]
     share = good / counted if counted else 0.0
-    return {'launch': bool(counted and share >= LAUNCH_WON and (not lost)), 'counted': counted, 'won': good, 'share': share, 'lost': lost, 'chance_lost': counted * (1 - level) / 2, 'rows': rows}
+    incomplete = [r['name'] for r in rows if r.get('incomplete')]
+    return {'launch': bool(counted and share >= LAUNCH_WON and (not lost) and (not incomplete)), 'counted': counted, 'won': good, 'share': share, 'lost': lost, 'incomplete': incomplete, 'chance_lost': counted * (1 - level) / 2, 'rows': rows}
 MIN_COVER = 0.95
 
 def pick_base(losses: dict, cells, fit, *, min_cover: float=MIN_COVER) -> tuple[np.ndarray, dict]:

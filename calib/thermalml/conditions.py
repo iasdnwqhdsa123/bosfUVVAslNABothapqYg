@@ -15,6 +15,7 @@ FIELDS = ('wstar', 'zi', 'depth', 'cucover', 'u_blavg', 'v_blavg', 'snowd', 'soi
 CU_COVER = 0.05
 BLUE_W = 1.0
 REGIMES = ('cu', 'blue', 'weak')
+GRIDS_FIRST = '20261124'
 
 def _pipeline():
     import common
@@ -139,7 +140,8 @@ def at_points(ops, points: dict, counts: dict | None=None) -> dict:
         for ymd, wants in sorted(by_day.items()):
             key = day_grids(ops, m, ymd)
             if not key:
-                counts[f'cond_no_grids_{m}'] = counts.get(f'cond_no_grids_{m}', 0) + 1
+                k = 'cond_before_grids' if ymd < GRIDS_FIRST else 'cond_no_grids'
+                counts[f'{k}_{m}'] = counts.get(f'{k}_{m}', 0) + 1
                 continue
             blob = ops.get(key)
             if not blob:

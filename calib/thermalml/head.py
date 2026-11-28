@@ -80,7 +80,7 @@ def site_values(T: dict, work: str, run=subprocess.run, node: str='node') -> tup
 def frame(T: dict, G, Rl, C) -> dict:
     T = dict(T, ground=G, relief=Rl, core=C)
     T['agl'] = T['z'] - G
-    T['x'] = np.where(T['depth'] > 50, T['agl'] / T['depth'], np.nan)
+    T['x'] = np.divide(T['agl'], T['depth'], out=np.full(len(T['depth']), np.nan), where=T['depth'] > 50)
     ok = np.isfinite(C) & (T['agl'] > 0)
     return {k: v[ok] if isinstance(v, np.ndarray) and len(v) == len(ok) else v for k, v in T.items()}
 
