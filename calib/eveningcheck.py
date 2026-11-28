@@ -15,7 +15,7 @@ import common
 import report
 import rows
 import track
-SWEEP = [{'keep': k, 'cloudKeep': c, 'shift': s} for k in (0.8, 0.85, 0.9, 0.95) for c in (0.4, 0.7, 1.0) for s in (-2, 0, 2)] + [{'ziKeep': z, 'top': True} for z in (0.9, 0.95, 1.0)]
+SWEEP = [{'keep': k, 'cloudKeep': c, 'shift': 0} for k in (0.9, 0.95, 0.97, 1.0) for c in (0.7, 1.0)] + [{'ziKeep': z, 'top': True} for z in (0.8, 0.85, 0.9, 0.95)] + [{'keep': k, 'ziKeep': 0.85, 'top': True} for k in (0.95, 1.0)]
 SWEEP_WS = [f'ws_s{i}' for i in range(len(SWEEP))]
 SWEEP_TOP = [f'top_s{i}' for i, o in enumerate(SWEEP) if o.get('top')]
 FROM = report.EVENING_FROM
@@ -66,8 +66,14 @@ def _one(fn: str, grids: str, work: str) -> tuple[str, str, dict | None]:
     return (d, 'ok', cut(res))
 
 def run(a) -> int:
+    done_p, sweep_p = (os.path.join(a.out, 'done.json'), os.path.join(a.out, 'sweep.json'))
+    if os.path.exists(done_p) and (not os.path.exists(sweep_p) or common.read_json(sweep_p) != SWEEP):
+        import shutil
+        shutil.rmtree(os.path.join(a.out, 'rows'), ignore_errors=True)
+        os.remove(done_p)
+        common.log('evening check: the sweep changed: every day scored again')
     os.makedirs(os.path.join(a.out, 'rows'), exist_ok=True)
-    done_p = os.path.join(a.out, 'done.json')
+    common.write_json(sweep_p, SWEEP)
     done = common.read_json(done_p) if os.path.exists(done_p) else {}
     todo = []
     for fn in sorted(glob.glob(os.path.join(a.data, 'days', '*.json.gz'))):
@@ -118,7 +124,8 @@ def _sweep_section(C: list[dict]) -> list[str]:
     def score(rs, col):
         xs = [math.log(r['rate'] / (k * max(r[col], 0.1))) for r in rs if r.get(col) is not None]
         return (st.median([abs(x) for x in xs]), math.exp(st.median(xs)), len(xs)) if xs else (math.inf, math.nan, 0)
-    site = [i for i, key in enumerate(SWEEP_WS) if all((r.get(f'm_{key}') == r.get('m_ws_e2') for r in ev))]
+    same = lambda a, b: a is not None and b is not None and (abs(a - b) <= 0.01)
+    site = [i for i, key in enumerate(SWEEP_WS) if all((same(r.get(f'm_{key}'), r.get('m_ws_e2')) for r in ev))]
     ranked = sorted(range(len(SWEEP_WS)), key=lambda i: score(ev, f'm_{SWEEP_WS[i]}')[0])
     label = lambda i: ', '.join((f'{p} {v}' for p, v in SWEEP[i].items() if p != 'top'))
     out += [f"Each entry's W* against the {len(ev)} afternoon climbs (solar {FROM} h on, where any entry differs from the forecast's own): |ln(flown ÷ (k × W*))| (median; less is better) and flown ÷ (k × W*) (median; 1: right). The site's: " + (', '.join((f's{i} ({label(i)})' for i in site)) or 'none of them (its constants moved)') + '.', '', '| rank | entry | |ln| | flown ÷ (k × W*) | n |', '|---|---|---|---|---|']
