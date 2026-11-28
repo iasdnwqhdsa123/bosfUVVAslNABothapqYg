@@ -187,7 +187,7 @@ def write_csv(out: str) -> int:
     return n
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    ap = argparse.ArgumentParser(description='The evening methods on the stored flight days')
     sub = ap.add_subparsers(dest='cmd', required=True)
     r = sub.add_parser('run')
     r.add_argument('--data', required=True)
