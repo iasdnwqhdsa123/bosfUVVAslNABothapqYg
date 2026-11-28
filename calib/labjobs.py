@@ -102,6 +102,28 @@ def after(made: str, wave: int) -> int:
 def parts(most: int, par: int) -> list[int]:
     return list(range(max(0, min(int(most), int(par)))))
 
+def plan_in_force(lk) -> dict | None:
+    for sw, w in reversed(plans(lk)):
+        try:
+            p = catalog.decode(lk.get(catalog.plan_key(sw, w)))
+        except Exception:
+            continue
+        if isinstance(p, dict) and isinstance(p.get('gv'), dict) and p['gv']:
+            return p
+    return None
+
+def hindcast_ready(lk) -> tuple[bool, str]:
+    p = plan_in_force(lk)
+    if p is None:
+        return (False, 'no plan with stamps in the lake')
+    c = p.get('counts') or {}
+    if 'stcast_todo' not in c:
+        return (False, 'the newest plan counts no station hindcast')
+    todo, held = (int(c.get('stcast_todo') or 0), int(c.get('stcast_held') or 0))
+    if todo or held:
+        return (False, f'the station hindcast has {todo} units to do and {held} held at the stamps in force')
+    return (True, '')
+
 def gv_in_force(lk) -> dict | None:
     for sw, w in reversed(plans(lk)):
         try:

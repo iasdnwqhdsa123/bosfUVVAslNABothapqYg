@@ -22,6 +22,8 @@ WAVE_CLASS = 14
 _REGIME_OF_CLASS = {sky.NONE: 0, sky.BLUE: 0, 2: 1, 3: 1, 4: 1, sky.CB: 2, sky.SHOWERS: 2, sky.NS: 4, sky.FOG: 3, sky.ST: 3, sky.SC: 3, sky.AS: 4, sky.AC: 0, sky.CS: 0, WAVE_CLASS: 5, sky.ACC: 0}
 BASE_ONLY_CLASSES = (WAVE_CLASS, sky.ACC)
 NIGHT_ELEV = build.SUN_GATE[0]
+DAY_FIELDS = ('cu', 'cubase')
+WIND_DZ = 300.0
 CU_EPS = 0.02
 CU_AT = 0.5
 CB_MIN_AGL = 50.0
@@ -491,7 +493,7 @@ def debias(kind: str, x: np.ndarray, e: np.ndarray, clamp=None) -> np.ndarray:
     return 1 / (1 + np.exp(-(np.log(p / (1 - p)) + _clamp(e, clamp, kind))))
 
 def relief(elev: np.ndarray, step: float) -> np.ndarray:
-    return aircorr.relief_grid(elev, step, RELIEF_KM_DEG)
+    return aircorr.relief_grid(elev, step, window_cells(step) * step)
 
 def at_nodes(a: np.ndarray, breg, lat, lon) -> np.ndarray:
     w, s_, e, n, step = breg[:5]
@@ -503,12 +505,13 @@ def at_nodes(a: np.ndarray, breg, lat, lon) -> np.ndarray:
     out[ok] = a[y[ok], x[ok]]
     return out
 
+def window_cells(step: float) -> int:
+    return int(RELIEF_KM_DEG / step + 0.5 + 1e-09)
+
 def ground_mean(elev: np.ndarray, step: float) -> np.ndarray:
     from scipy.ndimage import uniform_filter
     e = np.asarray(elev, np.float64)
-    r = int(round(RELIEF_KM_DEG / step))
-    if r <= 0:
-        return e.copy()
+    r = window_cells(step)
     known = np.isfinite(e)
     size = 2 * r + 1
     s = uniform_filter(np.where(known, e, 0.0), size=size, mode='constant')
@@ -609,7 +612,7 @@ def blend(base_hour: dict, members: dict, bundle: dict, region: str='conus', nat
             from_base[f] = 'no member had a weight anywhere'
             continue
         vals[f] = {'out': out, 'w': W, 'x': xt, 'mem': r['members'], 'base': base, **extra}
-    _codes_out(q, vals, inside, base_hour, ground, from_base)
+    _codes_out(q, vals, inside, base_hour, ground, from_base, day=ctx['sun_elev'] >= NIGHT_ELEV)
     if 'cu' in vals and 'cubase' in from_base:
         from_base['cubase'] += "; the base's height (its zi where it has none), only where the blended cumulus presence has cumulus"
     try:
@@ -651,7 +654,18 @@ def _field(f, fdef, allm, avail, base, valid, issued, ctx, cond, bundle, region,
             xt = np.maximum(xt, 0.0)
             with np.errstate(invalid='ignore', divide='ignore'):
                 k = np.where(x > 1e-06, xt / np.where(x > 1e-06, x, 1), 0.0)
-            uv[m] = (_dec(codes, 'u_sfc') * k, _dec(codes, 'v_sfc') * k)
+            mu, mv = (_dec(codes, 'u_sfc') * k, _dec(codes, 'v_sfc') * k)
+            if m != base and base in allm:
+                me = _dec(codes, 'elevation')
+                if me is not None:
+                    off = np.isfinite(me) & np.isfinite(ctx['dem']) & (np.abs(me - ctx['dem']) > WIND_DZ)
+                    bu, bv = (_dec(allm[base]['codes'], 'u_sfc'), _dec(allm[base]['codes'], 'v_sfc'))
+                    bs = np.hypot(bu, bv)
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        ux, vx = (np.where(bs > 1e-06, bu / np.where(bs > 1e-06, bs, 1), 0.0), np.where(bs > 1e-06, bv / np.where(bs > 1e-06, bs, 1), 0.0))
+                    off &= np.isfinite(bs) & (bs > 1e-06)
+                    mu, mv = (np.where(off, ux * xt, mu), np.where(off, vx * xt, mv))
+            uv[m] = (mu, mv)
         xs[m] = xt
         present[m] = np.isfinite(xt)
     if base not in xs:
@@ -707,8 +721,9 @@ def scale_separated(out, W, raw: dict, base: str, mem: list, shape, step: float)
 def _nan_neg(a):
     return np.where(a >= 0, a, np.nan).astype(np.float64)
 
-def _codes_out(q, vals, inside, base_hour, ground, from_base):
+def _codes_out(q, vals, inside, base_hour, ground, from_base, day=None):
     E = build.ENC
+    cu_in = inside if day is None else inside & np.asarray(day, bool)
     put = lambda k, a: q.__setitem__(k, np.where(inside & np.isfinite(a), build.quantize(a, *E[k]), q[k]).astype(np.uint8))
 
     def step(f, keys, fn):
@@ -746,7 +761,7 @@ def _codes_out(q, vals, inside, base_hour, ground, from_base):
 
     def cumulus():
         p = vals['cu']['out']
-        has = p >= CU_AT
+        has = (p >= CU_AT) & cu_in
         cb_base = _dec(base_hour['codes'], 'cubase')
         if 'cubase' in vals:
             msl = np.where(vals['cubase']['w'].sum(0) > 0, vals['cubase']['out'], np.nan)
@@ -761,12 +776,12 @@ def _codes_out(q, vals, inside, base_hour, ground, from_base):
         agl = np.where(over, reach, agl)
         vals['cu']['held'] = int(over.sum())
         agl = np.where(has, agl, np.nan)
-        cb = np.where(inside, build.quantize(agl, *E['cubase']), q['cubase']).astype(np.uint8)
+        cb = np.where(cu_in, build.quantize(agl, *E['cubase']), q['cubase']).astype(np.uint8)
         dq = None
         if 'cudepth' in q:
             d = _dec(base_hour['codes'], 'cudepth')
             d = np.where(np.isfinite(agl), np.where(np.isfinite(d), d, aircorr.CU_DEPTH), np.nan)
-            dq = np.where(inside, build.quantize(d, *E['cudepth']), q['cudepth']).astype(np.uint8)
+            dq = np.where(cu_in, build.quantize(d, *E['cudepth']), q['cudepth']).astype(np.uint8)
         q['cubase'] = cb
         if dq is not None:
             q['cudepth'] = dq

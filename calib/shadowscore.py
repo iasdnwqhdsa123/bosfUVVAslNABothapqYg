@@ -24,6 +24,7 @@ MODELS_ROOT = 'derived/models/'
 SCORES = 'derived/shadow/'
 REGION_MODELS = {'conus': ('hrrr', 'gfs', 'ecmwf', 'icon'), 'sh': ('ecmwf', 'icon', 'gfs'), 'alps': ('icond2', 'arome', 'ecmwf', 'icon')}
 CONVECTIVE = ('cubase', 'cu')
+DAY_FIELDS = ('cu', 'cubase')
 RUN_BACK_H = 12
 
 def shadow_key(name: str, bid: str) -> str:
@@ -213,8 +214,13 @@ def score(name: str, bid: str, b: dict, oof: dict, rows: dict, lead_edges, solar
             continue
         cat = lambda k, dt: np.concatenate([np.asarray(s.get(k, []), dt), np.asarray(o[k], dt)])
         day, area, lb, sun = (cat('day', np.int64), cat('area', np.int64), cat('lead_bin', np.int64), cat('sun', np.int64))
-        lb_ = np.clip(lb, 0, len(lead_edges) - 2)
         new, base = (cat('blend', np.float64), cat('base', np.float64))
+        if f in DAY_FIELDS:
+            keep = sun != 0
+            day, area, lb, sun, new, base = (day[keep], area[keep], lb[keep], sun[keep], new[keep], base[keep])
+            if not len(day):
+                continue
+        lb_ = np.clip(lb, 0, len(lead_edges) - 2)
         blocks = split.blocks_of(split.week_of(day), area)
         region = np.array([f'{a}|lead {lead_edges[i]}-{lead_edges[i + 1]}' for a, i in zip(area, lb_)], dtype=object)
         tod = np.array([sun_names[int(x)] if 0 <= int(x) < len(sun_names) else 'night' for x in sun], dtype=object)

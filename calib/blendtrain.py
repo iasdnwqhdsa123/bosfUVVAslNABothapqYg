@@ -248,9 +248,14 @@ def spread_features(F, names, x, rows) -> np.ndarray:
         out[i] = x[rows] if k == 'x' else _f(F[k])[rows]
     return out
 
+def _day(F) -> np.ndarray:
+    return _f(F['sun_elev']) >= blend.NIGHT_ELEV
+
 def field_rows(F, f: str, m: str) -> np.ndarray:
     x, o = (F[f'{f}_{m}'], F[f'o_{f}'])
     ok = F[f'present_{m}'] & np.isfinite(x) & np.isfinite(o)
+    if f in blend.DAY_FIELDS:
+        ok &= _day(F)
     return np.flatnonzero(ok)
 
 def _target(kind, x, o):
@@ -536,6 +541,8 @@ def _sun(F):
 
 def serve_rows(F, f, members, wide: bool=False) -> np.ndarray:
     o = np.isfinite(_f(F[f'o_{f}']))
+    if f in blend.DAY_FIELDS:
+        o &= _day(F)
     if f == 'cubase' and wide:
         anym = np.zeros(n_of(F), bool)
         for m in members:
@@ -790,9 +797,18 @@ def train_region(F, fields=FIELDS, seed: int=SEED, params=None, n_min: int=N_MIN
         fields_out[f] = entry
         cv[f] = c
     cv.update(consistency(F, cv))
+    gate_consistency(fields_out, cv)
     groups = {g: [x for x in fs if x in fields_out] for g, fs in GROUPS.items()}
     entry = {'base': base, 'members': members, 'grid_step': GRID_STEP, 'max_age_h': {m: a for m, a in MAX_AGE_H.items() if m in members}, 'groups': {g: fs for g, fs in groups.items() if fs}, 'fields': fields_out}
     return (entry, cv)
+
+def gate_consistency(fields_out: dict, cv: dict) -> bool:
+    con = cv.get('_consistency')
+    if not con or con.get('ok') or (not (fields_out.get('cubase') or {}).get('pass')):
+        return False
+    fields_out['cubase']['pass'] = False
+    cv.setdefault('cubase', {})['failed_consistency'] = True
+    return True
 LCL_M_PER_K = 125.0
 LCL_GAP_MAX = 300.0
 
@@ -945,7 +961,36 @@ def load_frame(lk, days=None, members=MEMBERS, pv: str='p1', max_rows: int=MAX_R
         F = assemble(got[0], got[1], got[2], static, members, base)
         if n_of(F):
             frames.append(F)
-    return concat_frames(frames, members)
+    F = concat_frames(frames, members)
+    if F is not None:
+        terrain_from_ground(F, ground_of(lk, base))
+    return F
+
+def ground_of(lk, base: str):
+    import io
+    import pairjob
+    key = f'{pairjob.GROUND_ROOT}/{base}.npz.lenc'
+    try:
+        if not lk.exists(key):
+            return None
+        with np.load(io.BytesIO(lk.get(key))) as z:
+            return (np.asarray(z['elev'], np.float64), {'west': float(z['west']), 'north': float(z['north']), 'step': float(z['step'])})
+    except Exception:
+        return None
+
+def terrain_from_ground(F, ground) -> None:
+    if ground is None:
+        return
+    e, g = ground
+    rel, gm = (blend.relief(e, g['step']), blend.ground_mean(e, g['step']))
+    lat, lon, el = (_f(F['lat']), _f(F['lon']), _f(F['elev_obs']))
+    x = np.round((lon - g['west']) / g['step']).astype(np.int64)
+    y = np.round((g['north'] - lat) / g['step']).astype(np.int64)
+    ok = np.isfinite(lat) & np.isfinite(lon) & (x >= 0) & (y >= 0) & (y < e.shape[0]) & (x < e.shape[1])
+    xi, yi = (np.where(ok, x, 0), np.where(ok, y, 0))
+    r_at, m_at = (rel[yi, xi], gm[yi, xi])
+    F['relief5km'] = np.where(ok & np.isfinite(r_at), r_at, _f(F['relief5km']))
+    F['tpi'] = np.where(ok & np.isfinite(m_at) & np.isfinite(el), el - m_at, _f(F['tpi']))
 
 def concat_frames(frames: list, members=MEMBERS) -> dict | None:
     if not frames:
@@ -982,6 +1027,11 @@ def main(argv=None) -> int:
     if lk is None:
         print('blend train: no lake (LAKE_S3_* not set): nothing trained', flush=True)
         return 0
+    import labjobs
+    ready, why = labjobs.hindcast_ready(lk)
+    if not ready:
+        print(f"blend train: {why}: nothing trained (its bundle's code stamps must be its rows'; AUDIT-2026-11-25 1.2)", flush=True)
+        return 0
     import pairs as P
     days = None
     if a.d0 or a.d1:
@@ -1003,7 +1053,6 @@ def main(argv=None) -> int:
     if not parts:
         print('blend train: no region has rows: nothing trained', flush=True)
         return 0
-    import labjobs
     bundle, data, sha, cvs = bundle_of(parts, a.seed, stamps=labjobs.gv_in_force(lk))
     main_r = 'conus' if 'conus' in cvs else sorted(cvs)[0]
     text = '\n'.join((report_text(bundle, cvs[r], sha, r) for r in sorted(cvs, key=lambda r: r != main_r)))
