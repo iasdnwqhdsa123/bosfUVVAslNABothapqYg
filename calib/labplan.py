@@ -23,9 +23,9 @@ EARLY_OLD = 6
 MAX_TRIES = catalog.MAX_TRIES
 FAILS_SHOWN = 6
 AREAS = ('US', 'EU', 'SH')
-DEFAULT_S = {('own', 'hrrr'): 300, ('own', 'gfs'): 90, ('own', 'ecmwf'): 120, ('own', 'icon'): 150, ('own', 'icond2'): 330, ('own', 'arome'): 240, ('lead', 'hrrr'): 300, ('lead', 'gfs'): 90, ('lead', 'ecmwf'): 150, (catalog.STCAST, 'hrrr'): 1200, (catalog.STCAST, 'gfs'): 200, (catalog.STCAST, 'ecmwf'): 600, (catalog.STCAST, 'icon'): 60, (catalog.STCAST, 'icond2'): 20, (catalog.STCAST, 'arome'): 20}
+DEFAULT_S = {('own', 'hrrr'): 300, ('own', 'gfs'): 90, ('own', 'ecmwf'): 120, ('own', 'icon'): 150, ('own', 'icond2'): 330, ('own', 'arome'): 240, ('lead', 'hrrr'): 300, ('lead', 'gfs'): 90, ('lead', 'ecmwf'): 150, (catalog.STCAST, 'hrrr'): 1200, (catalog.STCAST, 'gfs'): 200, (catalog.STCAST, 'ecmwf'): 600, (catalog.STCAST, 'icon'): 60, (catalog.STCAST, 'icond2'): 20, (catalog.STCAST, 'arome'): 20, (catalog.STCAST, 'hrdps'): 60}
 FALLBACK_S = 200
-OM_MODELS = ('icon', 'icond2', 'arome')
+OM_MODELS = ('icon', 'icond2', 'arome', 'hrdps')
 EXTRA_FIRST = {'ecmwf': common.EU_START, 'icon': common.ICON_FIRST}
 
 def _extra(text: str | None=None) -> dict[str, tuple]:
@@ -193,6 +193,7 @@ def chunks(units: list[dict], table: dict, budget: float=CHUNK_S - SETUP_S) -> l
     return sorted(out, key=lambda c: place[c[0]['name']])
 
 def wave(cs: list[list[dict]], par: int, om_par: int=OM_PAR, stcast_om_par: int=STCAST_OM_PAR) -> list[list[dict]]:
+    rebuilds = any((is_stcast(c[0]) and (not om_sourced(c[0])) for c in cs))
     out, om, st = ([], 0, 0)
     for c in cs:
         if len(out) >= max(0, par):
@@ -201,7 +202,7 @@ def wave(cs: list[list[dict]], par: int, om_par: int=OM_PAR, stcast_om_par: int=
             if om >= om_par:
                 continue
             if is_stcast(c[0]):
-                if st >= stcast_om_par:
+                if rebuilds and st >= stcast_om_par:
                     continue
                 st += 1
             om += 1

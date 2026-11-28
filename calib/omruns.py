@@ -19,9 +19,9 @@ VIA = 'om-single-runs'
 FIRST = datetime(2026, 4, 2, tzinfo=UTC)
 VIA_RUN = 'om-data-run'
 DATA_RUN = 'https://openmeteo.s3.amazonaws.com/data_run'
-DATA_RUN_FIRST = {'icon': datetime(2026, 8, 24, tzinfo=UTC), 'icond2': datetime(2026, 8, 24, tzinfo=UTC), 'arome': datetime(2026, 8, 24, tzinfo=UTC)}
+DATA_RUN_FIRST = {'icon': datetime(2026, 8, 24, tzinfo=UTC), 'icond2': datetime(2026, 8, 24, tzinfo=UTC), 'arome': datetime(2026, 8, 24, tzinfo=UTC), 'hrdps': datetime(2026, 8, 26, tzinfo=UTC)}
 RUN_VARS = {'t2': 'temperature_2m', 'rh': 'relative_humidity_2m', 'u_sfc': 'wind_u_component_10m', 'v_sfc': 'wind_v_component_10m'}
-MODELS = {'icon': {'om': 'icon_global', 'domain': 'dwd_icon', 'areas': ('US', 'SH'), 'runs': (0, 12)}, 'icond2': {'om': 'icon_d2', 'domain': 'dwd_icon_d2', 'areas': ('EU',), 'runs': (0, 12)}, 'arome': {'om': 'meteofrance_arome_france', 'domain': 'meteofrance_arome_france0025', 'areas': ('EU',), 'runs': (3, 15)}}
+MODELS = {'icon': {'om': 'icon_global', 'domain': 'dwd_icon', 'areas': ('US', 'SH'), 'runs': (0, 12)}, 'icond2': {'om': 'icon_d2', 'domain': 'dwd_icon_d2', 'areas': ('EU',), 'runs': (0, 12)}, 'arome': {'om': 'meteofrance_arome_france', 'domain': 'meteofrance_arome_france0025', 'areas': ('EU',), 'runs': (3, 15)}, 'hrdps': {'om': 'gem_hrdps_continental', 'domain': 'cmc_gem_hrdps', 'areas': ('US',), 'runs': (0, 12)}}
 HOURLY = ('temperature_2m', 'relative_humidity_2m', 'wind_speed_10m', 'wind_direction_10m')
 BATCH = 50
 GAP_S = 0.2
@@ -150,15 +150,23 @@ def run_values(model: str, r0: datetime, lats, lons, leads: list, meta=None, rea
     import numpy as np
     stationcast._pipeline()
     import sources
-    lat0, lon0, step, ny, nx = sources.SOURCES[model].grid_def
+    import om
+    rot = getattr(sources.SOURCES[model], 'rotated_def', ()) or ()
     base = f"{DATA_RUN}/{MODELS[model]['domain']}/{r0:%Y/%m/%d/%H%M}Z"
     meta = meta if meta is not None else run_meta(base)
     vt = [datetime.strptime(t, '%Y-%m-%dT%H:%MZ').replace(tzinfo=UTC) for t in meta.get('valid_times') or []]
     ti = {ld: vt.index(r0 + timedelta(hours=ld)) for ld in leads if r0 + timedelta(hours=ld) in vt}
     n = len(lats)
     out = {f: np.full((n, len(leads)), np.nan) for f in ('t2', 'td2', 'u_sfc', 'v_sfc')}
-    rows = np.rint((np.asarray(lats, np.float64) - lat0) / step).astype(int)
-    cols = np.rint((np.asarray(lons, np.float64) - lon0) / step).astype(int)
+    if rot:
+        g = om.RotatedGrid(*rot)
+        rlat, rlon = g.rotate(np.asarray(lats, np.float64), np.asarray(lons, np.float64))
+        rows, cols = (np.rint((rlat - g.rlat0) / g.step).astype(int), np.rint((rlon - g.rlon0) / g.step).astype(int))
+        ny, nx = (g.ny, g.nx)
+    else:
+        lat0, lon0, step, ny, nx = sources.SOURCES[model].grid_def
+        rows = np.rint((np.asarray(lats, np.float64) - lat0) / step).astype(int)
+        cols = np.rint((np.asarray(lons, np.float64) - lon0) / step).astype(int)
     ok = (rows >= 0) & (rows < ny) & (cols >= 0) & (cols < nx)
     if not ti or not ok.any():
         return out
@@ -166,12 +174,18 @@ def run_values(model: str, r0: datetime, lats, lons, leads: list, meta=None, rea
     r_lo, r_hi, c_lo, c_hi = (int(rows[ok].min()), int(rows[ok].max()) + 1, int(cols[ok].min()), int(cols[ok].max()) + 1)
     t_lo, t_hi = (min(ti.values()), max(ti.values()) + 1)
     read = read or _read_window
-    got = {}
+    got, part = ({}, {})
+    win = lambda name: np.asarray(read(f'{base}/{name}.om', slice(r_lo, r_hi), slice(c_lo, c_hi), slice(t_lo, t_hi)), np.float64)
     for f, name in RUN_VARS.items():
-        if name not in have:
+        if name in have:
+            got[f] = win(name)
             continue
-        a = np.asarray(read(f'{base}/{name}.om', slice(r_lo, r_hi), slice(c_lo, c_hi), slice(t_lo, t_hi)), np.float64)
-        got[f] = a
+        recipe = om._wind(name)
+        if recipe and all((n in have for n in recipe[0])):
+            for n in recipe[0]:
+                if n not in part:
+                    part[n] = win(n)
+            got[f] = recipe[1](part.__getitem__)
     k = [j for j, ld in enumerate(leads) if ld in ti]
     tk = [ti[leads[j]] - t_lo for j in k]
     pr, pc = (rows[ok] - r_lo, cols[ok] - c_lo)
@@ -179,7 +193,6 @@ def run_values(model: str, r0: datetime, lats, lons, leads: list, meta=None, rea
         if f in got:
             out[f][np.ix_(np.where(ok)[0], k)] = got[f][pr, pc][:, tk]
     if 't2' in got and 'rh' in got:
-        import om
         t2, rh = (out['t2'], np.full_like(out['t2'], np.nan))
         rh[np.ix_(np.where(ok)[0], k)] = got['rh'][pr, pc][:, tk]
 

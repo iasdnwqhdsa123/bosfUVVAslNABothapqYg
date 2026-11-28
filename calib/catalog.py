@@ -21,7 +21,7 @@ KINDS = ('flight', 'collector')
 STCAST = 'stcast'
 STCAST_RUN_H = (0, 12)
 STCAST_RUN_H_OF = {'arome': (3, 15)}
-STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU', 'SH'), 'ecmwf': ('US', 'EU', 'SH'), 'icon': ('US', 'SH'), 'icond2': ('EU',), 'arome': ('EU',)}
+STCAST_AREAS = {'hrrr': ('US',), 'gfs': ('US', 'EU', 'SH'), 'ecmwf': ('US', 'EU', 'SH'), 'icon': ('US', 'SH'), 'icond2': ('EU',), 'arome': ('EU',), 'hrdps': ('US',)}
 STCAST_CONSUMERS = ('pairs',)
 
 def stcast_consumers(area_gv: dict | None) -> tuple:
