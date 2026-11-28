@@ -1,0 +1,75 @@
+name: Lab evening
+on:
+  push:
+    branches: [main]
+    paths: ["calib/lab-evening.request"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: calib-evening
+  cancel-in-progress: false
+env:
+  NODE_OPTIONS: "--disable-warning=DEP0005 --disable-warning=DEP0040 --disable-warning=DEP0169"
+jobs:
+  check:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 330
+    env:
+      CALIB_DATA_KEY: ${{ secrets.CALIB_DATA_KEY }}
+      GITHUB_TOKEN: ${{ github.token }}
+    outputs:
+      left: ${{ steps.check.outputs.left }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - run: for i in 1 2 3; do pip install -q -r pipeline/requirements.txt && break; [ "$i" = 3 ] && exit 1; sleep 30; done
+      - name: Restore the data, the grids and the runs before
+        run: |
+          [ -n "$CALIB_DATA_KEY" ] || { echo "::error::CALIB_DATA_KEY not set"; exit 1; }
+          mkdir -p /tmp/eve /tmp/prev /tmp/out /tmp/grids
+          python3 calib/state.py fetch calib-data /tmp/data 2>> /tmp/eve/fetch.err || { echo "::error::no data"; exit 1; }
+          python3 calib/state.py fetch calib-evening /tmp/prev 2>> /tmp/eve/fetch.err || echo "no runs before"
+          [ -d /tmp/prev/rows ] && cp -r /tmp/prev/rows /tmp/eve/
+          [ -f /tmp/prev/done.json ] && cp /tmp/prev/done.json /tmp/eve/
+          for m in $(python3 calib/state.py list calib-grids- | python3 -c 'import json, sys; print(" ".join(k[len("calib-grids-"):] for k in json.load(sys.stdin)))'); do
+            python3 calib/state.py fetch "calib-grids-$m" /tmp/grids 2>> /tmp/eve/fetch.err || echo "a month not fetched"
+          done
+          df -h /tmp | tail -1
+      - name: Check
+        id: check
+        run: |
+          python3 calib/eveningcheck.py run --data /tmp/data --grids /tmp/grids --out /tmp/eve --minutes 270 --workers 4 2>> /tmp/eve/stderr.log \
+            || echo "::warning::the check failed (details in the encrypted log)"
+          python3 calib/eveningcheck.py report --out /tmp/eve 2>> /tmp/eve/stderr.log || echo "::warning::no report (details in the encrypted log)"
+          echo "left=$(cat /tmp/eve/left 2> /dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+          rm -rf /tmp/evening-work /tmp/grids /tmp/data
+          python3 calib/state.py pack /tmp/eve /tmp/out/calib-evening.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calib-evening
+          path: /tmp/out/calib-evening.enc
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+  next:
+    needs: check
+    if: needs.check.outputs.left != '' && needs.check.outputs.left != '0'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: The next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS --retry 3 -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/lab-evening.yml/dispatches" -d '{"ref":"main"}'
+          echo "next run asked for (${{ needs.check.outputs.left }} days left)"

@@ -411,12 +411,12 @@ def save_grids(base: str, dest: str, meta: dict, fields: str=GRID_FIELDS, hours:
     common.write_json(os.path.join(dest, 'meta.json'), out, indent=1)
     return out
 
-def grids_usable(gdir: str, bbox: list, model: str) -> str | None:
+def grids_usable(gdir: str, bbox: list, model: str, any_physics: bool=False) -> str | None:
     mp = os.path.join(gdir, 'meta.json')
     if not os.path.exists(mp) or not os.path.exists(os.path.join(gdir, 'latest.json')) or (not glob.glob(os.path.join(gdir, '_hours', '*.npz'))):
         return 'missing'
     m = common.read_json(mp)
-    if not common.model_physics_matches(m.get('physics_v'), model, m.get('region')):
+    if not any_physics and (not common.model_physics_matches(m.get('physics_v'), model, m.get('region'))):
         return 'physics'
     if m.get('model') != model or [round(float(v), 2) for v in m.get('bbox') or []] != [round(float(v), 2) for v in bbox]:
         return 'box'
@@ -600,7 +600,7 @@ def _was_built(rec: dict, model: str, bi: int) -> bool:
     bs = [b for b in rec.get('boxes') or [] if b.get('model') == model]
     return any((b.get('box', bi) == bi for b in bs))
 
-def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) -> dict:
+def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None, any_physics: bool=False) -> dict:
     day = rec['date']
     flights = [clean(f) for f in rec.get('flights') or []]
     short = [clean(f) for f in rec.get('short') or []]
@@ -619,7 +619,7 @@ def rescore_day(rec: dict, grids: str, work: str, corrections: str | None=None) 
         for bi, B in enumerate(boxes(items)):
             info = {'model': model, 'box': bi, 'region': B['region'], 'bbox': B['bbox'], 'flights': len(B['flights']), 'ok': False, 'saved': True}
             gdir = os.path.join(grids, key, f'{model}-box{bi}')
-            why = grids_usable(gdir, B['bbox'], model)
+            why = grids_usable(gdir, B['bbox'], model, any_physics=True) if any_physics else grids_usable(gdir, B['bbox'], model)
             if why == 'missing' and (model in common.SAMPLED or model in common.PART_DOMAIN) and (not _was_built(rec, model, bi)):
                 continue
             if why == 'missing' and common.is_lead(model) and (not _was_built(rec, model, bi)):
