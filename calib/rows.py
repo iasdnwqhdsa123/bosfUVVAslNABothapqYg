@@ -7,7 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import common
 import track
-MODEL_KEYS = ('xc', 'gs', 'climb', 'ach', 'usable', 'ridge', 'ws', 'ws0', 'zi', 'top', 'band', 'shade', 'sun', 'sunElev', 'relief', 'elev', 'cb', 'cu', 'circ', 'wind', 'rain', 'od', 'cloud', 'cloudlow', 'blapse', 'twidth', 'sink', 'ridgev', 'densAlt', 'solar', 'localHour')
+MODEL_KEYS = ('xc', 'gs', 'climb', 'ach', 'usable', 'ridge', 'ws', 'ws0', 'zi', 'top', 'band', 'shade', 'sun', 'sunElev', 'relief', 'elev', 'cb', 'cu', 'circ', 'wind', 'rain', 'od', 'cloud', 'cloudlow', 'blapse', 'twidth', 'sink', 'ridgev', 'densAlt', 'solar', 'localHour') + track.EVENING_KEYS
 ROUTE_KEYS = ('len', 'autoMean', 'autoMax', 'straightMean', 'straightMax', 'sameShare', 'sameFlownKm', 'sameAutoKm', 'flownBend', 'autoBend', 'bendMatch', 'autoBendsAlone', 'bent', 'autoH', 'straightH', 'flownH', 'error')
 FLIGHT_KEYS = ('date', 'region', 'state', 'cls', 'grp', 'key', 'key_exact', 'src', 'ac')
 

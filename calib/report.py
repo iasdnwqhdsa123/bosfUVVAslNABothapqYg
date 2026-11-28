@@ -137,6 +137,69 @@ def survival_section(H, G) -> list[str]:
     out += table(f'Searches from solar hour {LATE}, by season', by([r for r in sg if late(r)], lambda r: SEASON.get(r['month'], '–')), GLIDE_COLS)
     out += table(f"Searches from solar hour {LATE}, by the forecast's own W* (m/s)", by([r for r in sg if late(r)], lambda r: band(r['m_ws0'], WS_BANDS)), GLIDE_COLS)
     return out
+EVENING_METHODS = (('own', 'm_ws0', 'm_top_own', "the forecast's own"), ('h1', 'm_ws_h1', 'm_top_h1', 'the hold to 28 Nov 2026'), ('h1t', 'm_ws_h1t', 'm_top_h1t', 'h1 with its season taper'), ('e2', 'm_ws_e2', 'm_top_e2', "the evening state (the site's)"), ('e2s', 'm_ws_e2s', 'm_top_e2s', "e2, the season's share on its lift"), ('e2f', 'm_ws_e2f', 'm_top_e2f', 'e2 fading faster'))
+EVENING_MID = (11, 14)
+EVENING_FROM = 14
+
+def _evening_climbs(C):
+    return [r for r in C if r.get('paired') and (not r.get('engon')) and (not r.get('m_ridge')) and (r.get('rate') is not None) and (0.2 < r['rate'] < 8) and (r.get('m_ws0') is not None) and (r.get('m_solar') is not None)]
+
+def evening_section(C, H) -> list[str]:
+    cl = _evening_climbs(C)
+    mid = [r['rate'] / r['m_ws0'] for r in cl if EVENING_MID[0] <= r['m_solar'] < EVENING_MID[1] and r['m_ws0'] > 0.3]
+    out = ['## Evening methods', '', "The evening's thermals by each method (calib/evaluate.js EVENING_METHODS): " + '; '.join((f'{m}: {what}' for m, _, _, what in EVENING_METHODS)) + f". The climbs' own climb-to-W* ratio k from solar {EVENING_MID[0]}–{EVENING_MID[1]} h; from solar {EVENING_FROM} h, the climbs where any method's W* differs from the forecast's own by over 0.05 m/s. Days scored before the methods were kept have none until they're scored again.", '']
+    keyed = [r for r in cl if r.get('m_ws_e2') is not None]
+    if len(mid) < 50 or not keyed:
+        return out + [f'- Too few climbs to compare yet (midday {len(mid)}, with the methods {len(keyed)}).', '']
+    k = st.median(mid)
+    ev = [r for r in keyed if r['m_solar'] >= EVENING_FROM and any((r.get(c) is not None and abs(r[c] - r['m_ws0']) > 0.05 for _, c, _, _ in EVENING_METHODS[1:]))]
+    out += [f'- k = {k:.3f} ({len(mid)} midday climbs); climbs compared: {len(ev)}.', '']
+
+    def lr(r, col):
+        w = r.get(col)
+        return math.log(r['rate'] / (k * max(w, 0.1))) if w is not None else None
+
+    def ratio_col(col):
+        return lambda rs: (lambda xs: f'{math.exp(st.median(xs)):.2f}' if xs else '–')([x for x in (lr(r, col) for r in rs) if x is not None])
+
+    def err_col(col):
+        return lambda rs: (lambda xs: f'{st.median(xs):.2f}' if xs else '–')([abs(x) for x in (lr(r, col) for r in rs) if x is not None])
+
+    def nearest_col(col):
+
+        def f(rs):
+            n = t = 0
+            for r in rs:
+                es = {c: abs(lr(r, c)) for _, c, _, _ in EVENING_METHODS if r.get(c) is not None}
+                if col in es:
+                    t += 1
+                    n += es[col] <= min(es.values()) + 1e-09
+            return f'{n / t:.0%}' if t else '–'
+        return f
+
+    def top_col(col):
+        return lambda rs: med([r['agl1'] - r[col] for r in rs if r.get('agl1') is not None and r.get(col) is not None])
+    month = lambda r: int((r.get('date') or '0000-00')[5:7] or 0)
+    groups = [('all', ev)] + by(ev, lambda r: hour_bin(r['m_solar'])) + by(ev, lambda r: SEASON.get(month(r), '–')) + by(ev, lambda r: 'flat' if rows.flat(r) else 'hills/mountains')
+    out += table("Climbs flown ÷ (k × the method's W*) (median; 1: right)", groups, [(m, ratio_col(c)) for m, c, _, _ in EVENING_METHODS])
+    out += table('How far off: |ln(flown ÷ (k × W*))| (median; less is better)', groups, [(m, err_col(c)) for m, c, _, _ in EVENING_METHODS])
+    out += table('The nearest of the methods (share of climbs)', groups, [(m, nearest_col(c)) for m, c, _, _ in EVENING_METHODS])
+    out += table("A climb's top over the ground − the method's usable top (m; median)", groups, [(m, top_col(t)) for m, _, t, _ in EVENING_METHODS])
+    hs = [r for r in H if r.get('paired') and r.get('m_ws_e2') is not None and (r.get('solar') is not None) and (r['solar'] >= EVENING_FROM)]
+    if hs:
+        fly = [r for r in hs if r.get('out') == 'flying']
+        down = [r for r in hs if r.get('out') in ('away', 'engine')]
+
+        def sep(col):
+
+            def f(rs):
+                a = [r[col] for r in rs if r.get(col) is not None and r.get('out') == 'flying']
+                b = [r[col] for r in rs if r.get(col) is not None and r.get('out') in ('away', 'engine')]
+                return f'{st.median(a):.2f} / {st.median(b):.2f}' if a and b else '–'
+            return f
+        out += [f"Airborne hours from solar {EVENING_FROM} h: {len(hs)} (still flying an hour later {len(fly)}, landed away or the engine {len(down)}; landed home left out: late in the day a pilot's choice).", '']
+        out += table('W* (median): still flying an hour later / landed away or the engine', [('all', hs)] + by(hs, lambda r: hour_bin(r['solar'])), [(m, sep(c)) for m, c, _, _ in EVENING_METHODS])
+    return out
 
 def pilot_section(L, C, F, H, G) -> list[str]:
     keyed = [f for f in F if f['pilot']]
@@ -420,6 +483,7 @@ def _area_sections(days: list[dict], state: dict, pilots: dict, model: str, mode
     out += table('Climbs by region', by(uc, lambda r: r['region']), ccols)
     out += table("Climbs by source (seed: detected by the first collection's script; new: calib/track.py)", by(uc, lambda r: r['src']), ccols)
     out += survival_section(H, G)
+    out += evening_section(C, H)
     out += pilot_section(L, C, F, H, G)
     keys = {d.get('key') or d['date'] for d in days}
     daylists = {common.day_of(k): v for k, v in (state.get('daylists') or {}).items() if k in keys}

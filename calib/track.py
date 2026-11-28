@@ -339,7 +339,8 @@ WEAK_RATE = 0.5
 SEARCH_S, SEARCH_M = (15 * 60, 600)
 LOW_AGL = 400
 ENGINE_OFF_S = 300
-PROBE_KEYS = ('ws', 'ws0', 'zi', 'top', 'band', 'climb', 'ach', 'usable', 'xc', 'cu', 'cb', 'shade', 'sun', 'sunElev', 'relief', 'elev', 'solar', 'localHour', 'wind', 't2', 'blapse')
+EVENING_KEYS = ('top_own', 'ws_h1', 'top_h1', 'ws_h1t', 'top_h1t', 'ws_e2', 'top_e2', 'ws_e2s', 'top_e2s', 'ws_e2f', 'top_e2f')
+PROBE_KEYS = ('ws', 'ws0', 'zi', 'top', 'band', 'climb', 'ach', 'usable', 'xc', 'cu', 'cb', 'shade', 'sun', 'sunElev', 'relief', 'elev', 'solar', 'localHour', 'wind', 't2', 'blapse') + EVENING_KEYS
 FAILED = ('weak', 'away', 'engine')
 
 def _t(x):
